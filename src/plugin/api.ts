@@ -79,10 +79,16 @@ export function createPluginContext(
       store.dispatch(openFile(entry) as any);
     },
     onDidOpenFile: (callback) => {
+      let prevIds = new Set(store.getState().workspace.openedFiles.map((f) => f.id));
       const unsubscribe = store.subscribe(() => {
         const files = store.getState().workspace.openedFiles;
-        const last = files[files.length - 1];
-        if (last) callback({ id: last.id, name: last.name, source: last.source });
+        const currentIds = new Set(files.map((f) => f.id));
+        for (const file of files) {
+          if (!prevIds.has(file.id)) {
+            callback({ id: file.id, name: file.name, source: file.source });
+          }
+        }
+        prevIds = currentIds;
       });
       subscriptions.push(unsubscribe);
       return unsubscribe;
@@ -189,14 +195,19 @@ export function createPluginContext(
       // TODO: 需要 MonacoEditor 暴露跳转方法
     },
     onDidChangeContent: (callback) => {
-      // 通过 Redux store 监听内容变化
-      const unsubscribe = store.subscribe(() => {
+      const getContent = () => {
         const state = store.getState();
         const activeFile = state.workspace.openedFiles.find(
           (f) => f.id === state.workspace.activeFileId
         );
-        if (activeFile) {
-          callback(activeFile.content);
+        return { id: activeFile?.id ?? null, content: activeFile?.content ?? '' };
+      };
+      let prev = getContent();
+      const unsubscribe = store.subscribe(() => {
+        const curr = getContent();
+        if (curr.id !== prev.id || curr.content !== prev.content) {
+          prev = curr;
+          callback(curr.content);
         }
       });
       subscriptions.push(unsubscribe);

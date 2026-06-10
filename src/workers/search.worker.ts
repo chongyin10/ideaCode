@@ -120,7 +120,7 @@ function doSearch(
           fileMatches.push({
             line: 0,
             column: 0,
-            text: `📄 ${fileName}`,
+            text: fileName,
             match: nameMatches[0],
             isFileNameMatch: true,
           });

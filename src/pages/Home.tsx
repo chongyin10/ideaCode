@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { FolderOpen, Search, Clock, X, Folder } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '../store/hooks';
 import {
@@ -16,6 +16,23 @@ import MonacoEditor from '../components/MonacoEditor';
 import QuickOpen from '../components/QuickOpen';
 import './Home.css';
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+const pad = (n: number) => n.toString().padStart(2, '0');
+
+function formatTime(timestamp: number): string {
+  const date = new Date(timestamp);
+  const now = new Date();
+  const diff = now.getTime() - date.getTime();
+
+  if (diff < DAY_MS && date.getDate() === now.getDate()) {
+    return `今天 ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  }
+  if (diff < 2 * DAY_MS) {
+    return `昨天 ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  }
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
 function Home() {
   const dispatch = useAppDispatch();
   const { openedFiles, activeFileId, recentProjects } = useAppSelector(
@@ -23,12 +40,10 @@ function Home() {
   );
   const [quickOpenVisible, setQuickOpenVisible] = useState(false);
 
-  // 组件挂载时加载历史记录
   useEffect(() => {
     dispatch(fetchRecentProjects());
   }, [dispatch]);
 
-  // 全局保存快捷键：Ctrl+S / Cmd+S
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') {
@@ -68,7 +83,10 @@ function Home() {
     setQuickOpenVisible(true);
   }, []);
 
-  const activeFile = openedFiles.find((f) => f.id === activeFileId);
+  const activeFile = useMemo(
+    () => openedFiles.find((f) => f.id === activeFileId),
+    [openedFiles, activeFileId]
+  );
 
   const handleEditorChange = useCallback(
     (value: string) => {
@@ -78,22 +96,6 @@ function Home() {
     },
     [dispatch, activeFileId]
   );
-
-  // 格式化时间：今天/昨天/更早
-  const formatTime = (timestamp: number): string => {
-    const date = new Date(timestamp);
-    const now = new Date();
-    const diff = now.getTime() - date.getTime();
-    const dayMs = 24 * 60 * 60 * 1000;
-
-    if (diff < dayMs && date.getDate() === now.getDate()) {
-      return `今天 ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
-    }
-    if (diff < 2 * dayMs) {
-      return `昨天 ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
-    }
-    return `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}`;
-  };
 
   return (
     <div className="home-page">

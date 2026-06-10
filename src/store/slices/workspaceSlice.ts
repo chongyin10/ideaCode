@@ -1,6 +1,6 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import type { FileEntry, FileSource } from '../../services/fileService';
-import { isSameSource } from '../../services/fileService';
+import { isSameSource, readFile, readDirectory, writeFile, addRecentProject, isPath, getRecentProjects, removeRecentProject } from '../../services/fileService';
 import type { RecentProject } from '../../types/electron';
 
 export interface OpenedFile {
@@ -57,10 +57,8 @@ const initialState: WorkspaceState = {
 export const loadDirectory = createAsyncThunk(
   'workspace/loadDirectory',
   async ({ source, name }: { source: FileSource; name: string }) => {
-    const { readDirectory, addRecentProject, isPath } = await import('../../services/fileService');
     const entries = await readDirectory(source);
 
-    // Electron 环境下自动记录到历史
     if (isPath(source)) {
       try {
         await addRecentProject(source, name);
@@ -77,7 +75,6 @@ export const openFile = createAsyncThunk(
   'workspace/openFile',
   async (entry: FileEntry) => {
     if (entry.kind !== 'file') return null;
-    const { readFile } = await import('../../services/fileService');
     const content = await readFile(entry.source);
 
     const ext = entry.name.split('.').pop()?.toLowerCase() || '';
@@ -108,7 +105,6 @@ export const openFile = createAsyncThunk(
 export const refreshDirectory = createAsyncThunk(
   'workspace/refreshDirectory',
   async (source: FileSource) => {
-    const { readDirectory } = await import('../../services/fileService');
     const entries = await readDirectory(source);
     return { source, entries };
   }
@@ -117,7 +113,6 @@ export const refreshDirectory = createAsyncThunk(
 export const fetchRecentProjects = createAsyncThunk(
   'workspace/fetchRecentProjects',
   async () => {
-    const { getRecentProjects } = await import('../../services/fileService');
     return getRecentProjects();
   }
 );
@@ -125,7 +120,6 @@ export const fetchRecentProjects = createAsyncThunk(
 export const removeRecentProjectThunk = createAsyncThunk(
   'workspace/removeRecentProject',
   async (projectPath: string) => {
-    const { removeRecentProject } = await import('../../services/fileService');
     await removeRecentProject(projectPath);
     return projectPath;
   }
@@ -137,7 +131,6 @@ export const saveFile = createAsyncThunk(
     const state = (getState() as { workspace: { openedFiles: OpenedFile[] } }).workspace;
     const file = state.openedFiles.find((f) => f.id === id);
     if (!file) throw new Error('文件未找到');
-    const { writeFile } = await import('../../services/fileService');
     await writeFile(file.source, file.content);
     return id;
   }

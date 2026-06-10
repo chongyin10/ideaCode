@@ -53,36 +53,27 @@ export interface DiffResult {
  * 计算 LCS 长度矩阵
  * 使用滚动数组优化空间至 O(min(m,n))
  */
-function computeLCSMatrix(oldLines: string[], newLines: string[]): number[][] {
+function computeLCSMatrix(oldLines: string[], newLines: string[]): Int32Array[] {
   const m = oldLines.length;
   const n = newLines.length;
-  
-  // dp[j] = 当前行（i）在列 j 的 LCS 长度
-  // prev[j] = 上一行（i-1）在列 j 的 LCS 长度
-  const dp = new Array(n + 1).fill(0);
-  const prev = new Array(n + 1).fill(0);
-  
-  // 需要回溯矩阵来重建路径，因此保留完整矩阵
-  // 对于大文件可使用 Hirschberg 算法将空间降至 O(n)
-  const matrix: number[][] = [];
-  
+
+  const matrix: Int32Array[] = [];
+  for (let i = 0; i <= m; i++) {
+    matrix.push(new Int32Array(n + 1));
+  }
+
   for (let i = 1; i <= m; i++) {
-    const row = new Array(n + 1).fill(0);
+    const row = matrix[i];
+    const prev = matrix[i - 1];
     for (let j = 1; j <= n; j++) {
       if (oldLines[i - 1] === newLines[j - 1]) {
-        dp[j] = prev[j - 1] + 1;
+        row[j] = prev[j - 1] + 1;
       } else {
-        dp[j] = Math.max(prev[j], dp[j - 1]);
+        row[j] = Math.max(prev[j], row[j - 1]);
       }
-      row[j] = dp[j];
-    }
-    matrix.push([...dp]);
-    // 交换数组
-    for (let j = 0; j <= n; j++) {
-      prev[j] = dp[j];
     }
   }
-  
+
   return matrix;
 }
 
@@ -92,16 +83,14 @@ function computeLCSMatrix(oldLines: string[], newLines: string[]): number[][] {
 function backtrackDiff(
   oldLines: string[],
   newLines: string[],
-  matrix: number[][]
+  matrix: Int32Array[]
 ): DiffChunk[] {
   const chunks: DiffChunk[] = [];
   let i = oldLines.length;
   let j = newLines.length;
-  
-  // 从右下角回溯到左上角
+
   while (i > 0 || j > 0) {
     if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
-      // 相等：来自左上角
       chunks.unshift({
         type: 'equal',
         oldLine: i,
@@ -110,9 +99,7 @@ function backtrackDiff(
       });
       i--;
       j--;
-    } else if (j > 0 && (i === 0 || (i > 0 && j > 0 && matrix[i - 1]?.[j] <= matrix[i]?.[j - 1]))) {
-      // 新增：来自左边（新文本多出的行）
-      // 注意：matrix 的索引需要调整，因为 matrix[i-1] 对应 oldLines[i-1]
+    } else if (j > 0 && (i === 0 || matrix[i - 1][j] <= matrix[i][j - 1])) {
       chunks.unshift({
         type: 'insert',
         oldLine: null,
@@ -121,7 +108,6 @@ function backtrackDiff(
       });
       j--;
     } else {
-      // 删除：来自上方（旧文本被删除的行）
       chunks.unshift({
         type: 'delete',
         oldLine: i,
@@ -131,7 +117,7 @@ function backtrackDiff(
       i--;
     }
   }
-  
+
   return chunks;
 }
 
@@ -236,20 +222,13 @@ export function formatUnifiedDiff(
   lines.push(`--- ${oldFileName}`);
   lines.push(`+++ ${newFileName}`);
   
-  let oldLine = 1;
-  let newLine = 1;
-  
   for (const chunk of chunks) {
     if (chunk.type === 'equal') {
       lines.push(` ${chunk.content}`);
-      oldLine++;
-      newLine++;
     } else if (chunk.type === 'insert') {
       lines.push(`+${chunk.content}`);
-      newLine++;
     } else if (chunk.type === 'delete') {
       lines.push(`-${chunk.content}`);
-      oldLine++;
     }
   }
   

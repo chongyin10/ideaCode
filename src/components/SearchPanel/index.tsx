@@ -77,6 +77,8 @@ function matchGlob(filePath: string, pattern: string): boolean {
  * 2. Worker 线程负责：在字符串内容中执行 Boyer-Moore 搜索
  * 3. Worker 返回增量结果，主线程实时合并更新 UI
  * 4. 搜索完成后 Worker 自动闲置，不占用资源
+ *
+ * 竞态安全：使用 searchIdRef 会话 ID 隔离每次搜索，只有最新搜索能更新 UI。
  */
 export interface SearchPanelRef {
   triggerSearch: (query: string) => void;
@@ -87,6 +89,7 @@ const SearchPanel = forwardRef<SearchPanelRef>((_props, ref) => {
 
   // 选择性订阅 Redux：避免整个 workspace 变化触发 SearchPanel 重渲染
   const entries = useAppSelector((state) => state.workspace.entries);
+  const rootSource = useAppSelector((state) => state.workspace.rootSource);
   const pendingSearchQuery = useAppSelector((state) => state.workspace.pendingSearchQuery);
 
   const [query, setQuery] = useState('');
@@ -103,22 +106,26 @@ const SearchPanel = forwardRef<SearchPanelRef>((_props, ref) => {
   const [results, setResults] = useState<FileSearchResult[]>([]);
   const [isTruncated, setIsTruncated] = useState(false);
 
-  // Worker 引用
+  // Worker 引用（懒加载，持久复用）
   const workerRef = useRef<Worker | null>(null);
-  const abortRef = useRef(false);
+  // 搜索会话 ID：每次启动搜索时递增，用于隔离不同搜索的 Worker 消息
+  const searchIdRef = useRef(0);
+  // 总匹配数引用（避免闭包 stale）
   const totalMatchesRef = useRef(0);
 
-  // 暴露给父组件的方法
+  // 文件路径缓存：避免每次搜索都递归遍历目录树
+  const fileCacheRef = useRef<{ entriesSrc: string; files: { path: string; source: FileSource }[] } | null>(null);
+
+  // 暴露给父组件的方法（通过 pendingSearchQuery 触发）
   useImperativeHandle(ref, () => ({
     triggerSearch: (q: string) => {
       setQuery(q);
+      // 使用 setTimeout 确保 setQuery 的 state 更新后再执行搜索
       setTimeout(() => {
-        handleSearchRef.current?.();
+        void handleSearchInternal(q);
       }, 0);
     },
   }));
-
-  const handleSearchRef = useRef<(() => void) | null>(null);
 
   // 监听外部触发的搜索请求
   useEffect(() => {
@@ -126,13 +133,13 @@ const SearchPanel = forwardRef<SearchPanelRef>((_props, ref) => {
       setQuery(pendingSearchQuery);
       dispatch(setPendingSearchQuery(null));
       setTimeout(() => {
-        handleSearchRef.current?.();
+        void handleSearchInternal(pendingSearchQuery);
       }, 80);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingSearchQuery]);
 
-  // 初始化 Worker（懒加载，首次搜索时才创建）
+  // 初始化 Worker（懒加载，首次搜索时才创建；组件不再卸载，Worker 持久复用）
   const getWorker = useCallback((): Worker => {
     if (!workerRef.current) {
       workerRef.current = new Worker(
@@ -141,15 +148,6 @@ const SearchPanel = forwardRef<SearchPanelRef>((_props, ref) => {
       );
     }
     return workerRef.current;
-  }, []);
-
-  // 组件卸载时终止 Worker
-  useEffect(() => {
-    return () => {
-      abortRef.current = true;
-      workerRef.current?.terminate();
-      workerRef.current = null;
-    };
   }, []);
 
   /**
@@ -162,8 +160,6 @@ const SearchPanel = forwardRef<SearchPanelRef>((_props, ref) => {
       outFiles: { path: string; source: FileSource }[] = []
     ): Promise<void> => {
       for (const item of items) {
-        if (abortRef.current) return;
-
         const fullPath = prefix ? `${prefix}/${item.name}` : item.name;
 
         if (item.kind === 'file') {
@@ -213,17 +209,14 @@ const SearchPanel = forwardRef<SearchPanelRef>((_props, ref) => {
   );
 
   /**
-   * 执行搜索
+   * 内部搜索实现（接收显式 query 参数，避免闭包 stale）
    */
-  const handleSearch = useCallback(async () => {
-    if (!query.trim() || !entries.length) return;
+  const handleSearchInternal = useCallback(async (searchQuery: string) => {
+    if (!searchQuery.trim() || !entries.length) return;
 
-    // 取消之前的搜索
-    abortRef.current = true;
-    // 短暂延迟确保上一轮的 Worker 消息处理完毕
-    await new Promise((r) => setTimeout(r, 50));
-    abortRef.current = false;
+    const currentSearchId = ++searchIdRef.current;
 
+    // 重置 UI 状态
     setIsSearching(true);
     setResults([]);
     setSearchedCount(0);
@@ -233,12 +226,22 @@ const SearchPanel = forwardRef<SearchPanelRef>((_props, ref) => {
 
     const worker = getWorker();
 
-    // 阶段 1: 收集文件路径
-    const allFiles: { path: string; source: FileSource }[] = [];
-    await collectAllFiles(entries, '', allFiles);
+    // 阶段 1: 收集文件路径（带缓存）
+    const entriesKey = JSON.stringify(entries.map((e) => `${e.name}:${e.kind}`));
+    const cached = fileCacheRef.current;
 
-    if (abortRef.current) {
-      allFiles.length = 0;
+    let allFiles: { path: string; source: FileSource }[];
+    if (cached && cached.entriesSrc === entriesKey) {
+      allFiles = cached.files.slice();
+    } else {
+      const collected: { path: string; source: FileSource }[] = [];
+      await collectAllFiles(entries, '', collected);
+      allFiles = collected;
+      fileCacheRef.current = { entriesSrc: entriesKey, files: allFiles.slice() };
+    }
+
+    // 检查是否已被更新的搜索取代
+    if (searchIdRef.current !== currentSearchId) {
       setIsSearching(false);
       return;
     }
@@ -249,12 +252,14 @@ const SearchPanel = forwardRef<SearchPanelRef>((_props, ref) => {
     const mergedResults = new Map<string, FileSearchResult>();
     let processed = 0;
 
-    // 设置 Worker 消息监听（单次搜索周期内复用）
+    // 设置 Worker 消息监听
     const onMessage = (event: MessageEvent) => {
-      const { type, results: batchResults, totalMatches, isTruncated } = event.data;
+      // 丢弃非当前搜索的消息（竞态保护）
+      if (searchIdRef.current !== currentSearchId) return;
+
+      const { type, results: batchResults, totalMatches, isTruncated: truncated } = event.data;
 
       if (type === 'progress') {
-        // 合并增量结果
         for (const r of batchResults as FileSearchResult[]) {
           const existing = mergedResults.get(r.filePath);
           if (existing) {
@@ -265,9 +270,8 @@ const SearchPanel = forwardRef<SearchPanelRef>((_props, ref) => {
         }
 
         totalMatchesRef.current = totalMatches;
-        if (isTruncated) setIsTruncated(true);
+        if (truncated) setIsTruncated(true);
 
-        // 实时更新 UI（快照）
         setResults(Array.from(mergedResults.values()));
         setSearchedCount(processed);
       }
@@ -277,62 +281,62 @@ const SearchPanel = forwardRef<SearchPanelRef>((_props, ref) => {
 
     try {
       for (let i = 0; i < allFiles.length; i += READ_BATCH_SIZE) {
-        if (abortRef.current) break;
+        // 每次迭代前检查是否被新搜索取代
+        if (searchIdRef.current !== currentSearchId) break;
         if (totalMatchesRef.current >= MAX_TOTAL_MATCHES) {
           setIsTruncated(true);
           break;
         }
 
-        // 读取一批文件
         const fileBatch = allFiles.slice(i, i + READ_BATCH_SIZE);
         const contents = await readBatch(fileBatch);
         processed += fileBatch.length;
 
-        // 释放已处理文件的源路径引用，减少搜索期间的内存峰值
-        for (let k = 0; k < fileBatch.length; k++) {
-          fileBatch[k] = { path: '', source: '' as FileSource };
-        }
-
         if (contents.length === 0) continue;
-        if (abortRef.current) break;
+        if (searchIdRef.current !== currentSearchId) break;
 
-        // 发送给 Worker 搜索
         worker.postMessage({
           type: 'search',
           files: contents,
-          query,
+          query: searchQuery,
           options: { caseSensitive, wholeWord, regex: useRegex },
           totalMatchesSoFar: totalMatchesRef.current,
           maxTotalMatches: MAX_TOTAL_MATCHES,
         });
 
-        // 等待 Worker 处理完这一批再继续读取下一批
+        // 小延迟让 Worker 有时间处理，同时不阻塞 UI
         await new Promise((r) => setTimeout(r, 10));
       }
 
-      // 最终快照
-      if (!abortRef.current) {
+      // 最终快照（仅当仍是当前搜索时）
+      if (searchIdRef.current === currentSearchId) {
         setResults(Array.from(mergedResults.values()));
         setSearchedCount(processed);
       }
     } finally {
       worker.removeEventListener('message', onMessage);
-      // 主动释放搜索期间的临时数据结构，帮助 GC
+      // 释放临时引用
       allFiles.length = 0;
       mergedResults.clear();
-      if (!abortRef.current) {
+      // 只有当前搜索才能清除 isSearching
+      if (searchIdRef.current === currentSearchId) {
         setIsSearching(false);
       }
     }
-  }, [query, entries, caseSensitive, wholeWord, useRegex, collectAllFiles, readBatch, getWorker]);
+  }, [entries, caseSensitive, wholeWord, useRegex, collectAllFiles, readBatch, getWorker]);
 
-  handleSearchRef.current = handleSearch;
+  /**
+   * 用户触发的搜索（从 state 读取 query）
+   */
+  const handleSearch = useCallback(() => {
+    void handleSearchInternal(query);
+  }, [handleSearchInternal, query]);
 
   /**
    * 取消搜索
    */
   const handleCancel = useCallback(() => {
-    abortRef.current = true;
+    ++searchIdRef.current; // 使当前搜索无效
     setIsSearching(false);
   }, []);
 
@@ -341,26 +345,27 @@ const SearchPanel = forwardRef<SearchPanelRef>((_props, ref) => {
    */
   const handleMatchClick = useCallback(
     (filePath: string, match: SearchMatch) => {
-      const fileSource = isElectron() ? filePath : null;
-      if (!fileSource) return;
+      // Electron 模式下：用 rootSource + 相对路径拼接出绝对路径
+      if (isElectron() && rootSource && typeof rootSource === 'string') {
+        const absolutePath = rootSource + '/' + filePath;
 
-      // 设置搜索高亮状态（MonacoEditor 会读取并应用）
-      dispatch(
-        setSearchHighlight({
-          keyword: query,
-          line: match.line,
-          column: match.column,
-        })
-      );
+        dispatch(
+          setSearchHighlight({
+            keyword: query,
+            line: match.line,
+            column: match.column,
+          })
+        );
 
-      const entry: FileEntry = {
-        name: filePath.slice(filePath.lastIndexOf('/') + 1),
-        kind: 'file',
-        source: fileSource,
-      };
-      dispatch(openFile(entry));
+        const entry: FileEntry = {
+          name: filePath.slice(filePath.lastIndexOf('/') + 1),
+          kind: 'file',
+          source: absolutePath,
+        };
+        dispatch(openFile(entry));
+      }
     },
-    [dispatch, query]
+    [dispatch, query, rootSource]
   );
 
   const toggleFileExpanded = useCallback((index: number) => {
@@ -382,7 +387,12 @@ const SearchPanel = forwardRef<SearchPanelRef>((_props, ref) => {
             placeholder="搜索"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                handleSearch();
+              }
+            }}
           />
           <div className="search-input__actions">
             <button

@@ -186,6 +186,7 @@ export class PluginManager {
   private commands = new CommandManager();
   private storage = new PluginStorageManager();
   private apiFactory: (pluginId: string, manifest: PluginManifest) => PluginContext;
+  private listeners: (() => void)[] = [];
 
   constructor(apiFactory: (pluginId: string, manifest: PluginManifest) => PluginContext) {
     this.apiFactory = apiFactory;
@@ -225,6 +226,7 @@ export class PluginManager {
       this.registry.setActive(manifest.id, plugin, context);
 
       console.log(`[Plugin] 插件已激活: ${manifest.id}`);
+      this.notifyListeners();
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       if (state) state.error = errorMsg;
@@ -261,6 +263,7 @@ export class PluginManager {
 
       this.registry.setInactive(pluginId);
       console.log(`[Plugin] 插件已停用: ${pluginId}`);
+      this.notifyListeners();
     } catch (err) {
       console.error(`[Plugin] 插件停用失败 ${pluginId}:`, err);
     }
@@ -272,6 +275,22 @@ export class PluginManager {
   async uninstall(pluginId: string): Promise<void> {
     await this.deactivate(pluginId);
     this.registry.unregister(pluginId);
+    this.notifyListeners();
+  }
+
+  /**
+   * 订阅插件状态变更事件
+   */
+  onChange(listener: () => void): () => void {
+    this.listeners.push(listener);
+    return () => {
+      const idx = this.listeners.indexOf(listener);
+      if (idx >= 0) this.listeners.splice(idx, 1);
+    };
+  }
+
+  private notifyListeners(): void {
+    for (const l of this.listeners) l();
   }
 
   /**

@@ -24,8 +24,10 @@ const ExtensionsPanel = () => {
 
   useEffect(() => {
     refresh();
-    const interval = setInterval(refresh, 1000);
-    return () => clearInterval(interval);
+    const manager = getPluginManager();
+    if (manager) {
+      return manager.onChange(refresh);
+    }
   }, []);
 
   const filteredPlugins = useMemo(() => {

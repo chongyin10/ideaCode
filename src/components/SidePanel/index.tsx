@@ -422,7 +422,6 @@ const ExplorerContent = () => {
     });
 
     return items;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contextMenu, rootSource, startCreate, startRename, handleFindInFiles, notifyChange, dispatch]);
 
   // 稳定回调引用（传递给 FileTree 的 props）
@@ -537,29 +536,34 @@ const FolderIcon = () => (
 const SidePanel = () => {
   const { sidePanelVisible, activePanel } = useAppSelector((state) => state.layout);
 
-  const renderContent = () => {
-    switch (activePanel) {
-      case 'explorer':
-        return <ExplorerContent />;
-      case 'search':
-        return <SearchPanel />;
-      case 'git':
-        return <div className="panel-placeholder">源代码管理</div>;
-      case 'debug':
-        return <div className="panel-placeholder">运行和调试</div>;
-      case 'extensions':
-        return <ExtensionsPanel />;
-      default:
-        return <div className="panel-placeholder">选择一个视图</div>;
-    }
-  };
-
   return (
     <div className={`side-panel ${sidePanelVisible ? 'is-visible' : ''}`}>
       <div className="side-panel__header">
         {activePanel ? panelTitles[activePanel] : '面板'}
       </div>
-      <div className="side-panel__content">{renderContent()}</div>
+      <div className="side-panel__content">
+        {/* 所有面板同时存在，通过 CSS display 切换可见性。
+           这样可以保留各面板的组件状态（如搜索内容、展开目录等），
+           避免切换面板时组件卸载导致的状态丢失。 */}
+        <div style={{ display: activePanel === 'explorer' ? 'block' : 'none', height: '100%' }}>
+          <ExplorerContent />
+        </div>
+        <div style={{ display: activePanel === 'search' ? 'block' : 'none', height: '100%' }}>
+          <SearchPanel />
+        </div>
+        <div style={{ display: activePanel === 'git' ? 'block' : 'none', height: '100%' }}>
+          <div className="panel-placeholder">源代码管理</div>
+        </div>
+        <div style={{ display: activePanel === 'debug' ? 'block' : 'none', height: '100%' }}>
+          <div className="panel-placeholder">运行和调试</div>
+        </div>
+        <div style={{ display: activePanel === 'extensions' ? 'block' : 'none', height: '100%' }}>
+          <ExtensionsPanel />
+        </div>
+        <div style={{ display: activePanel ? 'none' : 'block', height: '100%' }}>
+          <div className="panel-placeholder">选择一个视图</div>
+        </div>
+      </div>
     </div>
   );
 };
