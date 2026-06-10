@@ -52,6 +52,9 @@ const Channels = {
   MENU_OPEN_FILE: 'menu:open-file',
   MENU_NEW_WINDOW: 'menu:new-window',
 
+  /* ─── Git ─── */
+  GIT_GET_STATUS: 'git:getStatus',
+
   /* ─── 推送型通道 (主进程 → 渲染进程) ─── */
   FS_CHANGE: 'fs:change',
   EXTENSION_MESSAGE: 'extension:message',

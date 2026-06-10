@@ -75,7 +75,7 @@ const TopBar = () => {
 
         {/* 中间：可拖拽的标题区域 */}
         <div className="topbar__center">
-          <span className="topbar__title">src/App.tsx - ideacode</span>
+          <span className="topbar__title">IdeaCode</span>
         </div>
 
         {/* 右侧：工具按钮 + Win/Linux 窗口控制 */}

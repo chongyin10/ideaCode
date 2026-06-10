@@ -25,10 +25,8 @@ const TabBar = ({ tabs, activeId, onActivate, onClose, onPin }: TabBarProps) => 
             }
           }}
         >
-          <span className="tab-bar__name">
-            {tab.name}
-            {tab.isDirty && <span className="tab-bar__dirty">●</span>}
-          </span>
+          <span className={`tab-bar__name ${tab.isDirty ? 'dirty' : ''}`}>{tab.name}</span>
+          {tab.isDirty && <span className="tab-bar__dirty">●</span>}
           <span
             className="tab-bar__close"
             onClick={(e) => {

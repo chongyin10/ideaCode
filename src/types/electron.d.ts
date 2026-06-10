@@ -1,3 +1,8 @@
+/* ─── Git 状态 ─── */
+
+export type GitStatusCode = 'M' | 'A' | 'D' | 'R' | 'U';
+export type GitStatusMap = Record<string, GitStatusCode>;
+
 /* ─── IPC 数据结构 ─── */
 
 export interface FsEntry {
@@ -123,6 +128,11 @@ export interface ElectronAPI {
     removeRecent: (projectPath: string) => Promise<{ success: boolean }>;
     clearAll: () => Promise<{ success: boolean }>;
     getFilePath: () => Promise<string>;
+  };
+
+  /** Git 状态 */
+  git: {
+    getStatus: (dirPath: string) => Promise<GitStatusMap>;
   };
 }
 

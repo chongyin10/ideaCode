@@ -1,7 +1,8 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import type { FileEntry, FileSource } from '../../services/fileService';
-import { isSameSource, readFile, readDirectory, writeFile, addRecentProject, isPath, getRecentProjects, removeRecentProject } from '../../services/fileService';
-import type { RecentProject } from '../../types/electron';
+import { isSameSource, readFile, readDirectory, writeFile, isPath } from '../../services/fileService';
+import { addRecentProject, getRecentProjects, removeRecentProject } from '../../services/fileHistory';
+import type { RecentProject, GitStatusMap } from '../../types/electron';
 
 export interface OpenedFile {
   id: string;
@@ -41,6 +42,8 @@ interface WorkspaceState {
   clipboard: ClipboardItem | null;
   /** 待执行的搜索查询（由外部触发） */
   pendingSearchQuery: string | null;
+  /** Git 文件状态映射：相对路径 → 状态码 */
+  gitStatus: GitStatusMap;
 }
 
 const initialState: WorkspaceState = {
@@ -54,11 +57,12 @@ const initialState: WorkspaceState = {
   searchHighlight: null,
   clipboard: null,
   pendingSearchQuery: null,
+  gitStatus: {},
 };
 
 export const loadDirectory = createAsyncThunk(
   'workspace/loadDirectory',
-  async ({ source, name }: { source: FileSource; name: string }) => {
+  async ({ source, name }: { source: FileSource; name: string }, { dispatch }) => {
     const entries = await readDirectory(source);
 
     if (isPath(source)) {
@@ -68,6 +72,9 @@ export const loadDirectory = createAsyncThunk(
         // 历史记录写入失败不应阻塞主流程
       }
     }
+
+    // 异步刷新 Git 状态，不阻塞目录加载
+    dispatch(refreshGitStatus());
 
     return { source, name, entries };
   }
@@ -129,12 +136,35 @@ export const removeRecentProjectThunk = createAsyncThunk(
 
 export const saveFile = createAsyncThunk(
   'workspace/saveFile',
-  async (id: string, { getState }) => {
+  async (id: string, { getState, dispatch }) => {
     const state = (getState() as { workspace: { openedFiles: OpenedFile[] } }).workspace;
     const file = state.openedFiles.find((f) => f.id === id);
     if (!file) throw new Error('文件未找到');
     await writeFile(file.source, file.content);
+    dispatch(refreshGitStatus());
     return id;
+  }
+);
+
+export const refreshGitStatus = createAsyncThunk(
+  'workspace/refreshGitStatus',
+  async (_: void, { getState }) => {
+    const state = (getState() as { workspace: WorkspaceState }).workspace;
+    const rootSource = state.rootSource;
+
+    if (!rootSource || !isPath(rootSource)) {
+      return {};
+    }
+
+    if (!window.electronAPI?.git) {
+      return {};
+    }
+
+    try {
+      return await window.electronAPI.git.getStatus(rootSource);
+    } catch {
+      return {};
+    }
   }
 );
 
@@ -266,6 +296,9 @@ const workspaceSlice = createSlice({
         if (file) {
           file.isDirty = false;
         }
+      })
+      .addCase(refreshGitStatus.fulfilled, (state, action) => {
+        state.gitStatus = action.payload;
       });
   },
 });

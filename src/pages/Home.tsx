@@ -89,6 +89,8 @@ function Home() {
     [openedFiles, activeFileId]
   );
 
+
+
   const handleEditorChange = useCallback(
     (value: string) => {
       if (activeFileId) {

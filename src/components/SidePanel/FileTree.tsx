@@ -1,8 +1,11 @@
 import { useState, useEffect, useRef, useCallback, memo } from 'react';
-import { ChevronRight, FileText } from 'lucide-react';
-import type { FileEntry, FileSource, FileClipboardItem } from '../../services/fileService';
+import { ChevronRight } from 'lucide-react';
+import type { FileEntry, FileSource } from '../../services/fileService';
+import type { GitStatusMap, GitStatusCode } from '../../types/electron';
 import { isSameSource } from '../../services/fileService';
+import type { FileClipboardItem } from '../../services/fileClipboard';
 import InlineInput from '../InlineInput';
+import { StaticFileIcon, StaticClosedFolderIcon, MemoFolderIcon } from './FileTree.icons';
 
 export interface PendingCreate {
   parentSource: FileSource;
@@ -44,6 +47,10 @@ interface FileTreeProps {
   selectedEntries?: FileEntry[];
   /** 点击选中/多选回调 */
   onItemSelect?: (entry: FileEntry, parentSource: FileSource, isMultiSelect: boolean) => void;
+  /** Git 文件状态映射 */
+  gitStatus?: GitStatusMap;
+  /** 相对于 Git 仓库根目录的路径前缀（递归传递） */
+  relativePath?: string;
 }
 
 /**
@@ -73,6 +80,8 @@ const FileTree = memo(({
   clipboardItems,
   selectedEntries,
   onItemSelect,
+  gitStatus,
+  relativePath,
 }: FileTreeProps) => {
   const [expanded, setExpanded] = useState(false);
   const [children, setChildren] = useState<FileEntry[]>([]);
@@ -142,6 +151,10 @@ const FileTree = memo(({
   const isCut = clipboardItems?.some(
     (item) => item.action === 'cut' && isSameSource(entry.source, item.source)
   ) ?? false;
+
+  // 计算当前 entry 的相对路径，用于查询 Git 状态
+  const entryRelPath = relativePath ? `${relativePath}/${entry.name}` : entry.name;
+  const gitCode: GitStatusCode | undefined = gitStatus?.[entryRelPath];
 
   const handleClick = useCallback(
     async (e: React.MouseEvent) => {
@@ -216,8 +229,9 @@ const FileTree = memo(({
             onCancel={() => onRenameCancel?.()}
           />
         ) : (
-          entry.name
+          <span className="tree-item__label">{entry.name}</span>
         )}
+        {gitCode && <span className={`git-status ${gitCode}`}>{gitCode}</span>}
       </div>
 
       {expanded && myPendingCreateType && (
@@ -259,6 +273,8 @@ const FileTree = memo(({
             clipboardItems={clipboardItems}
             selectedEntries={selectedEntries}
             onItemSelect={onItemSelect}
+            gitStatus={gitStatus}
+            relativePath={entryRelPath}
           />
         ))}
     </div>
@@ -266,36 +282,5 @@ const FileTree = memo(({
 });
 
 FileTree.displayName = 'FileTree';
-
-/* ─── 静态图标组件（避免每次渲染创建新的 JSX 对象） ─── */
-
-const StaticFileIcon = memo(() => (
-  <FileText size={14} strokeWidth={1.5} />
-));
-StaticFileIcon.displayName = 'StaticFileIcon';
-
-const StaticClosedFolderIcon = memo(() => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z" />
-  </svg>
-));
-StaticClosedFolderIcon.displayName = 'StaticClosedFolderIcon';
-
-/** 文件夹图标：闭合为文件夹，展开为打开的文件夹 */
-const FolderIcon = ({ expanded }: { expanded: boolean }) => {
-  return expanded ? (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z" />
-      <path d="M2 10h20" />
-    </svg>
-  ) : (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z" />
-    </svg>
-  );
-};
-
-const MemoFolderIcon = memo(FolderIcon);
-MemoFolderIcon.displayName = 'MemoFolderIcon';
 
 export default FileTree;

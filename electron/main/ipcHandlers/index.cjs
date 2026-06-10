@@ -3,6 +3,7 @@ const { registerFsHandlers } = require('./fsHandler.cjs');
 const { registerWindowHandlers } = require('./windowHandler.cjs');
 const { registerExtensionHandlers } = require('./extensionHandler.cjs');
 const { registerHistoryHandlers } = require('./historyHandler.cjs');
+const { registerGitHandlers } = require('./gitHandler.cjs');
 
 /**
  * 统一注册所有 IPC 处理器
@@ -14,6 +15,7 @@ function registerIpcHandlers(deps = {}) {
 
   registerDialogHandlers();
   registerFsHandlers();
+  registerGitHandlers();
 
   if (windowManager) {
     registerWindowHandlers(windowManager);

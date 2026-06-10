@@ -52,11 +52,18 @@
 .tab-bar__name {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.tab-bar__name.dirty {
+  color: #d4b98d;
 }
 
 .tab-bar__close {
   font-size: 14px;
-  opacity: 0;
+  opacity: 0.4;
   width: 16px;
   height: 16px;
   display: flex;
@@ -68,7 +75,7 @@
 }
 
 .tab-bar__item:hover .tab-bar__close {
-  opacity: 0.6;
+  opacity: 0.8;
 }
 
 .tab-bar__close:hover {
@@ -90,10 +97,8 @@
 }
 
 .tab-bar__dirty {
-  display: inline-block;
-  margin-left: 4px;
+  flex-shrink: 0;
   color: #4a9eff;
   font-size: 8px;
   line-height: 1;
-  vertical-align: middle;
 }

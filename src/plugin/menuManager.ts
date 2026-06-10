@@ -85,3 +85,30 @@ export function getMenuManager(): MenuManagerCore {
 export function resetMenuManager() {
   instance = null;
 }
+
+/** 将插件 MenuContribution 转换为 ContextMenu 的 MenuItem 格式 */
+export function contributionToMenuItem(c: MenuContribution): {
+  id: string;
+  label: string;
+  icon?: React.ReactNode;
+  shortcut?: string;
+  disabled?: boolean;
+  group?: string;
+  order?: number;
+  children?: any[];
+  command?: string;
+  onClick?: () => void;
+} {
+  return {
+    id: c.id,
+    label: c.label,
+    icon: c.icon,
+    shortcut: c.shortcut,
+    disabled: c.disabled,
+    group: c.group,
+    order: c.order,
+    children: c.children?.map(contributionToMenuItem),
+    command: c.command,
+    onClick: c.onClick,
+  };
+}

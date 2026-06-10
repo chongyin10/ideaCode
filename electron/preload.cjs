@@ -47,6 +47,8 @@ const Channels = {
   HISTORY_REMOVE_RECENT: 'history:removeRecent',
   HISTORY_CLEAR_ALL: 'history:clearAll',
   HISTORY_GET_FILE_PATH: 'history:getFilePath',
+
+  GIT_GET_STATUS: 'git:getStatus',
 };
 
 /**
@@ -129,6 +131,10 @@ const electronAPI = {
 
   app: {
     onQuit: (callback) => onChannel(Channels.APP_QUIT, callback),
+  },
+
+  git: {
+    getStatus: (dirPath) => ipcRenderer.invoke(Channels.GIT_GET_STATUS, dirPath),
   },
 };
 
