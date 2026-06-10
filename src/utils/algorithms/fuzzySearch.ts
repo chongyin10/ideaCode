@@ -73,6 +73,11 @@ function computeScoreMatrix(query: string, target: string): number[][] {
     let maxPrev = -Infinity;
     
     for (let j = i; j < n; j++) {
+      // 先更新 maxPrev，确保匹配时已经包含 prev[j-1]
+      if (i > 0 && j > 0) {
+        maxPrev = Math.max(maxPrev, prev[j - 1]);
+      }
+
       const tch = target[j].toLowerCase();
       
       if (qch === tch) {
@@ -116,11 +121,6 @@ function computeScoreMatrix(query: string, target: string): number[][] {
         matchMatrix[i][j] = curr[j];
       } else {
         curr[j] = -Infinity; // 不匹配
-      }
-      
-      // 更新 maxPrev 为下一列做准备
-      if (i > 0 && j > 0) {
-        maxPrev = Math.max(maxPrev, prev[j - 1]);
       }
     }
     

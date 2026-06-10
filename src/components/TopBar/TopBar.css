@@ -36,13 +36,44 @@
 
 .topbar__center {
   flex: 1;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 16px;
+}
+
+.topbar__search-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 3px 12px;
+  background-color: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 5px;
   color: #858585;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  max-width: 320px;
+  width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.topbar__search-trigger:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.15);
+  color: #cccccc;
+}
+
+.topbar__search-trigger span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  padding: 0 16px;
-  font-size: 12px;
 }
 
 .topbar__right {

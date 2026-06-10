@@ -51,6 +51,8 @@ interface FileTreeProps {
   gitStatus?: GitStatusMap;
   /** 相对于 Git 仓库根目录的路径前缀（递归传递） */
   relativePath?: string;
+  /** 需要自动展开的目录路径链 */
+  expandPaths?: string[];
 }
 
 /**
@@ -82,6 +84,7 @@ const FileTree = memo(({
   onItemSelect,
   gitStatus,
   relativePath,
+  expandPaths,
 }: FileTreeProps) => {
   const [expanded, setExpanded] = useState(false);
   const [children, setChildren] = useState<FileEntry[]>([]);
@@ -146,14 +149,35 @@ const FileTree = memo(({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [myPendingCreateType, myIsRenaming]);
 
+  // 计算当前 entry 的相对路径（用于 Git 状态查询 + 自动展开匹配）
+  const entryRelPath = relativePath ? `${relativePath}/${entry.name}` : entry.name;
+
+  // 当 expandPaths 包含当前目录路径时，自动展开（仅触发一次，不影响手动折叠）
+  const autoExpandedRef = useRef(false);
+  useEffect(() => {
+    if (entry.kind !== 'directory' || !expandPaths || expandPaths.length === 0) return;
+    const shouldExpand = expandPaths.includes(entryRelPath);
+    if (!shouldExpand) {
+      autoExpandedRef.current = false;
+      return;
+    }
+    if (autoExpandedRef.current) return;
+    autoExpandedRef.current = true;
+    setExpanded(true);
+    if (children.length === 0) {
+      import('../../services/fileService').then(({ readDirectory }) => {
+        readDirectory(entry.source).then(setChildren).catch(() => {});
+      });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expandPaths, entryRelPath, entry.kind, entry.source]);
+
   const isActive = activeSource ? isSameSource(entry.source, activeSource) : false;
   const isSelected = selectedEntries?.some((e) => isSameSource(e.source, entry.source)) ?? false;
   const isCut = clipboardItems?.some(
     (item) => item.action === 'cut' && isSameSource(entry.source, item.source)
   ) ?? false;
 
-  // 计算当前 entry 的相对路径，用于查询 Git 状态
-  const entryRelPath = relativePath ? `${relativePath}/${entry.name}` : entry.name;
   const gitCode: GitStatusCode | undefined = gitStatus?.[entryRelPath];
 
   const handleClick = useCallback(
@@ -275,6 +299,7 @@ const FileTree = memo(({
             onItemSelect={onItemSelect}
             gitStatus={gitStatus}
             relativePath={entryRelPath}
+            expandPaths={expandPaths}
           />
         ))}
     </div>

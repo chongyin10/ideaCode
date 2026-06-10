@@ -20,6 +20,7 @@ import {
   refreshDirectory,
   setPendingSearchQuery,
   refreshGitStatus,
+  refreshAllFilePaths,
 } from '../../store/slices/workspaceSlice';
 import { switchPanel } from '../../store/slices/layoutSlice';
 import { openDirectory } from '../../services/fileService';
@@ -82,6 +83,7 @@ const ExplorerContent = () => {
   const entries = useAppSelector((state) => state.workspace.entries);
   const activeFileSource = useAppSelector((state) => state.workspace.activeFileSource);
   const gitStatus = useAppSelector((state) => state.workspace.gitStatus);
+  const expandPaths = useAppSelector((state) => state.workspace.expandPaths);
 
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     visible: false,
@@ -176,6 +178,7 @@ const ExplorerContent = () => {
       setPendingCreate(null);
       notifyChange(parentSource);
       dispatch(refreshGitStatus());
+      dispatch(refreshAllFilePaths());
       if (rootSource && isSameSource(parentSource, rootSource)) {
         dispatch(refreshDirectory(parentSource));
       }
@@ -214,6 +217,7 @@ const ExplorerContent = () => {
       setPendingRename(null);
       notifyChange(parentSource);
       dispatch(refreshGitStatus());
+      dispatch(refreshAllFilePaths());
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error('[Explorer] 重命名失败:', msg);
@@ -447,6 +451,7 @@ const ExplorerContent = () => {
               notifyChange(ps);
             }
             dispatch(refreshGitStatus());
+      dispatch(refreshAllFilePaths());
           },
         }
       );
@@ -554,6 +559,7 @@ const ExplorerContent = () => {
           selectedEntries={selectedEntries.map((s) => s.entry)}
           onItemSelect={handleItemSelect}
           gitStatus={gitStatus}
+          expandPaths={expandPaths}
         />
       ))}
       {renderRootInlineInput()}

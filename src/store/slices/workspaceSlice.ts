@@ -44,6 +44,10 @@ interface WorkspaceState {
   pendingSearchQuery: string | null;
   /** Git 文件状态映射：相对路径 → 状态码 */
   gitStatus: GitStatusMap;
+  /** 所有文件路径（用于 QuickOpen） */
+  allFilePaths: string[];
+  /** 需要自动展开的目录路径链（从 QuickOpen 打开文件时触发） */
+  expandPaths: string[];
 }
 
 const initialState: WorkspaceState = {
@@ -58,6 +62,8 @@ const initialState: WorkspaceState = {
   clipboard: null,
   pendingSearchQuery: null,
   gitStatus: {},
+  allFilePaths: [],
+  expandPaths: [],
 };
 
 export const loadDirectory = createAsyncThunk(
@@ -73,8 +79,9 @@ export const loadDirectory = createAsyncThunk(
       }
     }
 
-    // 异步刷新 Git 状态，不阻塞目录加载
+    // 异步刷新 Git 状态和文件路径列表，不阻塞目录加载
     dispatch(refreshGitStatus());
+    dispatch(refreshAllFilePaths(source));
 
     return { source, name, entries };
   }
@@ -168,6 +175,46 @@ export const refreshGitStatus = createAsyncThunk(
   }
 );
 
+/**
+ * 递归收集所有文件路径（用于 QuickOpen）
+ */
+export const refreshAllFilePaths = createAsyncThunk(
+  'workspace/refreshAllFilePaths',
+  async (overrideSource?: FileSource, { getState }) => {
+    const state = (getState() as { workspace: WorkspaceState }).workspace;
+    const rootSource = overrideSource || state.rootSource;
+
+    if (!rootSource) return [];
+
+    const paths: string[] = [];
+    const excludeDirs = new Set([
+      'node_modules', '.git', 'dist', 'build', '.next', 'coverage',
+      'out', '.vscode', '.idea', '__pycache__', 'vendor', '.yarn',
+      '.nuxt', '.output', '.cache', 'tmp', 'temp',
+    ]);
+
+    async function collect(source: FileSource, prefix: string) {
+      try {
+        const entries = await readDirectory(source);
+        for (const entry of entries) {
+          if (entry.kind === 'directory' && excludeDirs.has(entry.name)) continue;
+          const fullPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+          if (entry.kind === 'file') {
+            paths.push(fullPath);
+          } else {
+            await collect(entry.source, fullPath);
+          }
+        }
+      } catch {
+        // 跳过无法读取的目录
+      }
+    }
+
+    await collect(rootSource, '');
+    return paths;
+  }
+);
+
 const workspaceSlice = createSlice({
   name: 'workspace',
   initialState,
@@ -239,6 +286,21 @@ const workspaceSlice = createSlice({
     setPendingSearchQuery: (state, action) => {
       state.pendingSearchQuery = action.payload as string | null;
     },
+    expandToFile: (state, action) => {
+      const filePath = action.payload as string;
+      const parts = filePath.split('/');
+      // 构建需要展开的目录路径链（排除文件名本身）
+      const paths: string[] = [];
+      let current = '';
+      for (let i = 0; i < parts.length - 1; i++) {
+        current = current ? `${current}/${parts[i]}` : parts[i];
+        paths.push(current);
+      }
+      state.expandPaths = paths;
+    },
+    clearExpandPaths: (state) => {
+      state.expandPaths = [];
+    },
   },
   extraReducers: (builder) => {
     builder
@@ -299,10 +361,13 @@ const workspaceSlice = createSlice({
       })
       .addCase(refreshGitStatus.fulfilled, (state, action) => {
         state.gitStatus = action.payload;
+      })
+      .addCase(refreshAllFilePaths.fulfilled, (state, action) => {
+        state.allFilePaths = action.payload;
       });
   },
 });
 
-export const { closeFile, activateFile, setFileContent, markFileSaved, pinPreviewFile, setSearchHighlight, clearSearchHighlight, setClipboard, clearClipboard, setPendingSearchQuery } = workspaceSlice.actions;
+export const { closeFile, activateFile, setFileContent, markFileSaved, pinPreviewFile, setSearchHighlight, clearSearchHighlight, setClipboard, clearClipboard, setPendingSearchQuery, expandToFile, clearExpandPaths } = workspaceSlice.actions;
 
 export default workspaceSlice.reducer;

@@ -6,6 +6,7 @@ import {
   Square,
   X,
 } from 'lucide-react';
+import { useAppSelector } from '../../store/hooks';
 import QuickOpen from '../QuickOpen';
 import './TopBar.css';
 
@@ -23,6 +24,7 @@ import './TopBar.css';
 const TopBar = () => {
   const [quickOpenVisible, setQuickOpenVisible] = useState(false);
   const [, setIsMaximized] = useState(false);
+  const rootName = useAppSelector((state) => state.workspace.rootName);
 
   const platform = window.electronAPI?.platform || 'browser';
   const isMac = platform === 'darwin';
@@ -73,9 +75,16 @@ const TopBar = () => {
           <span className="topbar__brand">IDEACODE</span>
         </div>
 
-        {/* 中间：可拖拽的标题区域 */}
+        {/* 中间：搜索触发区域 */}
         <div className="topbar__center">
-          <span className="topbar__title">IdeaCode</span>
+          <button
+            className="topbar__search-trigger"
+            onClick={() => setQuickOpenVisible(true)}
+            title="搜索文件 (Ctrl+P)"
+          >
+            <Search size={12} strokeWidth={1.5} />
+            <span>{rootName || 'IdeaCode'}</span>
+          </button>
         </div>
 
         {/* 右侧：工具按钮 + Win/Linux 窗口控制 */}
