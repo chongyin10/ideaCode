@@ -370,14 +370,23 @@ export interface FileClipboardItem {
   action: 'cut' | 'copy';
 }
 
-let fileClipboard: FileClipboardItem | null = null;
-
-export function setFileClipboard(item: FileClipboardItem | null) {
-  fileClipboard = item;
+export interface FileClipboardState {
+  action: 'cut' | 'copy';
+  items: FileClipboardItem[];
 }
 
-export function getFileClipboard(): FileClipboardItem | null {
+let fileClipboard: FileClipboardState | null = null;
+
+export function setFileClipboard(action: 'cut' | 'copy', items: FileClipboardItem[]) {
+  fileClipboard = { action, items };
+}
+
+export function getFileClipboard(): FileClipboardState | null {
   return fileClipboard;
+}
+
+export function clearFileClipboard() {
+  fileClipboard = null;
 }
 
 /**

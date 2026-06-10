@@ -7,6 +7,7 @@ import {
   activateFile,
   setFileContent,
   saveFile,
+  pinPreviewFile,
   fetchRecentProjects,
   removeRecentProjectThunk,
 } from '../store/slices/workspaceSlice';
@@ -97,6 +98,18 @@ function Home() {
     [dispatch, activeFileId]
   );
 
+  const handleCloseTab = useCallback(
+    (id: string) => {
+      const file = openedFiles.find((f) => f.id === id);
+      if (file?.isDirty) {
+        const choice = window.confirm('文件有未保存的更改，确定要关闭吗？');
+        if (!choice) return;
+      }
+      dispatch(closeFile(id));
+    },
+    [dispatch, openedFiles]
+  );
+
   return (
     <div className="home-page">
       {quickOpenVisible && <QuickOpen onClose={() => setQuickOpenVisible(false)} />}
@@ -176,10 +189,16 @@ function Home() {
       ) : (
         <div className="editor-workspace">
           <TabBar
-            tabs={openedFiles.map((f) => ({ id: f.id, name: f.name, isDirty: f.isDirty }))}
+            tabs={openedFiles.map((f) => ({
+              id: f.id,
+              name: f.name,
+              isDirty: f.isDirty,
+              isPreview: f.isPreview,
+            }))}
             activeId={activeFileId}
             onActivate={(id) => dispatch(activateFile(id))}
-            onClose={(id) => dispatch(closeFile(id))}
+            onClose={handleCloseTab}
+            onPin={() => dispatch(pinPreviewFile())}
           />
           <div className="editor-area">
             {activeFile ? (

@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import {
   FolderOpen,
   FilePlus,
@@ -23,7 +23,7 @@ import {
 import { switchPanel } from '../../store/slices/layoutSlice';
 import type { PanelId } from '../../store/slices/layoutSlice';
 import { openDirectory } from '../../services/fileService';
-import type { FileEntry, FileSource } from '../../services/fileService';
+import type { FileEntry, FileSource, FileClipboardState } from '../../services/fileService';
 import {
   isPath,
   isElectron,
@@ -38,6 +38,7 @@ import {
   revealInExplorer,
   getFileClipboard,
   setFileClipboard,
+  clearFileClipboard,
 } from '../../services/fileService';
 import FileTree, { type PendingCreate, type PendingRename, type LastOperation } from './FileTree';
 import SearchPanel from '../SearchPanel';
@@ -87,7 +88,8 @@ const ExplorerContent = () => {
   const [pendingCreate, setPendingCreate] = useState<PendingCreate | null>(null);
   const [pendingRename, setPendingRename] = useState<PendingRename | null>(null);
   const [lastOperation, setLastOperation] = useState<LastOperation | null>(null);
-  const [clipboardItem, setClipboardItem] = useState<FileClipboardItem | null>(null);
+  const [clipboardState, setClipboardState] = useState<FileClipboardState | null>(null);
+  const [selectedEntries, setSelectedEntries] = useState<{ entry: FileEntry; parentSource: FileSource }[]>([]);
 
   const notifyChange = useCallback((...targets: FileSource[]) => {
     setLastOperation({ targets, timestamp: Date.now() });
@@ -102,6 +104,20 @@ const ExplorerContent = () => {
     dispatch(switchPanel('search'));
     dispatch(setPendingSearchQuery(name));
   }, [dispatch]);
+
+  const handleItemSelect = useCallback((entry: FileEntry, parentSource: FileSource, isMultiSelect: boolean) => {
+    if (isMultiSelect) {
+      setSelectedEntries((prev) => {
+        const exists = prev.some((s) => isSameSource(s.entry.source, entry.source));
+        if (exists) {
+          return prev.filter((s) => !isSameSource(s.entry.source, entry.source));
+        }
+        return [...prev, { entry, parentSource }];
+      });
+    } else {
+      setSelectedEntries([{ entry, parentSource }]);
+    }
+  }, []);
 
   const openContextMenu = useCallback(
     (e: React.MouseEvent, entry: FileEntry | null, parentSource: FileSource) => {
@@ -203,38 +219,35 @@ const ExplorerContent = () => {
     setPendingRename(null);
   }, []);
 
-  // ─── 粘贴操作（含同名冲突处理）───
+  // ─── 粘贴操作（批量，含同名冲突处理）───
 
   const handlePaste = useCallback(async (destSource: FileSource) => {
-    const item = getFileClipboard();
-    if (!item) return;
+    const clipboard = getFileClipboard();
+    if (!clipboard || clipboard.items.length === 0) return;
 
-    const nameConflict = await exists(destSource, item.name);
+    const parentSources = new Set<FileSource>();
 
-    if (nameConflict) {
-      const choice = window.confirm(
-        `"${item.name}" 已存在，是否创建副本？`
-      );
+    for (const item of clipboard.items) {
+      const nameConflict = await exists(destSource, item.name);
+      const finalName = nameConflict
+        ? await generateCopyName(destSource, item.name, item.kind)
+        : item.name;
 
-      if (!choice) return;
-      // 确定 → 自动序列命名
-      const newName = await generateCopyName(destSource, item.name, item.kind);
-      await copyEntry(item.parentSource, item.name, destSource, newName);
-    } else {
-      await copyEntry(item.parentSource, item.name, destSource, item.name);
+      await copyEntry(item.parentSource, item.name, destSource, finalName);
+
+      if (clipboard.action === 'cut') {
+        await deleteEntry(item.parentSource, item.name, item.kind);
+        parentSources.add(item.parentSource);
+      }
     }
 
-    if (item.action === 'cut') {
-      await deleteEntry(item.parentSource, item.name, item.kind);
-      setFileClipboard(null);
+    if (clipboard.action === 'cut') {
+      clearFileClipboard();
+      setClipboardState(null);
     }
 
-    if (item.action === 'cut') {
-      notifyChange(destSource, item.parentSource);
-    } else {
-      notifyChange(destSource);
-    }
-    setClipboardItem(null);
+    parentSources.add(destSource);
+    notifyChange(...Array.from(parentSources));
     if (rootSource && isSameSource(destSource, rootSource)) {
       dispatch(refreshDirectory(destSource));
     }
@@ -247,8 +260,15 @@ const ExplorerContent = () => {
     const { targetEntry, targetParentSource } = contextMenu;
     const clipboard = getFileClipboard();
 
-    // targetParentSource 在有 targetEntry 时不应为 null，但类型上可能为 null
     const safeParentSource = targetParentSource || rootSource;
+
+    // 当前操作目标：多选优先，否则单选 targetEntry
+    const isMultiSelect = selectedEntries.length > 1;
+    const activeTargets = isMultiSelect
+      ? selectedEntries
+      : targetEntry
+      ? [{ entry: targetEntry, parentSource: safeParentSource }]
+      : [];
 
     const createTargetSource =
       targetEntry?.kind === 'directory'
@@ -257,7 +277,7 @@ const ExplorerContent = () => {
         ? safeParentSource
         : rootSource;
 
-    const canPasteHere = clipboard !== null && (!targetEntry || targetEntry.kind === 'directory');
+    const canPasteHere = clipboard !== null;
     const pasteTargetSource =
       targetEntry?.kind === 'directory'
         ? targetEntry.source
@@ -272,6 +292,7 @@ const ExplorerContent = () => {
         icon: <FilePlus size={14} strokeWidth={1.5} />,
         group: '1_new',
         order: 1,
+        disabled: isMultiSelect,
         onClick: () => startCreate(createTargetSource, 'file'),
       },
       {
@@ -280,6 +301,7 @@ const ExplorerContent = () => {
         icon: <FolderPlus size={14} strokeWidth={1.5} />,
         group: '1_new',
         order: 2,
+        disabled: isMultiSelect,
         onClick: () => startCreate(createTargetSource, 'folder'),
       },
     ];
@@ -292,7 +314,7 @@ const ExplorerContent = () => {
           icon: <FolderOpenIcon size={14} strokeWidth={1.5} />,
           group: '1_new',
           order: 3,
-          disabled: !isElectron(),
+          disabled: !isElectron() || isMultiSelect,
           onClick: async () => {
             try {
               if (isPath(targetEntry.source)) {
@@ -309,6 +331,7 @@ const ExplorerContent = () => {
           icon: <Search size={14} strokeWidth={1.5} />,
           group: '2_search',
           order: 4,
+          disabled: isMultiSelect,
           onClick: () => handleFindInFiles(targetEntry.name),
         },
         {
@@ -317,16 +340,17 @@ const ExplorerContent = () => {
           icon: <Scissors size={14} strokeWidth={1.5} />,
           group: '3_edit',
           order: 5,
+          disabled: activeTargets.length === 0,
           onClick: () => {
-            const item = {
-              source: targetEntry.source,
-              name: targetEntry.name,
-              kind: targetEntry.kind,
-              parentSource: safeParentSource,
+            const items = activeTargets.map((s) => ({
+              source: s.entry.source,
+              name: s.entry.name,
+              kind: s.entry.kind,
+              parentSource: s.parentSource,
               action: 'cut' as const,
-            };
-            setFileClipboard(item);
-            setClipboardItem(item);
+            }));
+            setFileClipboard('cut', items);
+            setClipboardState({ action: 'cut', items });
           },
         },
         {
@@ -335,15 +359,17 @@ const ExplorerContent = () => {
           icon: <Copy size={14} strokeWidth={1.5} />,
           group: '3_edit',
           order: 6,
+          disabled: activeTargets.length === 0,
           onClick: () => {
-            setFileClipboard({
-              source: targetEntry.source,
-              name: targetEntry.name,
-              kind: targetEntry.kind,
-              parentSource: safeParentSource,
-              action: 'copy',
-            });
-            setClipboardItem(null);
+            const items = activeTargets.map((s) => ({
+              source: s.entry.source,
+              name: s.entry.name,
+              kind: s.entry.kind,
+              parentSource: s.parentSource,
+              action: 'copy' as const,
+            }));
+            setFileClipboard('copy', items);
+            setClipboardState({ action: 'copy', items });
           },
         },
         {
@@ -361,7 +387,7 @@ const ExplorerContent = () => {
           icon: <Link size={14} strokeWidth={1.5} />,
           group: '4_path',
           order: 8,
-          disabled: !isPath(targetEntry.source),
+          disabled: !isPath(targetEntry.source) || isMultiSelect,
           onClick: () => {
             if (isPath(targetEntry.source)) {
               navigator.clipboard.writeText(targetEntry.source).catch(() => {});
@@ -374,7 +400,7 @@ const ExplorerContent = () => {
           icon: <Link size={14} strokeWidth={1.5} />,
           group: '4_path',
           order: 9,
-          disabled: !isPath(targetEntry.source) || !isPath(rootSource),
+          disabled: !isPath(targetEntry.source) || !isPath(rootSource) || isMultiSelect,
           onClick: () => {
             if (isPath(targetEntry.source) && isPath(rootSource)) {
               const rel = targetEntry.source.replace(rootSource + '/', '');
@@ -388,6 +414,7 @@ const ExplorerContent = () => {
           icon: <FileSignature size={14} strokeWidth={1.5} />,
           group: '5_file',
           order: 10,
+          disabled: isMultiSelect,
           onClick: () => startRename(targetEntry, safeParentSource),
         },
         {
@@ -396,13 +423,21 @@ const ExplorerContent = () => {
           icon: <Trash2 size={14} strokeWidth={1.5} />,
           group: '5_file',
           order: 11,
+          disabled: activeTargets.length === 0,
           onClick: async () => {
-            if (!window.confirm(`确定要删除 "${targetEntry.name}" 吗？`)) return;
-            try {
-              await deleteEntry(safeParentSource, targetEntry.name, targetEntry.kind);
-              notifyChange(safeParentSource);
-            } catch (err) {
-              alert(`删除失败: ${err instanceof Error ? err.message : String(err)}`);
+            const names = activeTargets.map((t) => t.entry.name).join('", "');
+            if (!window.confirm(`确定要删除 "${names}" 吗？`)) return;
+            const parentSources = new Set<FileSource>();
+            for (const t of activeTargets) {
+              try {
+                await deleteEntry(t.parentSource, t.entry.name, t.entry.kind);
+                parentSources.add(t.parentSource);
+              } catch (err) {
+                alert(`删除 "${t.entry.name}" 失败: ${err instanceof Error ? err.message : String(err)}`);
+              }
+            }
+            for (const ps of parentSources) {
+              notifyChange(ps);
             }
           },
         }
@@ -437,15 +472,22 @@ const ExplorerContent = () => {
     });
 
     return items;
-  }, [contextMenu, rootSource, startCreate, startRename, handleFindInFiles, handlePaste, notifyChange]);
+  }, [contextMenu, rootSource, startCreate, startRename, handleFindInFiles, handlePaste, notifyChange, selectedEntries]);
 
   // 稳定回调引用（传递给 FileTree 的 props）
   const stableOnOpenFile = useCallback((entry: FileEntry) => {
     dispatch(openFile(entry));
   }, [dispatch]);
 
+  const selectedRef = useRef(selectedEntries);
+  selectedRef.current = selectedEntries;
+
   const stableOnContextMenu = useCallback(
     (e: React.MouseEvent, entry: FileEntry, parentSource: FileSource) => {
+      // 右键点击的项不在当前多选列表中时，单选该项
+      if (!selectedRef.current.some((s) => isSameSource(s.entry.source, entry.source))) {
+        setSelectedEntries([{ entry, parentSource }]);
+      }
       openContextMenu(e, entry, parentSource);
     },
     [openContextMenu]
@@ -503,7 +545,9 @@ const ExplorerContent = () => {
           onRenameConfirm={handleRenameConfirm}
           onRenameCancel={handleRenameCancel}
           lastOperation={lastOperation}
-          clipboardItem={clipboardItem}
+          clipboardItems={clipboardState?.items}
+          selectedEntries={selectedEntries.map((s) => s.entry)}
+          onItemSelect={handleItemSelect}
         />
       ))}
       {renderRootInlineInput()}

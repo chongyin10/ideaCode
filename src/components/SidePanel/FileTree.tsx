@@ -39,7 +39,11 @@ interface FileTreeProps {
   /** 最近一次文件操作，用于触发目录刷新 */
   lastOperation?: LastOperation | null;
   /** 当前剪贴板内容，用于显示剪切状态 */
-  clipboardItem?: FileClipboardItem | null;
+  clipboardItems?: FileClipboardItem[];
+  /** 多选中的条目 */
+  selectedEntries?: FileEntry[];
+  /** 点击选中/多选回调 */
+  onItemSelect?: (entry: FileEntry, parentSource: FileSource, isMultiSelect: boolean) => void;
 }
 
 /**
@@ -66,7 +70,9 @@ const FileTree = memo(({
   onRenameConfirm,
   onRenameCancel,
   lastOperation,
-  clipboardItem,
+  clipboardItems,
+  selectedEntries,
+  onItemSelect,
 }: FileTreeProps) => {
   const [expanded, setExpanded] = useState(false);
   const [children, setChildren] = useState<FileEntry[]>([]);
@@ -132,21 +138,38 @@ const FileTree = memo(({
   }, [myPendingCreateType, myIsRenaming]);
 
   const isActive = activeSource ? isSameSource(entry.source, activeSource) : false;
-  const isCut = clipboardItem?.action === 'cut' && isSameSource(entry.source, clipboardItem.source);
+  const isSelected = selectedEntries?.some((e) => isSameSource(e.source, entry.source)) ?? false;
+  const isCut = clipboardItems?.some(
+    (item) => item.action === 'cut' && isSameSource(entry.source, item.source)
+  ) ?? false;
 
-  const handleClick = useCallback(async () => {
-    if (entry.kind === 'directory') {
-      const nextExpanded = !expanded;
-      setExpanded(nextExpanded);
-      if (nextExpanded && children.length === 0) {
-        const { readDirectory } = await import('../../services/fileService');
-        const vals = await readDirectory(entry.source);
-        setChildren(vals);
+  const handleClick = useCallback(
+    async (e: React.MouseEvent) => {
+      const isMultiSelect = e.metaKey || e.ctrlKey;
+
+      if (isMultiSelect) {
+        e.preventDefault();
+        e.stopPropagation();
+        onItemSelect?.(entry, parentSource, true);
+        return;
       }
-    } else {
-      onOpenFile(entry);
-    }
-  }, [entry.kind, entry.source, entry.name, expanded, children.length, onOpenFile]);
+
+      onItemSelect?.(entry, parentSource, false);
+
+      if (entry.kind === 'directory') {
+        const nextExpanded = !expanded;
+        setExpanded(nextExpanded);
+        if (nextExpanded && children.length === 0) {
+          const { readDirectory } = await import('../../services/fileService');
+          const vals = await readDirectory(entry.source);
+          setChildren(vals);
+        }
+      } else {
+        onOpenFile(entry);
+      }
+    },
+    [entry, parentSource, expanded, children.length, onOpenFile, onItemSelect]
+  );
 
   const refreshChildren = useCallback(async () => {
     const { readDirectory } = await import('../../services/fileService');
@@ -154,16 +177,19 @@ const FileTree = memo(({
     setChildren(vals);
   }, [entry.source]);
 
-  const handleContextMenu = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    onContextMenu?.(e, entry, parentSource);
-  }, [onContextMenu, entry, parentSource]);
+  const handleContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      onContextMenu?.(e, entry, parentSource);
+    },
+    [onContextMenu, entry, parentSource]
+  );
 
   return (
     <div onContextMenu={handleContextMenu} data-name={entry.name}>
       <div
-        className={`tree-item ${isActive ? 'active' : ''} ${isCut ? 'is-cut' : ''}`}
+        className={`tree-item ${isActive ? 'active' : ''} ${isSelected ? 'selected' : ''} ${isCut ? 'is-cut' : ''}`}
         style={{ paddingLeft: 12 + level * 12 }}
         onClick={handleClick}
       >
@@ -230,7 +256,9 @@ const FileTree = memo(({
             onRenameConfirm={onRenameConfirm}
             onRenameCancel={onRenameCancel}
             lastOperation={lastOperation}
-            clipboardItem={clipboardItem}
+            clipboardItems={clipboardItems}
+            selectedEntries={selectedEntries}
+            onItemSelect={onItemSelect}
           />
         ))}
     </div>

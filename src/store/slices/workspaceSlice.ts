@@ -11,6 +11,8 @@ export interface OpenedFile {
   language: string;
   /** 文件内容是否已被修改但未保存 */
   isDirty: boolean;
+  /** 是否为预览模式（单点打开、未编辑），再打开新文件会覆盖 */
+  isPreview?: boolean;
 }
 
 export interface SearchHighlight {
@@ -142,18 +144,33 @@ const workspaceSlice = createSlice({
   reducers: {
     closeFile: (state, action) => {
       const id = action.payload as string;
+      // 记录被关闭文件在 openedFiles 中的索引（filter 前获取）
+      const closedIndex = state.openedFiles.findIndex((f) => f.id === id);
       state.openedFiles = state.openedFiles.filter((f) => f.id !== id);
       if (state.activeFileId === id) {
-        const last = state.openedFiles[state.openedFiles.length - 1];
-        state.activeFileId = last ? last.id : null;
-        state.activeFileSource = last ? last.source : null;
+        // 优先选中后一位
+        const nextFile = state.openedFiles[closedIndex];
+        if (nextFile) {
+          state.activeFileId = nextFile.id;
+          state.activeFileSource = nextFile.source;
+        } else if (state.openedFiles.length > 0) {
+          // 后一位不存在，选中前一位（最后一个）
+          const last = state.openedFiles[state.openedFiles.length - 1];
+          state.activeFileId = last.id;
+          state.activeFileSource = last.source;
+        } else {
+          state.activeFileId = null;
+          state.activeFileSource = null;
+        }
       }
     },
     activateFile: (state, action) => {
       const id = action.payload as string;
       state.activeFileId = id;
       const file = state.openedFiles.find((f) => f.id === id);
-      state.activeFileSource = file ? file.source : null;
+      if (file) {
+        state.activeFileSource = file.source;
+      }
     },
     setFileContent: (state, action) => {
       const { id, content } = action.payload as { id: string; content: string };
@@ -161,6 +178,13 @@ const workspaceSlice = createSlice({
       if (file) {
         file.content = content;
         file.isDirty = true;
+        file.isPreview = false; // 编辑后固定
+      }
+    },
+    pinPreviewFile: (state) => {
+      const preview = state.openedFiles.find((f) => f.isPreview);
+      if (preview) {
+        preview.isPreview = false;
       }
     },
     markFileSaved: (state, action) => {
@@ -196,13 +220,33 @@ const workspaceSlice = createSlice({
       .addCase(openFile.fulfilled, (state, action) => {
         if (!action.payload) return;
         const file = action.payload;
-        const exists = state.openedFiles.find((f) => f.id === file.id);
-        if (!exists) {
-          state.openedFiles.push(file);
+
+        // 已在 openedFiles 中：直接激活
+        const inOpened = state.openedFiles.find((f) => f.id === file.id);
+        if (inOpened) {
+          state.activeFileId = file.id;
+          state.activeFileSource = file.source;
+          return;
+        }
+
+        // 如果已有预览 Tab，替换它（保持位置）
+        const previewIndex = state.openedFiles.findIndex((f) => f.isPreview);
+        if (previewIndex >= 0) {
+          state.openedFiles[previewIndex] = { ...file, isPreview: true };
+          state.activeFileId = file.id;
+          state.activeFileSource = file.source;
+          return;
+        }
+
+        // 在当前 active Tab 后面插入新的预览 Tab
+        const activeIndex = state.openedFiles.findIndex((f) => f.id === state.activeFileId);
+        if (activeIndex >= 0) {
+          state.openedFiles.splice(activeIndex + 1, 0, { ...file, isPreview: true });
+        } else {
+          state.openedFiles.push({ ...file, isPreview: true });
         }
         state.activeFileId = file.id;
         state.activeFileSource = file.source;
-        // 打开文件后保留 searchHighlight（供 MonacoEditor 消费）
       })
       .addCase(fetchRecentProjects.fulfilled, (state, action) => {
         state.recentProjects = action.payload;
@@ -226,5 +270,6 @@ const workspaceSlice = createSlice({
   },
 });
 
-export const { closeFile, activateFile, setFileContent, markFileSaved, setSearchHighlight, clearSearchHighlight, setClipboard, clearClipboard, setPendingSearchQuery } = workspaceSlice.actions;
+export const { closeFile, activateFile, setFileContent, markFileSaved, pinPreviewFile, setSearchHighlight, clearSearchHighlight, setClipboard, clearClipboard, setPendingSearchQuery } = workspaceSlice.actions;
+
 export default workspaceSlice.reducer;

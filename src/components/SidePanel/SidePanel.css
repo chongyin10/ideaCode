@@ -173,6 +173,10 @@
   opacity: 0.45;
 }
 
+.tree-item.selected {
+  background-color: #2a2d2e;
+}
+
 .panel-placeholder {
   padding: 24px 12px;
   color: #858585;

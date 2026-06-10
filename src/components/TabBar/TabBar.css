@@ -80,6 +80,15 @@
   opacity: 0.6;
 }
 
+.tab-bar__item.preview {
+  font-style: italic;
+  color: #858585;
+}
+
+.tab-bar__item.preview.active {
+  color: #bbbbbb;
+}
+
 .tab-bar__dirty {
   display: inline-block;
   margin-left: 4px;
