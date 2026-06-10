@@ -9,6 +9,8 @@ export interface OpenedFile {
   source: FileSource;
   content: string;
   language: string;
+  /** 文件内容是否已被修改但未保存 */
+  isDirty: boolean;
 }
 
 export interface SearchHighlight {
@@ -98,6 +100,7 @@ export const openFile = createAsyncThunk(
       source: entry.source,
       content,
       language,
+      isDirty: false,
     };
   }
 );
@@ -128,6 +131,18 @@ export const removeRecentProjectThunk = createAsyncThunk(
   }
 );
 
+export const saveFile = createAsyncThunk(
+  'workspace/saveFile',
+  async (id: string, { getState }) => {
+    const state = (getState() as { workspace: { openedFiles: OpenedFile[] } }).workspace;
+    const file = state.openedFiles.find((f) => f.id === id);
+    if (!file) throw new Error('文件未找到');
+    const { writeFile } = await import('../../services/fileService');
+    await writeFile(file.source, file.content);
+    return id;
+  }
+);
+
 const workspaceSlice = createSlice({
   name: 'workspace',
   initialState,
@@ -146,6 +161,21 @@ const workspaceSlice = createSlice({
       state.activeFileId = id;
       const file = state.openedFiles.find((f) => f.id === id);
       state.activeFileSource = file ? file.source : null;
+    },
+    setFileContent: (state, action) => {
+      const { id, content } = action.payload as { id: string; content: string };
+      const file = state.openedFiles.find((f) => f.id === id);
+      if (file) {
+        file.content = content;
+        file.isDirty = true;
+      }
+    },
+    markFileSaved: (state, action) => {
+      const id = action.payload as string;
+      const file = state.openedFiles.find((f) => f.id === id);
+      if (file) {
+        file.isDirty = false;
+      }
     },
     setSearchHighlight: (state, action) => {
       state.searchHighlight = action.payload as SearchHighlight;
@@ -193,9 +223,15 @@ const workspaceSlice = createSlice({
         state.recentProjects = state.recentProjects.filter(
           (p) => p.path !== action.payload
         );
+      })
+      .addCase(saveFile.fulfilled, (state, action) => {
+        const file = state.openedFiles.find((f) => f.id === action.payload);
+        if (file) {
+          file.isDirty = false;
+        }
       });
   },
 });
 
-export const { closeFile, activateFile, setSearchHighlight, clearSearchHighlight, setClipboard, clearClipboard, setPendingSearchQuery } = workspaceSlice.actions;
+export const { closeFile, activateFile, setFileContent, markFileSaved, setSearchHighlight, clearSearchHighlight, setClipboard, clearClipboard, setPendingSearchQuery } = workspaceSlice.actions;
 export default workspaceSlice.reducer;

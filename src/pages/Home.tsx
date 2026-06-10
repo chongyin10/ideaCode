@@ -5,6 +5,8 @@ import {
   loadDirectory,
   closeFile,
   activateFile,
+  setFileContent,
+  saveFile,
   fetchRecentProjects,
   removeRecentProjectThunk,
 } from '../store/slices/workspaceSlice';
@@ -25,6 +27,20 @@ function Home() {
   useEffect(() => {
     dispatch(fetchRecentProjects());
   }, [dispatch]);
+
+  // 全局保存快捷键：Ctrl+S / Cmd+S
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        if (activeFileId) {
+          dispatch(saveFile(activeFileId));
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [dispatch, activeFileId]);
 
   const handleOpenFolder = async () => {
     const dir = await openDirectory();
@@ -53,6 +69,15 @@ function Home() {
   }, []);
 
   const activeFile = openedFiles.find((f) => f.id === activeFileId);
+
+  const handleEditorChange = useCallback(
+    (value: string) => {
+      if (activeFileId) {
+        dispatch(setFileContent({ id: activeFileId, content: value }));
+      }
+    },
+    [dispatch, activeFileId]
+  );
 
   // 格式化时间：今天/昨天/更早
   const formatTime = (timestamp: number): string => {
@@ -149,7 +174,7 @@ function Home() {
       ) : (
         <div className="editor-workspace">
           <TabBar
-            tabs={openedFiles.map((f) => ({ id: f.id, name: f.name }))}
+            tabs={openedFiles.map((f) => ({ id: f.id, name: f.name, isDirty: f.isDirty }))}
             activeId={activeFileId}
             onActivate={(id) => dispatch(activateFile(id))}
             onClose={(id) => dispatch(closeFile(id))}
@@ -160,6 +185,7 @@ function Home() {
                 key={activeFile.id}
                 value={activeFile.content}
                 language={activeFile.language}
+                onChange={handleEditorChange}
               />
             ) : (
               <div className="no-active-file">

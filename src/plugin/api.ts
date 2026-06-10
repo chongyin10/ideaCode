@@ -18,7 +18,7 @@ import type {
 } from './types';
 import type { RootState } from '../store';
 import { openFile } from '../store/slices/workspaceSlice';
-import { readFile, readDirectory } from '../services/fileService';
+import { readFile, writeFile as fsWriteFile, readDirectory } from '../services/fileService';
 import { getPluginManager } from './core';
 import { getMenuManager } from './menuManager';
 
@@ -44,10 +44,8 @@ export function createPluginContext(
   const fs: PluginFsApi = {
     readFile: async (source) => readFile(source),
     writeFile: async (source, content) => {
-      if (typeof source === 'string') {
-        return window.electronAPI?.fs.writeFile(source, content) ?? false;
-      }
-      return false;
+      await fsWriteFile(source, content);
+      return true;
     },
     readDirectory: async (source) => readDirectory(source),
     watch: async (path, callback) => {

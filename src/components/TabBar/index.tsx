@@ -2,7 +2,7 @@ import { X } from 'lucide-react';
 import './TabBar.css';
 
 interface TabBarProps {
-  tabs: { id: string; name: string }[];
+  tabs: { id: string; name: string; isDirty?: boolean }[];
   activeId: string | null;
   onActivate: (id: string) => void;
   onClose: (id: string) => void;
@@ -19,7 +19,10 @@ const TabBar = ({ tabs, activeId, onActivate, onClose }: TabBarProps) => {
           className={`tab-bar__item ${activeId === tab.id ? 'active' : ''}`}
           onClick={() => onActivate(tab.id)}
         >
-          <span className="tab-bar__name">{tab.name}</span>
+          <span className="tab-bar__name">
+            {tab.name}
+            {tab.isDirty && <span className="tab-bar__dirty">●</span>}
+          </span>
           <span
             className="tab-bar__close"
             onClick={(e) => {

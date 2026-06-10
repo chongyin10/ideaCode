@@ -79,3 +79,12 @@
 .tab-bar__item.active .tab-bar__close {
   opacity: 0.6;
 }
+
+.tab-bar__dirty {
+  display: inline-block;
+  margin-left: 4px;
+  color: #4a9eff;
+  font-size: 8px;
+  line-height: 1;
+  vertical-align: middle;
+}

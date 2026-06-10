@@ -351,6 +351,26 @@ export function getFileClipboard(): FileClipboardItem | null {
 }
 
 /**
+ * 写入文件内容
+ *
+ * Electron 模式下通过 IPC 直接写入磁盘（无需弹窗授权）。
+ * 浏览器模式下通过 File System Access API 的 WritableStream 写入。
+ */
+export async function writeFile(fileSource: FileSource, content: string): Promise<void> {
+  if (isElectron() && isPath(fileSource)) {
+    await window.electronAPI!.fs.writeFile(fileSource, content);
+    return;
+  }
+  if (isHandle(fileSource) && fileSource.kind === 'file') {
+    const writable = await (fileSource as FileSystemFileHandle).createWritable();
+    await writable.write(content);
+    await writable.close();
+    return;
+  }
+  throw new Error('无法写入文件：不支持的文件源');
+}
+
+/**
  * 调用扩展宿主进程的 JSON-RPC 方法
  * 扩展在独立的 Node.js 子进程中运行，通过主进程代理通信
  */
