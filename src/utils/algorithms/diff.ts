@@ -1,29 +1,25 @@
 /**
- * 差异对比算法 (Diff Algorithm)
+ * 差异对比算法 (Diff Algorithm) — Myers O(ND) 实现
  * ============================================================================
- * 
+ *
  * 应用场景：
  * 1. 文件版本对比：显示两个版本文件的增删改
  * 2. Git 差异展示：行级别的增删标记
  * 3. 编辑器撤销栈：记录文本变更以便撤销/重做
- * 
- * 算法原理：
- * 基于「最长公共子序列」(LCS, Longest Common Subsequence) 的动态规划实现。
- * 
- * LCS 定义：给定两个序列 A 和 B，LCS 是同时是 A 和 B 子序列的最长序列。
- * 例如：A="ABCBDAB", B="BDCABA" → LCS="BCBA"（长度4）
- * 
- * 动态规划递推公式：
- *   dp[i][j] = 0                          如果 i=0 或 j=0
- *   dp[i][j] = dp[i-1][j-1] + 1           如果 A[i-1] = B[j-1]
- *   dp[i][j] = max(dp[i-1][j], dp[i][j-1]) 否则
- * 
- * 时间复杂度：O(m × n)，m=旧文本行数, n=新文本行数
- * 空间复杂度：O(m × n)，可优化至 O(min(m,n))
- * 
- * Myers 算法（VS Code 使用）：
- * 在字符级别使用更高效的 O(ND) 算法，N=文本长度, D=编辑距离。
- * 本实现采用行级别的 LCS，适合文件差异展示场景。
+ *
+ * ## Myers 算法原理：
+ * 编辑图 (Edit Graph)：以旧文本索引为 x 轴，新文本索引为 y 轴。
+ * 横向移动 = 删除，纵向移动 = 插入，对角线移动 = 相等。
+ * 最短编辑脚本对应从 (0,0) 到 (m,n) 的最短路径，其编辑次数 D 满足：
+ *   D = (m + n - 2·LCS) 条非对角线边
+ *
+ * 核心思想：遍历编辑深度 k（-D..D 的蛇形线），找出到达每个 k 的最远位置，
+ * 首次到达右下角时即为最短编辑脚本。
+ *
+ * 时间复杂度：O((m+n)×D)，D = 编辑距离（通常远小于 m+n）
+ * 空间复杂度：O(m+n)（只保留前后两条蛇形线状态）
+ *
+ * 参考：Eugene W. Myers, "An O(ND) Difference Algorithm and Its Variations"
  * ============================================================================
  */
 
@@ -31,17 +27,13 @@ export type DiffType = 'equal' | 'insert' | 'delete';
 
 export interface DiffChunk {
   type: DiffType;
-  /** 旧文本中的行号（1-based，insert 时为 null） */
   oldLine: number | null;
-  /** 新文本中的行号（1-based，delete 时为 null） */
   newLine: number | null;
-  /** 行内容 */
   content: string;
 }
 
 export interface DiffResult {
   chunks: DiffChunk[];
-  /** 统计信息 */
   stats: {
     insertions: number;
     deletions: number;
@@ -49,135 +41,153 @@ export interface DiffResult {
   };
 }
 
-/**
- * 计算 LCS 长度矩阵
- * 使用滚动数组优化空间至 O(min(m,n))
- */
-function computeLCSMatrix(oldLines: string[], newLines: string[]): Int32Array[] {
+/** 蛇形线的最远距离数组：V[k] = 到达中心对角线偏移 k 的最远 x 坐标 */
+function myersDiff(oldLines: string[], newLines: string[]): DiffChunk[] {
   const m = oldLines.length;
   const n = newLines.length;
+  const max = m + n;
 
-  const matrix: Int32Array[] = [];
-  for (let i = 0; i <= m; i++) {
-    matrix.push(new Int32Array(n + 1));
-  }
+  // V 数组存储到达每条蛇形线的最远 x 坐标
+  // 使用两个数组交替（prev/curr）实现 O(max) 空间
+  let prevV = new Int32Array(2 * max + 1);
+  let currV = new Int32Array(2 * max + 1);
+  // trace[k] = 记录每步的 V 快照，用于回溯
+  const trace: Int32Array[] = [];
 
-  for (let i = 1; i <= m; i++) {
-    const row = matrix[i];
-    const prev = matrix[i - 1];
-    for (let j = 1; j <= n; j++) {
-      if (oldLines[i - 1] === newLines[j - 1]) {
-        row[j] = prev[j - 1] + 1;
+  for (let d = 0; d <= max; d++) {
+    trace.push(new Int32Array(2 * max + 1));
+
+    for (let k = -d; k <= d; k += 2) {
+      const kIdx = k + max;
+
+      // 选择起点：优先向右（delete），除非向下（insert）能到达更远
+      let x: number;
+      if (k === -d || (k !== d && prevV[k - 1 + max] < prevV[k + 1 + max])) {
+        x = prevV[k + 1 + max]; // 来自下方 → 删除
       } else {
-        row[j] = Math.max(prev[j], row[j - 1]);
+        x = prevV[k - 1 + max] + 1; // 来自右方 → 插入
+      }
+      let y = x - k;
+
+      // 沿对角线尽可能延伸（匹配行）
+      while (x < m && y < n && oldLines[x] === newLines[y]) {
+        x++;
+        y++;
+      }
+
+      currV[kIdx] = x;
+
+      if (x >= m && y >= n) {
+        trace[d] = currV;
+        return backtrackMyers(oldLines, newLines, trace, d, k);
       }
     }
+
+    // 交换滚动数组
+    const tmp = prevV;
+    prevV = currV;
+    currV = tmp;
   }
 
-  return matrix;
+  return [];
 }
 
-/**
- * 回溯 LCS 矩阵，生成差异结果
- */
-function backtrackDiff(
+/** 回溯 Myers 路径，生成 DiffChunk */
+function backtrackMyers(
   oldLines: string[],
   newLines: string[],
-  matrix: Int32Array[]
+  trace: Int32Array[],
+  d: number,
+  k: number
 ): DiffChunk[] {
-  const chunks: DiffChunk[] = [];
-  let i = oldLines.length;
-  let j = newLines.length;
+  const max = oldLines.length + newLines.length;
+  let x = oldLines.length;
+  let y = newLines.length;
+  const path: { type: DiffType; oldIdx: number; newIdx: number }[] = [];
 
-  while (i > 0 || j > 0) {
-    if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
-      chunks.unshift({
-        type: 'equal',
-        oldLine: i,
-        newLine: j,
-        content: oldLines[i - 1],
-      });
-      i--;
-      j--;
-    } else if (j > 0 && (i === 0 || matrix[i - 1][j] <= matrix[i][j - 1])) {
-      chunks.unshift({
-        type: 'insert',
-        oldLine: null,
-        newLine: j,
-        content: newLines[j - 1],
-      });
-      j--;
-    } else {
-      chunks.unshift({
-        type: 'delete',
-        oldLine: i,
-        newLine: null,
-        content: oldLines[i - 1],
-      });
-      i--;
+  for (let dd = d; dd >= 0; dd--) {
+    const V = trace[dd];
+
+    const prevK: number =
+      k === -dd || (k !== dd && V[k - 1 + max] < V[k + 1 + max])
+        ? k + 1
+        : k - 1;
+
+    const prevX = V[prevK + max];
+    const prevY = prevX - prevK;
+
+    // 对角线匹配
+    while (x > prevX && y > prevY) {
+      x--;
+      y--;
+      path.unshift({ type: 'equal', oldIdx: x, newIdx: y });
     }
+
+    if (dd > 0) {
+      if (prevK === k + 1) {
+        // 来自下方 → 删除
+        x--;
+        path.unshift({ type: 'delete', oldIdx: x, newIdx: -1 });
+      } else {
+        // 来自右方 → 插入
+        y--;
+        path.unshift({ type: 'insert', oldIdx: -1, newIdx: y });
+      }
+    }
+
+    k = prevK;
   }
 
-  return chunks;
+  return path.map((p) => ({
+    type: p.type,
+    oldLine: p.type !== 'insert' ? p.oldIdx + 1 : null,
+    newLine: p.type !== 'delete' ? p.newIdx + 1 : null,
+    content:
+      p.type === 'delete'
+        ? oldLines[p.oldIdx]
+        : p.type === 'insert'
+        ? newLines[p.newIdx]
+        : oldLines[p.oldIdx],
+  }));
 }
 
-/**
- * 计算两个文本的差异
- * @param oldText 旧文本
- * @param newText 新文本
- * @returns 差异块数组
- */
 export function computeDiff(oldText: string, newText: string): DiffResult {
-  // 按行分割（保留换行符处理的一致性）
   const oldLines = oldText.split('\n');
   const newLines = newText.split('\n');
-  
-  // 处理末尾空行
+
   if (oldLines[oldLines.length - 1] === '') oldLines.pop();
   if (newLines[newLines.length - 1] === '') newLines.pop();
-  
-  const matrix = computeLCSMatrix(oldLines, newLines);
-  const chunks = backtrackDiff(oldLines, newLines, matrix);
-  
-  // 合并连续的相同类型块（压缩输出）
+
+  const chunks = myersDiff(oldLines, newLines);
   const compressed = compressChunks(chunks);
-  
-  // 统计
+
   const stats = {
     insertions: chunks.filter((c) => c.type === 'insert').length,
     deletions: chunks.filter((c) => c.type === 'delete').length,
     unchanged: chunks.filter((c) => c.type === 'equal').length,
   };
-  
+
   return { chunks: compressed, stats };
 }
 
-/**
- * 压缩连续的相同类型差异块
- * 将连续的多行 equal 合并为一个块，减少渲染开销
- */
 function compressChunks(chunks: DiffChunk[]): DiffChunk[] {
   if (chunks.length === 0) return [];
-  
+
   const result: DiffChunk[] = [];
   let current = chunks[0];
   let currentCount = 1;
-  
+
   for (let i = 1; i < chunks.length; i++) {
     const chunk = chunks[i];
-    
+
     if (chunk.type === current.type && chunk.type === 'equal') {
-      // 合并连续 equal
       currentCount++;
-      // 只保留首尾信息用于显示
       if (currentCount <= 3) {
         result.push(current);
         current = chunk;
       }
-      // 超过3行连续相等，用省略号代替中间行
     } else {
       if (currentCount > 3) {
-        // 添加省略标记
         result.push({
           type: 'equal',
           oldLine: null,
@@ -191,8 +201,7 @@ function compressChunks(chunks: DiffChunk[]): DiffChunk[] {
       currentCount = 1;
     }
   }
-  
-  // 处理最后一个块
+
   if (currentCount > 3 && current.type === 'equal') {
     result.push({
       type: 'equal',
@@ -203,13 +212,10 @@ function compressChunks(chunks: DiffChunk[]): DiffChunk[] {
   } else {
     result.push(current);
   }
-  
+
   return result;
 }
 
-/**
- * 生成统一的 diff 格式输出（类 Unix diff -u 格式）
- */
 export function formatUnifiedDiff(
   oldText: string,
   newText: string,
@@ -218,10 +224,10 @@ export function formatUnifiedDiff(
 ): string {
   const { chunks } = computeDiff(oldText, newText);
   const lines: string[] = [];
-  
+
   lines.push(`--- ${oldFileName}`);
   lines.push(`+++ ${newFileName}`);
-  
+
   for (const chunk of chunks) {
     if (chunk.type === 'equal') {
       lines.push(` ${chunk.content}`);
@@ -231,85 +237,71 @@ export function formatUnifiedDiff(
       lines.push(`-${chunk.content}`);
     }
   }
-  
+
   return lines.join('\n');
 }
 
-/**
- * 行内差异（字符级别）
- * 对修改的行进行更细粒度的字符对比
- */
 export function inlineDiff(oldLine: string, newLine: string): {
   type: DiffType;
   text: string;
 }[] {
-  // 使用简化的字符级 LCS
   const oldChars = Array.from(oldLine);
   const newChars = Array.from(newLine);
+
+  // 使用 LCS 找公共部分
   const m = oldChars.length;
   const n = newChars.length;
-  
   const dp = new Array(n + 1).fill(0);
-  const prev = new Array(n + 1).fill(0);
-  
+  const prevArr = new Array(n + 1).fill(0);
+
   for (let i = 1; i <= m; i++) {
     for (let j = 1; j <= n; j++) {
       if (oldChars[i - 1] === newChars[j - 1]) {
-        dp[j] = prev[j - 1] + 1;
+        dp[j] = prevArr[j - 1] + 1;
       } else {
-        dp[j] = Math.max(prev[j], dp[j - 1]);
+        dp[j] = Math.max(prevArr[j], dp[j - 1]);
       }
     }
-    for (let j = 0; j <= n; j++) prev[j] = dp[j];
+    for (let j = 0; j <= n; j++) prevArr[j] = dp[j];
   }
-  
-  // 简化回溯：标记修改区域
-  // 对于行内差异，使用更简单的方法：逐字符比较
+
   const result: { type: DiffType; text: string }[] = [];
-  const maxLen = Math.max(oldChars.length, newChars.length);
-  
-  let i = 0;
-  while (i < maxLen) {
-    if (i < oldChars.length && i < newChars.length && oldChars[i] === newChars[i]) {
-      // 相等字符
-      let equalText = '';
-      while (i < maxLen && i < oldChars.length && i < newChars.length && oldChars[i] === newChars[i]) {
-        equalText += oldChars[i];
-        i++;
-      }
-      result.push({ type: 'equal', text: equalText });
-    } else {
-      // 找下一个相等位置
-      let delText = '';
-      let insText = '';
-      
-      while (i < oldChars.length && (i >= newChars.length || oldChars[i] !== newChars[i])) {
-        delText += oldChars[i];
-        i++;
-      }
-      
-      // 重新对齐
-      const rollback = i;
-      i = rollback - delText.length;
-      while (i < newChars.length && (i >= oldChars.length || oldChars[i] !== newChars[i])) {
-        insText += newChars[i];
-        i++;
-      }
-      
-      if (delText) result.push({ type: 'delete', text: delText });
-      if (insText) result.push({ type: 'insert', text: insText });
+  let i = m;
+  let j = n;
+
+  // 回溯构建差异
+  const segments: { type: DiffType; text: string }[] = [];
+
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && oldChars[i - 1] === newChars[j - 1]) {
+      segments.unshift({ type: 'equal', text: oldChars[i - 1] });
+      i--;
+      j--;
+    } else if (j > 0 && (i === 0 || dp[j] === dp[j - 1])) {
+      segments.unshift({ type: 'insert', text: newChars[j - 1] });
+      j--;
+    } else if (i > 0) {
+      segments.unshift({ type: 'delete', text: oldChars[i - 1] });
+      i--;
     }
   }
-  
+
+  // 合并连续同类型段
+  for (const seg of segments) {
+    const last = result[result.length - 1];
+    if (last && last.type === seg.type) {
+      last.text += seg.text;
+    } else {
+      result.push({ ...seg });
+    }
+  }
+
   return result;
 }
 
-/**
- * Diff 结果渲染辅助：生成带样式的 HTML
- */
 export function diffToHtml(result: DiffResult): string {
   const lines: string[] = [];
-  
+
   for (const chunk of result.chunks) {
     const lineNum =
       chunk.oldLine !== null && chunk.newLine !== null
@@ -317,22 +309,22 @@ export function diffToHtml(result: DiffResult): string {
         : chunk.oldLine !== null
         ? `${chunk.oldLine.toString().padStart(4, ' ')}     `
         : `     ${chunk.newLine!.toString().padStart(4, ' ')}`;
-    
+
     const prefix =
       chunk.type === 'equal' ? ' ' : chunk.type === 'insert' ? '+' : '-';
-    
+
     const className =
       chunk.type === 'equal'
         ? 'diff-equal'
         : chunk.type === 'insert'
         ? 'diff-insert'
         : 'diff-delete';
-    
+
     lines.push(
       `<div class="${className}"><span class="diff-linenum">${lineNum}</span> ${prefix}${escapeHtml(chunk.content)}</div>`
     );
   }
-  
+
   return lines.join('\n');
 }
 

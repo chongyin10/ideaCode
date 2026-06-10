@@ -53,6 +53,10 @@ interface FileTreeProps {
   relativePath?: string;
   /** 需要自动展开的目录路径链 */
   expandPaths?: string[];
+  /** 用户手动展开的目录路径集合（持久化展开状态） */
+  expandedDirs?: string[];
+  /** 展开/折叠目录的回调 */
+  onToggleExpand?: (path: string, expand: boolean) => void;
 }
 
 /**
@@ -85,9 +89,16 @@ const FileTree = memo(({
   gitStatus,
   relativePath,
   expandPaths,
+  expandedDirs,
+  onToggleExpand,
 }: FileTreeProps) => {
-  const [expanded, setExpanded] = useState(false);
   const [children, setChildren] = useState<FileEntry[]>([]);
+
+  // 计算当前 entry 的相对路径（用于 Git 状态查询 + 自动展开匹配）
+  const entryRelPath = relativePath ? `${relativePath}/${entry.name}` : entry.name;
+
+  // 展开状态由外部 expandedDirs 控制
+  const expanded = expandedDirs?.includes(entryRelPath) ?? false;
 
   // 由当前节点自行判断是否匹配 pending 状态
   const myPendingCreateType =
@@ -98,17 +109,15 @@ const FileTree = memo(({
   const myIsRenaming =
     pendingRename && isSameSource(entry.source, pendingRename.entry.source);
 
-  // 当有 pendingCreateType 且是目录时，自动展开并加载子节点
+  // 当有 pendingCreateType 且是目录时，自动展开
+  const onToggleExpandRef = useRef(onToggleExpand);
+  onToggleExpandRef.current = onToggleExpand;
   useEffect(() => {
     if (myPendingCreateType && entry.kind === 'directory' && !expanded) {
-      setExpanded(true);
-      if (children.length === 0) {
-        import('../../services/fileService').then(({ readDirectory }) => {
-          readDirectory(entry.source).then(setChildren).catch(() => {});
-        });
-      }
+      onToggleExpandRef.current?.(entryRelPath, true);
     }
-  }, [myPendingCreateType, entry.kind, entry.source, expanded, children.length]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [myPendingCreateType, entry.kind, entry.source, expanded]);
 
   // 新建/重命名/删除/粘贴等操作完成后，如果本目录是目标目录，自动刷新
   const lastOpRef = useRef(lastOperation);
@@ -149,28 +158,38 @@ const FileTree = memo(({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [myPendingCreateType, myIsRenaming]);
 
-  // 计算当前 entry 的相对路径（用于 Git 状态查询 + 自动展开匹配）
-  const entryRelPath = relativePath ? `${relativePath}/${entry.name}` : entry.name;
-
-  // 当 expandPaths 包含当前目录路径时，自动展开（仅触发一次，不影响手动折叠）
-  const autoExpandedRef = useRef(false);
+  // 当 expanded 变为 true 且 children 为空时，异步加载子节点
   useEffect(() => {
-    if (entry.kind !== 'directory' || !expandPaths || expandPaths.length === 0) return;
-    const shouldExpand = expandPaths.includes(entryRelPath);
-    if (!shouldExpand) {
-      autoExpandedRef.current = false;
-      return;
-    }
-    if (autoExpandedRef.current) return;
-    autoExpandedRef.current = true;
-    setExpanded(true);
-    if (children.length === 0) {
+    if (entry.kind === 'directory' && expanded && children.length === 0) {
       import('../../services/fileService').then(({ readDirectory }) => {
         readDirectory(entry.source).then(setChildren).catch(() => {});
       });
     }
+  }, [expanded, children.length, entry.kind, entry.source]);
+
+  // 当 expandPaths 包含当前目录路径，或当前目录包含激活文件时，自动展开
+  const autoExpandedRef = useRef(false);
+  const activeFileExpandedRef = useRef(false);
+  useEffect(() => {
+    if (entry.kind !== 'directory') return;
+
+    // QuickOpen 触发的展开
+    if (expandPaths?.length && expandPaths.includes(entryRelPath) && !expanded && !autoExpandedRef.current) {
+      autoExpandedRef.current = true;
+      onToggleExpandRef.current?.(entryRelPath, true);
+    }
+
+    // 当前目录包含激活文件（Electron 环境下 source 为路径字符串）
+    const containsActiveFile =
+      typeof activeSource === 'string' &&
+      typeof entry.source === 'string' &&
+      activeSource.startsWith(entry.source + '/');
+    if (containsActiveFile && !expanded && !activeFileExpandedRef.current) {
+      activeFileExpandedRef.current = true;
+      onToggleExpandRef.current?.(entryRelPath, true);
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [expandPaths, entryRelPath, entry.kind, entry.source]);
+  }, [expandPaths, activeSource, entryRelPath, entry.kind, entry.source, expanded]);
 
   const isActive = activeSource ? isSameSource(entry.source, activeSource) : false;
   const isSelected = selectedEntries?.some((e) => isSameSource(e.source, entry.source)) ?? false;
@@ -194,18 +213,12 @@ const FileTree = memo(({
       onItemSelect?.(entry, parentSource, false);
 
       if (entry.kind === 'directory') {
-        const nextExpanded = !expanded;
-        setExpanded(nextExpanded);
-        if (nextExpanded && children.length === 0) {
-          const { readDirectory } = await import('../../services/fileService');
-          const vals = await readDirectory(entry.source);
-          setChildren(vals);
-        }
+        onToggleExpand?.(entryRelPath, !expanded);
       } else {
         onOpenFile(entry);
       }
     },
-    [entry, parentSource, expanded, children.length, onOpenFile, onItemSelect]
+    [entry, entryRelPath, parentSource, expanded, onOpenFile, onItemSelect, onToggleExpand]
   );
 
   const refreshChildren = useCallback(async () => {
@@ -300,6 +313,8 @@ const FileTree = memo(({
             gitStatus={gitStatus}
             relativePath={entryRelPath}
             expandPaths={expandPaths}
+            expandedDirs={expandedDirs}
+            onToggleExpand={onToggleExpand}
           />
         ))}
     </div>

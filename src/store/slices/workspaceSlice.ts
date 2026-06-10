@@ -48,6 +48,8 @@ interface WorkspaceState {
   allFilePaths: string[];
   /** 需要自动展开的目录路径链（从 QuickOpen 打开文件时触发） */
   expandPaths: string[];
+  /** 用户手动展开的目录路径集合（持久化展开状态） */
+  expandedDirs: string[];
 }
 
 const initialState: WorkspaceState = {
@@ -64,6 +66,7 @@ const initialState: WorkspaceState = {
   gitStatus: {},
   allFilePaths: [],
   expandPaths: [],
+  expandedDirs: [],
 };
 
 export const loadDirectory = createAsyncThunk(
@@ -301,6 +304,16 @@ const workspaceSlice = createSlice({
     clearExpandPaths: (state) => {
       state.expandPaths = [];
     },
+    toggleExpandDir: (state, action) => {
+      const { path, expand } = action.payload as { path: string; expand: boolean };
+      if (expand) {
+        if (!state.expandedDirs.includes(path)) {
+          state.expandedDirs.push(path);
+        }
+      } else {
+        state.expandedDirs = state.expandedDirs.filter((p) => p !== path);
+      }
+    },
   },
   extraReducers: (builder) => {
     builder
@@ -368,6 +381,6 @@ const workspaceSlice = createSlice({
   },
 });
 
-export const { closeFile, activateFile, setFileContent, markFileSaved, pinPreviewFile, setSearchHighlight, clearSearchHighlight, setClipboard, clearClipboard, setPendingSearchQuery, expandToFile, clearExpandPaths } = workspaceSlice.actions;
+export const { closeFile, activateFile, setFileContent, markFileSaved, pinPreviewFile, setSearchHighlight, clearSearchHighlight, setClipboard, clearClipboard, setPendingSearchQuery, expandToFile, clearExpandPaths, toggleExpandDir } = workspaceSlice.actions;
 
 export default workspaceSlice.reducer;

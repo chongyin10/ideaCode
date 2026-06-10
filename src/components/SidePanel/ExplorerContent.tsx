@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import {
   FolderOpen,
   FilePlus,
@@ -21,6 +21,8 @@ import {
   setPendingSearchQuery,
   refreshGitStatus,
   refreshAllFilePaths,
+  clearExpandPaths,
+  toggleExpandDir,
 } from '../../store/slices/workspaceSlice';
 import { switchPanel } from '../../store/slices/layoutSlice';
 import { openDirectory } from '../../services/fileService';
@@ -50,6 +52,59 @@ import FileTree, { type PendingCreate, type PendingRename, type LastOperation } 
 import ContextMenu, { type MenuItem } from '../ContextMenu';
 import InlineInput from '../InlineInput';
 import { getMenuManager, contributionToMenuItem } from '../../plugin/menuManager';
+
+/* ─── Hebbian 菜单频率学习 ─── */
+
+const MENU_FREQ_KEY = 'ideacode_menu_frequency';
+const FREQ_DECAY = 0.95;
+const FREQ_BOOST = 0.05;
+
+interface MenuFreqMap {
+  [menuItemId: string]: number;
+}
+
+function loadMenuFrequencies(): MenuFreqMap {
+  try {
+    const raw = localStorage.getItem(MENU_FREQ_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveMenuFrequencies(freqs: MenuFreqMap): void {
+  try {
+    const keys = Object.keys(freqs);
+    if (keys.length > 50) {
+      // 仅保留前 50 个最高频项
+      const sorted = keys.sort((a, b) => freqs[b] - freqs[a]).slice(0, 50);
+      const trimmed: MenuFreqMap = {};
+      for (const k of sorted) trimmed[k] = freqs[k];
+      localStorage.setItem(MENU_FREQ_KEY, JSON.stringify(trimmed));
+    } else {
+      localStorage.setItem(MENU_FREQ_KEY, JSON.stringify(freqs));
+    }
+  } catch { /* 忽略存储失败 */ }
+}
+
+let _menuFreqs: MenuFreqMap | null = null;
+
+function getMenuFrequencies(): MenuFreqMap {
+  if (!_menuFreqs) _menuFreqs = loadMenuFrequencies();
+  return _menuFreqs;
+}
+
+/**
+ * 记录菜单项点击，使用 Hebbian EMA 更新：
+ *   freq_new = freq_old * 0.95 + 0.05 (如果点击)
+ * 频繁使用的项频率逐渐升高，不使用的逐渐衰减。
+ */
+function recordMenuClick(id: string): void {
+  const freqs = getMenuFrequencies();
+  const old = freqs[id] || 0;
+  freqs[id] = old * FREQ_DECAY + FREQ_BOOST;
+  saveMenuFrequencies(freqs);
+}
 
 interface ContextMenuState {
   visible: boolean;
@@ -84,6 +139,20 @@ const ExplorerContent = () => {
   const activeFileSource = useAppSelector((state) => state.workspace.activeFileSource);
   const gitStatus = useAppSelector((state) => state.workspace.gitStatus);
   const expandPaths = useAppSelector((state) => state.workspace.expandPaths);
+  const expandedDirs = useAppSelector((state) => state.workspace.expandedDirs);
+
+  // expandPaths 只在 QuickOpen 触发时设置一次，延迟清空避免影响后续手动折叠/展开
+  const processedExpandPathsRef = useRef('');
+  useEffect(() => {
+    const key = expandPaths.join(',');
+    if (expandPaths.length > 0 && key !== processedExpandPathsRef.current) {
+      processedExpandPathsRef.current = key;
+      const timer = setTimeout(() => {
+        dispatch(clearExpandPaths());
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [expandPaths, dispatch]);
 
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     visible: false,
@@ -265,7 +334,14 @@ const ExplorerContent = () => {
     }
   }, [rootSource, dispatch, notifyChange]);
 
-  // ─── 菜单构建 ───
+  // ─── 菜单构建（含 Hebbian 频率加权排序）───
+
+  const wrapWithClickTracking = useCallback((id: string, handler: () => void): (() => void) => {
+    return () => {
+      recordMenuClick(id);
+      handler();
+    };
+  }, []);
 
   const buildMenuItems = useCallback((): MenuItem[] => {
     if (!rootSource) return [];
@@ -304,7 +380,7 @@ const ExplorerContent = () => {
         group: '1_new',
         order: 1,
         disabled: isMultiSelect,
-        onClick: () => startCreate(createTargetSource, 'file'),
+        onClick: wrapWithClickTracking('new-file', () => startCreate(createTargetSource, 'file')),
       },
       {
         id: 'new-folder',
@@ -313,7 +389,7 @@ const ExplorerContent = () => {
         group: '1_new',
         order: 2,
         disabled: isMultiSelect,
-        onClick: () => startCreate(createTargetSource, 'folder'),
+        onClick: wrapWithClickTracking('new-folder', () => startCreate(createTargetSource, 'folder')),
       },
     ];
 
@@ -326,7 +402,7 @@ const ExplorerContent = () => {
           group: '1_new',
           order: 3,
           disabled: !isElectron() || isMultiSelect,
-          onClick: async () => {
+          onClick: wrapWithClickTracking('reveal', async () => {
             try {
               if (isPath(targetEntry.source)) {
                 await revealInExplorer(targetEntry.source);
@@ -334,7 +410,7 @@ const ExplorerContent = () => {
             } catch (err) {
               alert(`打开失败: ${err instanceof Error ? err.message : String(err)}`);
             }
-          },
+          }),
         },
         {
           id: 'find-in-files',
@@ -343,7 +419,7 @@ const ExplorerContent = () => {
           group: '2_search',
           order: 4,
           disabled: isMultiSelect,
-          onClick: () => handleFindInFiles(targetEntry.name),
+          onClick: wrapWithClickTracking('find-in-files', () => handleFindInFiles(targetEntry.name)),
         },
         {
           id: 'cut',
@@ -352,17 +428,17 @@ const ExplorerContent = () => {
           group: '3_edit',
           order: 5,
           disabled: activeTargets.length === 0,
-          onClick: () => {
-            const items = activeTargets.map((s) => ({
+          onClick: wrapWithClickTracking('cut', () => {
+            const cutItems = activeTargets.map((s) => ({
               source: s.entry.source,
               name: s.entry.name,
               kind: s.entry.kind,
               parentSource: s.parentSource,
               action: 'cut' as const,
             }));
-            setFileClipboard('cut', items);
-            setClipboardState({ action: 'cut', items });
-          },
+            setFileClipboard('cut', cutItems);
+            setClipboardState({ action: 'cut', items: cutItems });
+          }),
         },
         {
           id: 'copy',
@@ -371,17 +447,17 @@ const ExplorerContent = () => {
           group: '3_edit',
           order: 6,
           disabled: activeTargets.length === 0,
-          onClick: () => {
-            const items = activeTargets.map((s) => ({
+          onClick: wrapWithClickTracking('copy', () => {
+            const copyItems = activeTargets.map((s) => ({
               source: s.entry.source,
               name: s.entry.name,
               kind: s.entry.kind,
               parentSource: s.parentSource,
               action: 'copy' as const,
             }));
-            setFileClipboard('copy', items);
-            setClipboardState({ action: 'copy', items });
-          },
+            setFileClipboard('copy', copyItems);
+            setClipboardState({ action: 'copy', items: copyItems });
+          }),
         },
         {
           id: 'paste',
@@ -390,7 +466,7 @@ const ExplorerContent = () => {
           group: '3_edit',
           order: 7,
           disabled: !canPasteHere,
-          onClick: () => handlePaste(pasteTargetSource),
+          onClick: wrapWithClickTracking('paste', () => handlePaste(pasteTargetSource)),
         },
         {
           id: 'copy-path',
@@ -399,11 +475,11 @@ const ExplorerContent = () => {
           group: '4_path',
           order: 8,
           disabled: !isPath(targetEntry.source) || isMultiSelect,
-          onClick: () => {
+          onClick: wrapWithClickTracking('copy-path', () => {
             if (isPath(targetEntry.source)) {
               navigator.clipboard.writeText(targetEntry.source).catch(() => {});
             }
-          },
+          }),
         },
         {
           id: 'copy-relative-path',
@@ -412,12 +488,12 @@ const ExplorerContent = () => {
           group: '4_path',
           order: 9,
           disabled: !isPath(targetEntry.source) || !isPath(rootSource) || isMultiSelect,
-          onClick: () => {
+          onClick: wrapWithClickTracking('copy-relative-path', () => {
             if (isPath(targetEntry.source) && isPath(rootSource)) {
               const rel = targetEntry.source.replace(rootSource + '/', '');
               navigator.clipboard.writeText(rel).catch(() => {});
             }
-          },
+          }),
         },
         {
           id: 'rename',
@@ -426,7 +502,7 @@ const ExplorerContent = () => {
           group: '5_file',
           order: 10,
           disabled: isMultiSelect,
-          onClick: () => startRename(targetEntry, safeParentSource),
+          onClick: wrapWithClickTracking('rename', () => startRename(targetEntry, safeParentSource)),
         },
         {
           id: 'delete',
@@ -435,7 +511,7 @@ const ExplorerContent = () => {
           group: '5_file',
           order: 11,
           disabled: activeTargets.length === 0,
-          onClick: async () => {
+          onClick: wrapWithClickTracking('delete', async () => {
             const names = activeTargets.map((t) => t.entry.name).join('", "');
             if (!window.confirm(`确定要删除 "${names}" 吗？`)) return;
             const parentSources = new Set<FileSource>();
@@ -452,7 +528,7 @@ const ExplorerContent = () => {
             }
             dispatch(refreshGitStatus());
       dispatch(refreshAllFilePaths());
-          },
+          }),
         }
       );
     } else {
@@ -463,7 +539,7 @@ const ExplorerContent = () => {
         group: '3_edit',
         order: 7,
         disabled: !canPasteHere,
-        onClick: () => handlePaste(pasteTargetSource),
+        onClick: wrapWithClickTracking('paste', () => handlePaste(pasteTargetSource)),
       });
     }
 
@@ -477,18 +553,30 @@ const ExplorerContent = () => {
       items.push(contributionToMenuItem(p));
     }
 
+    // Hebbian 频率加权排序：同 group 内，高频项优先
+    const freqs = getMenuFrequencies();
     items.sort((a, b) => {
       const ga = a.group || '';
       const gb = b.group || '';
       if (ga !== gb) return ga.localeCompare(gb);
-      return (a.order ?? 0) - (b.order ?? 0);
+
+      // 频率加权：freq = 0.7 × static_order + 0.3 × frequency_bonus
+      const freqA = freqs[a.id] || 0;
+      const freqB = freqs[b.id] || 0;
+      const scoreA = (a.order ?? 0) - freqA * 3;
+      const scoreB = (b.order ?? 0) - freqB * 3;
+      return scoreA - scoreB;
     });
 
     return items;
-  }, [contextMenu, rootSource, startCreate, startRename, handleFindInFiles, handlePaste, notifyChange, selectedEntries]);
+  }, [contextMenu, rootSource, startCreate, startRename, handleFindInFiles, handlePaste, notifyChange, selectedEntries, wrapWithClickTracking]);
 
   const stableOnOpenFile = useCallback((entry: FileEntry) => {
     dispatch(openFile(entry));
+  }, [dispatch]);
+
+  const stableOnToggleExpand = useCallback((path: string, expand: boolean) => {
+    dispatch(toggleExpandDir({ path, expand }));
   }, [dispatch]);
 
   const selectedRef = useRef(selectedEntries);
@@ -560,6 +648,8 @@ const ExplorerContent = () => {
           onItemSelect={handleItemSelect}
           gitStatus={gitStatus}
           expandPaths={expandPaths}
+          expandedDirs={expandedDirs}
+          onToggleExpand={stableOnToggleExpand}
         />
       ))}
       {renderRootInlineInput()}

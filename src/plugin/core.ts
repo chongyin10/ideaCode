@@ -23,7 +23,6 @@ class PluginRegistry {
   private activePlugins = new Map<string, Plugin>();
   private contexts = new Map<string, PluginContext>();
 
-  /** 注册插件 */
   register(manifest: PluginManifest): PluginState {
     const state: PluginState = {
       id: manifest.id,
@@ -34,27 +33,22 @@ class PluginRegistry {
     return state;
   }
 
-  /** 获取插件状态 */
   getState(id: string): PluginState | undefined {
     return this.plugins.get(id);
   }
 
-  /** 获取所有插件状态 */
   getAllStates(): PluginState[] {
     return Array.from(this.plugins.values());
   }
 
-  /** 获取已激活的插件 */
   getActivePlugin(id: string): Plugin | undefined {
     return this.activePlugins.get(id);
   }
 
-  /** 获取插件上下文 */
   getContext(id: string): PluginContext | undefined {
     return this.contexts.get(id);
   }
 
-  /** 标记插件为已激活 */
   setActive(id: string, plugin: Plugin, context: PluginContext) {
     const state = this.plugins.get(id);
     if (state) {
@@ -65,7 +59,6 @@ class PluginRegistry {
     this.contexts.set(id, context);
   }
 
-  /** 标记插件为已停用 */
   setInactive(id: string) {
     const state = this.plugins.get(id);
     if (state) {
@@ -75,7 +68,6 @@ class PluginRegistry {
     this.contexts.delete(id);
   }
 
-  /** 卸载插件 */
   unregister(id: string) {
     this.plugins.delete(id);
     this.activePlugins.delete(id);
@@ -89,7 +81,6 @@ class CommandManager {
   private commands = new Map<string, (...args: unknown[]) => unknown>();
   private listeners: ((commandId: string, args: unknown[]) => void)[] = [];
 
-  /** 注册命令 */
   register(commandId: string, handler: (...args: unknown[]) => unknown): () => void {
     if (this.commands.has(commandId)) {
       console.warn(`[Plugin] 命令 ${commandId} 已被注册，将被覆盖`);
@@ -98,7 +89,6 @@ class CommandManager {
     return () => this.commands.delete(commandId);
   }
 
-  /** 执行命令 */
   execute(commandId: string, ...args: unknown[]): unknown {
     const handler = this.commands.get(commandId);
     if (!handler) {
@@ -109,7 +99,6 @@ class CommandManager {
     return result;
   }
 
-  /** 监听命令执行 */
   onDidExecute(callback: (commandId: string, args: unknown[]) => void): () => void {
     this.listeners.push(callback);
     return () => {
@@ -118,17 +107,22 @@ class CommandManager {
     };
   }
 
-  /** 获取所有已注册命令 */
   getAllCommands(): { id: string }[] {
     return Array.from(this.commands.keys()).map((id) => ({ id }));
   }
 }
 
-/* ─── 插件存储管理器 ─── */
+/* ─── 插件存储管理器（指数退避写合并） ─── */
 
 class PluginStorageManager {
   private storage = new Map<string, Map<string, unknown>>();
   private storageKey = 'ideacode_plugin_storage';
+  private dirty = false;
+  private writeTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // 指数退避参数
+  private cooldownMs = 500;
+  private consecutiveWrites = 0;
 
   constructor() {
     this.loadFromDisk();
@@ -148,12 +142,32 @@ class PluginStorageManager {
     }
   }
 
-  private saveToDisk() {
+  private scheduleFlush() {
+    if (this.writeTimer) clearTimeout(this.writeTimer);
+
+    // 指数退避：cooldown = min(500 * 2^writes, 30s)
+    const delay = Math.min(
+      500 * Math.pow(2, this.consecutiveWrites),
+      30000
+    );
+
+    this.writeTimer = setTimeout(() => {
+      this.flushToDisk();
+    }, delay);
+  }
+
+  private flushToDisk() {
+    if (!this.dirty) return;
+
     const obj: Record<string, Record<string, unknown>> = {};
     for (const [pluginId, data] of this.storage) {
       obj[pluginId] = Object.fromEntries(data);
     }
     localStorage.setItem(this.storageKey, JSON.stringify(obj));
+
+    this.dirty = false;
+    this.consecutiveWrites = 0;
+    this.writeTimer = null;
   }
 
   getStorage(pluginId: string) {
@@ -169,13 +183,25 @@ class PluginStorageManager {
       },
       set: <T>(key: string, value: T) => {
         data.set(key, value);
-        this.saveToDisk();
+        this.markDirty();
       },
       delete: (key: string) => {
         data.delete(key);
-        this.saveToDisk();
+        this.markDirty();
       },
     };
+  }
+
+  private markDirty() {
+    this.dirty = true;
+    this.consecutiveWrites++;
+    this.scheduleFlush();
+  }
+
+  /** 立即刷新（用于插件停用前确保数据写入） */
+  flush() {
+    if (this.writeTimer) clearTimeout(this.writeTimer);
+    this.flushToDisk();
   }
 }
 
@@ -192,16 +218,10 @@ export class PluginManager {
     this.apiFactory = apiFactory;
   }
 
-  /**
-   * 注册插件（不激活）
-   */
   register(manifest: PluginManifest): PluginState {
     return this.registry.register(manifest);
   }
 
-  /**
-   * 激活插件
-   */
   async activate(plugin: Plugin): Promise<void> {
     const { manifest } = plugin;
     const state = this.registry.getState(manifest.id);
@@ -216,13 +236,8 @@ export class PluginManager {
     }
 
     try {
-      // 创建插件上下文
       const context = this.apiFactory(manifest.id, manifest);
-
-      // 激活插件
       await plugin.activate(context);
-
-      // 记录激活状态
       this.registry.setActive(manifest.id, plugin, context);
 
       console.log(`[Plugin] 插件已激活: ${manifest.id}`);
@@ -234,9 +249,6 @@ export class PluginManager {
     }
   }
 
-  /**
-   * 停用插件
-   */
   async deactivate(pluginId: string): Promise<void> {
     const plugin = this.registry.getActivePlugin(pluginId);
     const context = this.registry.getContext(pluginId);
@@ -247,7 +259,9 @@ export class PluginManager {
     }
 
     try {
-      // 清理所有订阅
+      // 先刷新存储，确保数据持久化
+      this.storage.flush();
+
       context.subscriptions.forEach((dispose) => {
         try {
           dispose();
@@ -256,7 +270,6 @@ export class PluginManager {
         }
       });
 
-      // 调用插件 deactivate
       if (plugin.deactivate) {
         await plugin.deactivate();
       }
@@ -269,18 +282,12 @@ export class PluginManager {
     }
   }
 
-  /**
-   * 卸载插件
-   */
   async uninstall(pluginId: string): Promise<void> {
     await this.deactivate(pluginId);
     this.registry.unregister(pluginId);
     this.notifyListeners();
   }
 
-  /**
-   * 订阅插件状态变更事件
-   */
   onChange(listener: () => void): () => void {
     this.listeners.push(listener);
     return () => {
@@ -293,16 +300,10 @@ export class PluginManager {
     for (const l of this.listeners) l();
   }
 
-  /**
-   * 获取所有插件状态
-   */
   getAllPlugins(): PluginState[] {
     return this.registry.getAllStates();
   }
 
-  /**
-   * 获取命令管理器
-   */
   getCommandManager(): PluginCommandsApi {
     return {
       registerCommand: (id, handler) => this.commands.register(id, handler),
@@ -311,9 +312,6 @@ export class PluginManager {
     };
   }
 
-  /**
-   * 获取插件存储
-   */
   getStorage(pluginId: string) {
     return this.storage.getStorage(pluginId);
   }

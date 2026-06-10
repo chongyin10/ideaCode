@@ -2,7 +2,6 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { readFile } from '../services/fileService';
 import type { FileEntry, FileSource } from '../services/fileService';
 import { InvertedIndex } from '../utils/algorithms';
-import type { SearchHit } from '../utils/algorithms';
 import {
   hasNonWordChars,
   matchGlob,
@@ -50,6 +49,27 @@ export interface UseSearchReturn {
   toggleExpanded: (index: number) => void;
 }
 
+/** 自适应防抖：基于键间间隔的指数滑动平均 */
+function computeAdaptiveDebounce(keyGapHistory: number[]): number {
+  if (keyGapHistory.length === 0) return 300;
+  const avg = keyGapHistory.reduce((s, v) => s + v, 0) / keyGapHistory.length;
+  // 快打字 → 短延迟 (min 80ms)，慢打字 → 长延迟 (max 500ms)
+  const smoothed = 0.7 * 300 + 0.3 * (avg * 1.5);
+  return Math.max(80, Math.min(500, Math.round(smoothed)));
+}
+
+/** 自适应批量大小：基于文件平均读取耗时 */
+function computeAdaptiveBatchSize(
+  prevBatchSize: number,
+  prevBatchDurationMs: number
+): number {
+  const targetMs = 50;
+  if (prevBatchDurationMs <= 0) return prevBatchSize;
+  const ratio = targetMs / Math.max(prevBatchDurationMs, 1);
+  const newSize = prevBatchSize * (0.7 + 0.3 * ratio);
+  return Math.max(2, Math.min(50, Math.round(newSize)));
+}
+
 export function useSearch(entries: FileEntry[], pendingQuery: string | null, onPendingConsumed: () => void): UseSearchReturn {
   const [query, setQuery] = useState('');
   const [replaceQuery, setReplaceQuery] = useState('');
@@ -74,6 +94,13 @@ export function useSearch(entries: FileEntry[], pendingQuery: string | null, onP
   const fileCacheRef = useRef<{ entriesSrc: string; files: { path: string; source: FileSource }[] } | null>(null);
   const indexRef = useRef<{ entriesSrc: string; index: InvertedIndex } | null>(null);
 
+  // 自适应防抖的历史键间间隔
+  const lastKeyTimeRef = useRef<number>(0);
+  const keyGapHistoryRef = useRef<number[]>([]);
+
+  // 自适应批量大小状态
+  const batchSizeRef = useRef(READ_BATCH_SIZE);
+
   useEffect(() => {
     if (pendingQuery) {
       setQuery(pendingQuery);
@@ -90,7 +117,20 @@ export function useSearch(entries: FileEntry[], pendingQuery: string | null, onP
       setIsSearching(false);
       return;
     }
-    debounceRef.current = setTimeout(() => { void handleSearchInternal(query); }, 300);
+
+    // 自适应防抖
+    const now = Date.now();
+    if (lastKeyTimeRef.current > 0) {
+      const gap = now - lastKeyTimeRef.current;
+      keyGapHistoryRef.current.push(gap);
+      if (keyGapHistoryRef.current.length > 10) {
+        keyGapHistoryRef.current.shift();
+      }
+    }
+    lastKeyTimeRef.current = now;
+    const delay = computeAdaptiveDebounce(keyGapHistoryRef.current);
+
+    debounceRef.current = setTimeout(() => { void handleSearchInternal(query); }, delay);
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, caseSensitive, wholeWord, useRegex, fuzzyMode]);
@@ -113,29 +153,41 @@ export function useSearch(entries: FileEntry[], pendingQuery: string | null, onP
     return workerRef.current;
   }, []);
 
-  const collectAllFiles = useCallback(
+  /** 迭代式 DFS 收集文件路径（消除递归栈溢出风险） */
+  const collectAllFilesIterative = useCallback(
     async (
-      items: FileEntry[],
-      prefix = '',
+      rootItems: FileEntry[],
       outFiles: { path: string; source: FileSource }[] = []
     ): Promise<void> => {
-      for (const item of items) {
-        const fullPath = prefix ? `${prefix}/${item.name}` : item.name;
-        if (item.kind === 'file') {
-          if (includePattern && !matchGlob(fullPath, includePattern)) continue;
-          if (excludePattern && matchGlob(fullPath, excludePattern)) continue;
-          outFiles.push({ path: fullPath, source: item.source });
-        } else {
-          const skipDirs = new Set([
-            'node_modules', '.git', 'dist', 'build', '.next', 'coverage',
-            'out', '.vscode', '.idea', '__pycache__', 'vendor', '.yarn',
-          ]);
-          if (skipDirs.has(item.name)) continue;
-          try {
-            const { readDirectory } = await import('../services/fileService');
-            const children = await readDirectory(item.source);
-            await collectAllFiles(children, fullPath, outFiles);
-          } catch { /* skip */ }
+      const skipDirs = new Set([
+        'node_modules', '.git', 'dist', 'build', '.next', 'coverage',
+        'out', '.vscode', '.idea', '__pycache__', 'vendor', '.yarn',
+      ]);
+
+      // 栈：{ items, prefix }
+      const stack: { items: FileEntry[]; prefix: string }[] = [
+        { items: rootItems, prefix: '' },
+      ];
+
+      while (stack.length > 0) {
+        const { items, prefix } = stack.pop()!;
+
+        for (let idx = items.length - 1; idx >= 0; idx--) {
+          const item = items[idx];
+          const fullPath = prefix ? `${prefix}/${item.name}` : item.name;
+
+          if (item.kind === 'file') {
+            if (includePattern && !matchGlob(fullPath, includePattern)) continue;
+            if (excludePattern && matchGlob(fullPath, excludePattern)) continue;
+            outFiles.push({ path: fullPath, source: item.source });
+          } else {
+            if (skipDirs.has(item.name)) continue;
+            try {
+              const { readDirectory } = await import('../services/fileService');
+              const children = await readDirectory(item.source);
+              stack.push({ items: children, prefix: fullPath });
+            } catch { /* skip */ }
+          }
         }
       }
     },
@@ -160,10 +212,21 @@ export function useSearch(entries: FileEntry[], pendingQuery: string | null, onP
   const buildIndex = useCallback(
     async (files: { path: string; source: FileSource }[]): Promise<InvertedIndex> => {
       const index = new InvertedIndex();
-      for (let i = 0; i < files.length; i += READ_BATCH_SIZE) {
-        const batch = files.slice(i, i + READ_BATCH_SIZE);
+      const currentBatchSize = batchSizeRef.current;
+
+      for (let i = 0; i < files.length; i += currentBatchSize) {
+        const batch = files.slice(i, i + currentBatchSize);
+        const batchStart = performance.now();
         const contents = await readBatch(batch);
+        const batchEnd = performance.now();
+
         index.indexFiles(contents);
+
+        // 自适应批量大小：根据本批次的性能调整
+        batchSizeRef.current = computeAdaptiveBatchSize(
+          currentBatchSize,
+          batchEnd - batchStart
+        );
       }
       return index;
     },
@@ -173,7 +236,6 @@ export function useSearch(entries: FileEntry[], pendingQuery: string | null, onP
   const doIndexedSearch = useCallback((searchQuery: string, index: InvertedIndex) => {
     let hits = fuzzyMode ? index.fuzzySearch(searchQuery) : index.search(searchQuery);
 
-    // 精确搜索无结果时自动尝试模糊搜索
     if (hits.length === 0 && !fuzzyMode && searchQuery.length >= 2) {
       hits = index.fuzzySearch(searchQuery);
       if (hits.length > 0) {
@@ -219,12 +281,17 @@ export function useSearch(entries: FileEntry[], pendingQuery: string | null, onP
     worker.addEventListener('message', onMessage);
 
     try {
-      for (let i = 0; i < allFiles.length; i += READ_BATCH_SIZE) {
+      const currentBatchSize = batchSizeRef.current;
+
+      for (let i = 0; i < allFiles.length; i += currentBatchSize) {
         if (searchIdRef.current !== currentSearchId) break;
         if (totalMatchesRef.current >= MAX_TOTAL_MATCHES) { setIsTruncated(true); break; }
 
-        const fileBatch = allFiles.slice(i, i + READ_BATCH_SIZE);
+        const fileBatch = allFiles.slice(i, i + currentBatchSize);
+        const batchStart = performance.now();
         const contents = await readBatch(fileBatch);
+        const batchEnd = performance.now();
+
         processed += fileBatch.length;
         if (contents.length === 0) continue;
         if (searchIdRef.current !== currentSearchId) break;
@@ -238,7 +305,17 @@ export function useSearch(entries: FileEntry[], pendingQuery: string | null, onP
           maxTotalMatches: MAX_TOTAL_MATCHES,
           searchId: currentSearchId,
         });
-        await new Promise((r) => setTimeout(r, 10));
+
+        // 自适应批量大小
+        batchSizeRef.current = computeAdaptiveBatchSize(
+          currentBatchSize,
+          batchEnd - batchStart
+        );
+
+        // 使用 requestAnimationFrame 替代 setTimeout(10) yield
+        await new Promise<void>((r) => {
+          requestAnimationFrame(() => r());
+        });
       }
 
       if (searchIdRef.current === currentSearchId) {
@@ -267,14 +344,13 @@ export function useSearch(entries: FileEntry[], pendingQuery: string | null, onP
     const needsWorker = useRegex || caseSensitive || wholeWord || hasNonWordChars(searchQuery);
     const entriesKey = JSON.stringify(entries.map((e) => `${e.name}:${e.kind}`));
 
-    // 阶段 1: 收集文件路径
     const cached = fileCacheRef.current;
     let allFiles: { path: string; source: FileSource }[];
     if (cached && cached.entriesSrc === entriesKey) {
       allFiles = cached.files.slice();
     } else {
       const collected: { path: string; source: FileSource }[] = [];
-      await collectAllFiles(entries, '', collected);
+      await collectAllFilesIterative(entries, collected);
       allFiles = collected;
       fileCacheRef.current = { entriesSrc: entriesKey, files: allFiles.slice() };
       indexRef.current = null;
@@ -282,7 +358,6 @@ export function useSearch(entries: FileEntry[], pendingQuery: string | null, onP
     if (searchIdRef.current !== currentSearchId) { setIsSearching(false); return; }
     setTotalFileCount(allFiles.length);
 
-    // 阶段 2: 尝试倒排索引搜索
     if (!needsWorker) {
       try {
         const indexCached = indexRef.current;
@@ -304,9 +379,8 @@ export function useSearch(entries: FileEntry[], pendingQuery: string | null, onP
       }
     }
 
-    // 阶段 3: Worker + Boyer-Moore 回退
     await doWorkerSearch(searchQuery, allFiles, currentSearchId);
-  }, [entries, useRegex, caseSensitive, wholeWord, collectAllFiles, buildIndex, doIndexedSearch, doWorkerSearch]);
+  }, [entries, useRegex, caseSensitive, wholeWord, collectAllFilesIterative, buildIndex, doIndexedSearch, doWorkerSearch]);
 
   const triggerSearch = useCallback((q: string) => {
     setQuery(q);

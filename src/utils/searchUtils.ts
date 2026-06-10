@@ -1,4 +1,5 @@
 import type { SearchHit } from './algorithms';
+import { LRUCache } from './algorithms/lruCache';
 
 export interface SearchMatch {
   line: number;
@@ -17,29 +18,26 @@ export interface FileSearchResult {
 export const MAX_TOTAL_MATCHES = 500;
 export const READ_BATCH_SIZE = 8;
 
-/** 非词字符正则：匹配字母/数字/下划线之外的字符 */
 const NON_WORD_RE = /[^\p{L}\p{N}_]/u;
 
-/** 查询是否含有非词字符（如 . - / 等），含有时应作为整体子串搜索 */
 export function hasNonWordChars(query: string): boolean {
   return NON_WORD_RE.test(query);
 }
 
-const globRegexCache = new Map<string, RegExp>();
-const MAX_GLOB_CACHE_SIZE = 100;
+/** Glob 正则缓存（使用正式 LRUCache） */
+const globRegexCache = new LRUCache<string, RegExp>(100);
 
 function getGlobRegex(pattern: string): RegExp {
-  let regex = globRegexCache.get(pattern);
-  if (!regex) {
-    regex = new RegExp(
-      '^' + pattern.replace(/\./g, '\\.').replace(/\*/g, '.*').replace(/\?/g, '.') + '$'
-    );
-    if (globRegexCache.size >= MAX_GLOB_CACHE_SIZE) {
-      const firstKey = globRegexCache.keys().next().value;
-      if (firstKey !== undefined) globRegexCache.delete(firstKey);
-    }
-    globRegexCache.set(pattern, regex);
+  const cached = globRegexCache.get(pattern);
+  if (cached) {
+    return cached.value;
   }
+
+  const regex = new RegExp(
+    '^' + pattern.replace(/\./g, '\\.').replace(/\*/g, '.*').replace(/\?/g, '.') + '$'
+  );
+
+  globRegexCache.set(pattern, regex);
   return regex;
 }
 
