@@ -1,0 +1,103 @@
+.context-menu {
+  position: fixed;
+  z-index: 10000;
+  min-width: 180px;
+  max-width: 320px;
+  background-color: #252526;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  padding: 4px 0;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  font-size: 13px;
+  color: #cccccc;
+  user-select: none;
+  animation: contextMenuIn 0.08s ease-out;
+}
+
+@keyframes contextMenuIn {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.context-menu--submenu {
+  position: fixed;
+  z-index: 10001;
+  animation: contextMenuIn 0.06s ease-out;
+}
+
+.context-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  margin: 0 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.1s ease;
+  white-space: nowrap;
+}
+
+.context-menu__item:hover:not(.disabled) {
+  background-color: #094771;
+  color: #fff;
+}
+
+.context-menu__item.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.context-menu__item.has-submenu {
+  position: relative;
+}
+
+.context-menu__icon {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: #858585;
+}
+
+.context-menu__item:hover:not(.disabled) .context-menu__icon {
+  color: #fff;
+}
+
+.context-menu__label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.context-menu__shortcut {
+  color: #858585;
+  font-size: 11px;
+  margin-left: 16px;
+  flex-shrink: 0;
+}
+
+.context-menu__item:hover:not(.disabled) .context-menu__shortcut {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.context-menu__arrow {
+  display: inline-flex;
+  align-items: center;
+  color: #858585;
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+
+.context-menu__separator {
+  height: 1px;
+  background-color: rgba(255, 255, 255, 0.08);
+  margin: 4px 8px;
+}

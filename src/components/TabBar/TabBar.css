@@ -1,0 +1,81 @@
+.tab-bar {
+  height: 36px;
+  background-color: #1e1e1e;
+  display: flex;
+  align-items: flex-end;
+  overflow-x: auto;
+  flex-shrink: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  padding-left: 4px;
+}
+
+.tab-bar__item {
+  padding: 7px 12px 6px;
+  font-size: 12px;
+  color: #969696;
+  cursor: pointer;
+  background-color: transparent;
+  border: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 160px;
+  white-space: nowrap;
+  user-select: none;
+  border-radius: 4px 4px 0 0;
+  margin-right: 2px;
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.tab-bar__item:hover {
+  background-color: rgba(255, 255, 255, 0.05);
+  color: #cccccc;
+}
+
+.tab-bar__item.active {
+  background-color: #1e1e1e;
+  color: #fff;
+}
+
+.tab-bar__item.active::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  background-color: #4a9eff;
+  border-radius: 1px;
+}
+
+.tab-bar__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tab-bar__close {
+  font-size: 14px;
+  opacity: 0;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+
+.tab-bar__item:hover .tab-bar__close {
+  opacity: 0.6;
+}
+
+.tab-bar__close:hover {
+  opacity: 1 !important;
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.tab-bar__item.active .tab-bar__close {
+  opacity: 0.6;
+}

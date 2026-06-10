@@ -1,0 +1,244 @@
+.home-page {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.welcome-screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #858585;
+  opacity: 0;
+  animation: fadeInUp 0.5s ease 0.1s forwards;
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.welcome-screen h2 {
+  color: #e0e0e0;
+  font-weight: 400;
+  margin-bottom: 12px;
+  font-size: 24px;
+}
+
+.welcome-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 28px;
+}
+
+.open-folder-btn {
+  padding: 10px 20px;
+  background: #0e639c;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.open-folder-btn:hover {
+  background: #1177bb;
+  box-shadow: 0 4px 12px rgba(14, 99, 156, 0.3);
+  transform: translateY(-1px);
+}
+
+.open-folder-btn:active {
+  transform: translateY(0);
+}
+
+.open-folder-btn.secondary {
+  background: #3c3c3c;
+  color: #cccccc;
+}
+
+.open-folder-btn.secondary:hover {
+  background: #4a4a4a;
+  color: #fff;
+}
+
+.recent-projects {
+  margin-top: 32px;
+  width: 520px;
+  max-width: 90vw;
+  animation: fadeInUp 0.4s ease 0.15s forwards;
+  opacity: 0;
+}
+
+.recent-projects__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #858585;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+  padding: 0 4px;
+}
+
+.recent-projects__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.recent-project-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+  color: #cccccc;
+  font-size: 13px;
+}
+
+.recent-project-item:hover {
+  background-color: #2a2d2e;
+}
+
+.recent-project-item__icon {
+  color: #858585;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.recent-project-item__info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.recent-project-item__name {
+  color: #d4d4d4;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.recent-project-item__path {
+  color: #666;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.recent-project-item__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.recent-project-item__time {
+  color: #666;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.recent-project-item__remove {
+  background: none;
+  border: none;
+  color: #666;
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: all 0.15s ease;
+}
+
+.recent-project-item:hover .recent-project-item__remove {
+  opacity: 1;
+}
+
+.recent-project-item__remove:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.shortcuts {
+  margin-top: 40px;
+  text-align: left;
+  display: inline-flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.shortcut {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 32px;
+  font-size: 13px;
+  opacity: 0;
+  animation: fadeInUp 0.4s ease forwards;
+}
+
+.shortcut:nth-child(1) {
+  animation-delay: 0.25s;
+}
+.shortcut:nth-child(2) {
+  animation-delay: 0.35s;
+}
+
+kbd {
+  background: #3c3c3c;
+  padding: 3px 10px;
+  border-radius: 4px;
+  border: 1px solid #555;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 11px;
+  color: #cccccc;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.2);
+}
+
+.editor-workspace {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.editor-area {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+  width: 100%;
+}
+
+.no-active-file {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #858585;
+  opacity: 0;
+  animation: fadeInUp 0.4s ease forwards;
+}

@@ -1,0 +1,24 @@
+.inline-input {
+  flex: 1;
+  min-width: 40px;
+  padding: 3px 6px;
+  margin: 0;
+  border: 1px solid #007acc;
+  border-radius: 3px;
+  background-color: #1e1e1e;
+  color: #cccccc;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  box-shadow: 0 0 0 1px rgba(0, 122, 204, 0.3);
+  transition: border-color 0.15s ease;
+}
+
+.inline-input::placeholder {
+  color: #6e6e6e;
+}
+
+.inline-input:focus {
+  border-color: #007acc;
+  box-shadow: 0 0 0 2px rgba(0, 122, 204, 0.2);
+}
