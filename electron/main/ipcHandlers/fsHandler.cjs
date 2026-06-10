@@ -38,13 +38,17 @@ function registerFsHandlers() {
 
   /* ── 文件状态 ── */
   ipcMain.handle(Channels.FS_STAT, async (_event, filePath) => {
-    const stat = await fs.stat(filePath);
-    return {
-      isFile: stat.isFile(),
-      isDirectory: stat.isDirectory(),
-      size: stat.size,
-      mtime: stat.mtime.toISOString(),
-    };
+    try {
+      const stat = await fs.stat(filePath);
+      return {
+        isFile: stat.isFile(),
+        isDirectory: stat.isDirectory(),
+        size: stat.size,
+        mtime: stat.mtime.toISOString(),
+      };
+    } catch {
+      return null;
+    }
   });
 
   /* ── 新建文件 ── */

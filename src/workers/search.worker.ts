@@ -27,7 +27,6 @@ interface SearchMatch {
   column: number;
   text: string;
   match: MatchResult;
-  isFileNameMatch?: boolean;
 }
 
 interface FileSearchResult {
@@ -82,7 +81,7 @@ function doSearch(
 
     const fileMatches: SearchMatch[] = [];
 
-    // 1. 搜索文件内容
+    // 只搜文件内容，不搜文件名
     const contentMatches = searcher(file.content);
 
     for (const match of contentMatches) {
@@ -94,41 +93,23 @@ function doSearch(
       const before = file.content.substring(0, match.index);
       const line = before.split('\n').length;
       const lastNewline = before.lastIndexOf('\n');
-      const column =
-        lastNewline >= 0 ? match.index - lastNewline : match.index + 1;
-      const contextStart = Math.max(0, match.index - 40);
-      const contextEnd = Math.min(
-        file.content.length,
-        match.index + match.length + 40
-      );
+      const lineStart = lastNewline >= 0 ? lastNewline + 1 : 0;
+      const nextNewline = file.content.indexOf('\n', match.index);
+      const lineEnd = nextNewline >= 0 ? nextNewline : file.content.length;
+      const lineContent = file.content.substring(lineStart, lineEnd);
+      const matchIndexInLine = match.index - lineStart;
 
       fileMatches.push({
         line,
-        column,
-        text: file.content.substring(contextStart, contextEnd),
-        match,
+        column: matchIndexInLine + 1,
+        text: lineContent,
+        match: {
+          index: matchIndexInLine,
+          length: match.length,
+          matched: match.matched,
+        },
       });
       totalMatches++;
-    }
-
-    // 2. 内容无匹配时，检查文件名
-    if (contentMatches.length === 0) {
-      const fileName = file.path.split('/').pop() || file.path;
-      const nameMatches = searcher(fileName);
-      if (nameMatches.length > 0) {
-        if (totalMatches < maxTotalMatches) {
-          fileMatches.push({
-            line: 0,
-            column: 0,
-            text: fileName,
-            match: nameMatches[0],
-            isFileNameMatch: true,
-          });
-          totalMatches++;
-        } else {
-          isTruncated = true;
-        }
-      }
     }
 
     if (fileMatches.length > 0) {
@@ -151,7 +132,7 @@ function doSearch(
 /* ─── Worker 消息处理 ─── */
 
 self.onmessage = (event: MessageEvent) => {
-  const { type, files, query, options, totalMatchesSoFar, maxTotalMatches } =
+  const { type, files, query, options, totalMatchesSoFar, maxTotalMatches, searchId } =
     event.data;
 
   if (type === 'search') {
@@ -168,6 +149,7 @@ self.onmessage = (event: MessageEvent) => {
       results,
       totalMatches,
       isTruncated,
+      searchId: searchId as number,
     });
   }
 };

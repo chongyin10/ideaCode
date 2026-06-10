@@ -1,19 +1,21 @@
 import { useState, useCallback, useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
 import {
-  Search,
+  ChevronDown,
   ChevronRight,
   CaseSensitive,
   WholeWord,
   Regex,
   Replace,
   ReplaceAll,
-  X,
+  Sparkles,
 } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { openFile, setSearchHighlight, setPendingSearchQuery } from '../../store/slices/workspaceSlice';
 import { readFile, isElectron } from '../../services/fileService';
 import type { FileEntry, FileSource } from '../../services/fileService';
 import type { MatchResult } from '../../utils/algorithms';
+import { InvertedIndex } from '../../utils/algorithms';
+import type { SearchHit } from '../../utils/algorithms';
 import './SearchPanel.css';
 
 interface SearchMatch {
@@ -21,7 +23,6 @@ interface SearchMatch {
   column: number;
   text: string;
   match: MatchResult;
-  isFileNameMatch?: boolean;
 }
 
 interface FileSearchResult {
@@ -32,13 +33,16 @@ interface FileSearchResult {
 }
 
 const MAX_TOTAL_MATCHES = 500;
-const READ_BATCH_SIZE = 8;          // 每批并行读取的文件数
+const READ_BATCH_SIZE = 8;
 
-/**
- * Glob 模式匹配（带 RegExp 缓存）
- *
- * 优化点：避免每次调用都重新编译正则表达式，对于批量文件搜索能显著降低 GC 压力。
- */
+/** 非词字符正则：匹配字母/数字/下划线之外的字符 */
+const NON_WORD_RE = /[^\p{L}\p{N}_]/u;
+
+/** 查询是否含有非词字符（如 . - / 等），含有时应作为整体子串搜索 */
+function hasNonWordChars(query: string): boolean {
+  return NON_WORD_RE.test(query);
+}
+
 const globRegexCache = new Map<string, RegExp>();
 const MAX_GLOB_CACHE_SIZE = 100;
 
@@ -50,9 +54,7 @@ function getGlobRegex(pattern: string): RegExp {
     );
     if (globRegexCache.size >= MAX_GLOB_CACHE_SIZE) {
       const firstKey = globRegexCache.keys().next().value;
-      if (firstKey !== undefined) {
-        globRegexCache.delete(firstKey);
-      }
+      if (firstKey !== undefined) globRegexCache.delete(firstKey);
     }
     globRegexCache.set(pattern, regex);
   }
@@ -69,17 +71,29 @@ function matchGlob(filePath: string, pattern: string): boolean {
   });
 }
 
-/**
- * 搜索面板 - Worker 线程版
- *
- * 架构：
- * 1. 主线程（UI）负责：收集文件路径 → 读取文件内容 → 发送给 Worker
- * 2. Worker 线程负责：在字符串内容中执行 Boyer-Moore 搜索
- * 3. Worker 返回增量结果，主线程实时合并更新 UI
- * 4. 搜索完成后 Worker 自动闲置，不占用资源
- *
- * 竞态安全：使用 searchIdRef 会话 ID 隔离每次搜索，只有最新搜索能更新 UI。
- */
+function hitsToResults(hits: SearchHit[], query: string): FileSearchResult[] {
+  const lowerQuery = query.toLowerCase();
+  return hits.map((hit) => ({
+    filePath: hit.filePath,
+    fileName: hit.fileName,
+    matches: hit.entries.map((e) => {
+      const lowerContext = e.context.toLowerCase();
+      const idx = lowerContext.indexOf(lowerQuery);
+      return {
+        line: e.line,
+        column: e.column,
+        text: e.context,
+        match: {
+          index: idx >= 0 ? idx : Math.max(0, e.column - 1),
+          length: idx >= 0 ? query.length : 0,
+          matched: idx >= 0 ? e.context.substring(idx, idx + query.length) : '',
+        },
+      };
+    }),
+    expanded: true,
+  }));
+}
+
 export interface SearchPanelRef {
   triggerSearch: (query: string) => void;
 }
@@ -87,7 +101,6 @@ export interface SearchPanelRef {
 const SearchPanel = forwardRef<SearchPanelRef>((_props, ref) => {
   const dispatch = useAppDispatch();
 
-  // 选择性订阅 Redux：避免整个 workspace 变化触发 SearchPanel 重渲染
   const entries = useAppSelector((state) => state.workspace.entries);
   const rootSource = useAppSelector((state) => state.workspace.rootSource);
   const pendingSearchQuery = useAppSelector((state) => state.workspace.pendingSearchQuery);
@@ -99,6 +112,7 @@ const SearchPanel = forwardRef<SearchPanelRef>((_props, ref) => {
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [wholeWord, setWholeWord] = useState(false);
   const [useRegex, setUseRegex] = useState(false);
+  const [fuzzyMode, setFuzzyMode] = useState(false);
   const [showReplace, setShowReplace] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [searchedCount, setSearchedCount] = useState(0);
@@ -106,40 +120,50 @@ const SearchPanel = forwardRef<SearchPanelRef>((_props, ref) => {
   const [results, setResults] = useState<FileSearchResult[]>([]);
   const [isTruncated, setIsTruncated] = useState(false);
 
-  // Worker 引用（懒加载，持久复用）
   const workerRef = useRef<Worker | null>(null);
-  // 搜索会话 ID：每次启动搜索时递增，用于隔离不同搜索的 Worker 消息
   const searchIdRef = useRef(0);
-  // 总匹配数引用（避免闭包 stale）
   const totalMatchesRef = useRef(0);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // 文件路径缓存：避免每次搜索都递归遍历目录树
   const fileCacheRef = useRef<{ entriesSrc: string; files: { path: string; source: FileSource }[] } | null>(null);
+  const indexRef = useRef<{ entriesSrc: string; index: InvertedIndex } | null>(null);
 
-  // 暴露给父组件的方法（通过 pendingSearchQuery 触发）
   useImperativeHandle(ref, () => ({
     triggerSearch: (q: string) => {
       setQuery(q);
-      // 使用 setTimeout 确保 setQuery 的 state 更新后再执行搜索
-      setTimeout(() => {
-        void handleSearchInternal(q);
-      }, 0);
+      setTimeout(() => { void handleSearchInternal(q); }, 0);
     },
   }));
 
-  // 监听外部触发的搜索请求
   useEffect(() => {
     if (pendingSearchQuery) {
       setQuery(pendingSearchQuery);
       dispatch(setPendingSearchQuery(null));
-      setTimeout(() => {
-        void handleSearchInternal(pendingSearchQuery);
-      }, 80);
+      setTimeout(() => { void handleSearchInternal(pendingSearchQuery); }, 80);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingSearchQuery]);
 
-  // 初始化 Worker（懒加载，首次搜索时才创建；组件不再卸载，Worker 持久复用）
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (!query.trim()) {
+      setResults([]);
+      setIsSearching(false);
+      return;
+    }
+    debounceRef.current = setTimeout(() => { void handleSearchInternal(query); }, 300);
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, caseSensitive, wholeWord, useRegex, fuzzyMode]);
+
+  useEffect(() => {
+    fileCacheRef.current = null;
+    indexRef.current = null;
+    if (!query.trim()) return;
+    void handleSearchInternal(query);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [includePattern, excludePattern]);
+
   const getWorker = useCallback((): Worker => {
     if (!workerRef.current) {
       workerRef.current = new Worker(
@@ -150,9 +174,6 @@ const SearchPanel = forwardRef<SearchPanelRef>((_props, ref) => {
     return workerRef.current;
   }, []);
 
-  /**
-   * 收集所有文件路径（递归遍历目录树）
-   */
   const collectAllFiles = useCallback(
     async (
       items: FileEntry[],
@@ -161,7 +182,6 @@ const SearchPanel = forwardRef<SearchPanelRef>((_props, ref) => {
     ): Promise<void> => {
       for (const item of items) {
         const fullPath = prefix ? `${prefix}/${item.name}` : item.name;
-
         if (item.kind === 'file') {
           if (includePattern && !matchGlob(fullPath, includePattern)) continue;
           if (excludePattern && matchGlob(fullPath, excludePattern)) continue;
@@ -172,106 +192,86 @@ const SearchPanel = forwardRef<SearchPanelRef>((_props, ref) => {
             'out', '.vscode', '.idea', '__pycache__', 'vendor', '.yarn',
           ]);
           if (skipDirs.has(item.name)) continue;
-
           try {
             const { readDirectory } = await import('../../services/fileService');
             const children = await readDirectory(item.source);
             await collectAllFiles(children, fullPath, outFiles);
-          } catch {
-            // 跳过
-          }
+          } catch { /* skip */ }
         }
       }
     },
     [includePattern, excludePattern]
   );
 
-  /**
-   * 并行读取一批文件内容
-   */
   const readBatch = useCallback(
-    async (
-      batch: { path: string; source: FileSource }[]
-    ): Promise<{ path: string; content: string }[]> => {
+    async (batch: { path: string; source: FileSource }[]) => {
       const settled = await Promise.allSettled(
         batch.map(async (file) => {
           const content = await readFile(file.source);
           return { path: file.path, content };
         })
       );
-      const out: { path: string; content: string }[] = [];
-      for (const r of settled) {
-        if (r.status === 'fulfilled') out.push(r.value);
-      }
-      return out;
+      return settled.filter((r) => r.status === 'fulfilled').map((r) => (r as PromiseFulfilledResult<{ path: string; content: string }>).value);
     },
     []
   );
 
-  /**
-   * 内部搜索实现（接收显式 query 参数，避免闭包 stale）
-   */
-  const handleSearchInternal = useCallback(async (searchQuery: string) => {
-    if (!searchQuery.trim() || !entries.length) return;
+  const buildIndex = useCallback(
+    async (files: { path: string; source: FileSource }[]): Promise<InvertedIndex> => {
+      const index = new InvertedIndex();
+      for (let i = 0; i < files.length; i += READ_BATCH_SIZE) {
+        const batch = files.slice(i, i + READ_BATCH_SIZE);
+        const contents = await readBatch(batch);
+        index.indexFiles(contents);
+      }
+      return index;
+    },
+    [readBatch]
+  );
 
-    const currentSearchId = ++searchIdRef.current;
+  /** 使用倒排索引搜索（O(1) 查表） */
+  const doIndexedSearch = useCallback((searchQuery: string, index: InvertedIndex) => {
+    let hits = fuzzyMode ? index.fuzzySearch(searchQuery) : index.search(searchQuery);
 
-    // 重置 UI 状态
-    setIsSearching(true);
-    setResults([]);
-    setSearchedCount(0);
-    setTotalFileCount(0);
-    setIsTruncated(false);
-    totalMatchesRef.current = 0;
+    // 精确搜索无结果时自动尝试模糊搜索
+    if (hits.length === 0 && !fuzzyMode && searchQuery.length >= 2) {
+      hits = index.fuzzySearch(searchQuery);
+      if (hits.length > 0) {
+        setFuzzyMode(true); // 自动开启模糊模式以给用户视觉反馈
+      }
+    }
 
+    const fileResults = hitsToResults(hits, searchQuery);
+    const totalMatches = fileResults.reduce((s, r) => s + r.matches.length, 0);
+    setIsTruncated(totalMatches >= MAX_TOTAL_MATCHES);
+
+    setResults(fileResults.slice(0, MAX_TOTAL_MATCHES));
+    setTotalFileCount(hits.length);
+    setSearchedCount(hits.length);
+    setIsSearching(false);
+  }, [fuzzyMode]);
+
+  /** 使用 Worker + Boyer-Moore 搜索（正则/大小写敏感/全词匹配回退） */
+  const doWorkerSearch = useCallback(async (
+    searchQuery: string,
+    allFiles: { path: string; source: FileSource }[],
+    currentSearchId: number,
+  ) => {
     const worker = getWorker();
-
-    // 阶段 1: 收集文件路径（带缓存）
-    const entriesKey = JSON.stringify(entries.map((e) => `${e.name}:${e.kind}`));
-    const cached = fileCacheRef.current;
-
-    let allFiles: { path: string; source: FileSource }[];
-    if (cached && cached.entriesSrc === entriesKey) {
-      allFiles = cached.files.slice();
-    } else {
-      const collected: { path: string; source: FileSource }[] = [];
-      await collectAllFiles(entries, '', collected);
-      allFiles = collected;
-      fileCacheRef.current = { entriesSrc: entriesKey, files: allFiles.slice() };
-    }
-
-    // 检查是否已被更新的搜索取代
-    if (searchIdRef.current !== currentSearchId) {
-      setIsSearching(false);
-      return;
-    }
-
-    setTotalFileCount(allFiles.length);
-
-    // 阶段 2: 分批读取 → 发送 Worker → 接收结果
     const mergedResults = new Map<string, FileSearchResult>();
     let processed = 0;
 
-    // 设置 Worker 消息监听
     const onMessage = (event: MessageEvent) => {
-      // 丢弃非当前搜索的消息（竞态保护）
       if (searchIdRef.current !== currentSearchId) return;
-
       const { type, results: batchResults, totalMatches, isTruncated: truncated } = event.data;
-
       if (type === 'progress') {
         for (const r of batchResults as FileSearchResult[]) {
           const existing = mergedResults.get(r.filePath);
-          if (existing) {
-            existing.matches.push(...r.matches);
-          } else {
-            mergedResults.set(r.filePath, { ...r });
-          }
+          if (existing) { existing.matches.push(...r.matches); }
+          else { mergedResults.set(r.filePath, { ...r }); }
         }
-
         totalMatchesRef.current = totalMatches;
         if (truncated) setIsTruncated(true);
-
         setResults(Array.from(mergedResults.values()));
         setSearchedCount(processed);
       }
@@ -281,17 +281,12 @@ const SearchPanel = forwardRef<SearchPanelRef>((_props, ref) => {
 
     try {
       for (let i = 0; i < allFiles.length; i += READ_BATCH_SIZE) {
-        // 每次迭代前检查是否被新搜索取代
         if (searchIdRef.current !== currentSearchId) break;
-        if (totalMatchesRef.current >= MAX_TOTAL_MATCHES) {
-          setIsTruncated(true);
-          break;
-        }
+        if (totalMatchesRef.current >= MAX_TOTAL_MATCHES) { setIsTruncated(true); break; }
 
         const fileBatch = allFiles.slice(i, i + READ_BATCH_SIZE);
         const contents = await readBatch(fileBatch);
         processed += fileBatch.length;
-
         if (contents.length === 0) continue;
         if (searchIdRef.current !== currentSearchId) break;
 
@@ -302,76 +297,96 @@ const SearchPanel = forwardRef<SearchPanelRef>((_props, ref) => {
           options: { caseSensitive, wholeWord, regex: useRegex },
           totalMatchesSoFar: totalMatchesRef.current,
           maxTotalMatches: MAX_TOTAL_MATCHES,
+          searchId: currentSearchId,
         });
-
-        // 小延迟让 Worker 有时间处理，同时不阻塞 UI
         await new Promise((r) => setTimeout(r, 10));
       }
 
-      // 最终快照（仅当仍是当前搜索时）
       if (searchIdRef.current === currentSearchId) {
         setResults(Array.from(mergedResults.values()));
         setSearchedCount(processed);
       }
     } finally {
       worker.removeEventListener('message', onMessage);
-      // 释放临时引用
       allFiles.length = 0;
       mergedResults.clear();
-      // 只有当前搜索才能清除 isSearching
-      if (searchIdRef.current === currentSearchId) {
-        setIsSearching(false);
+      if (searchIdRef.current === currentSearchId) setIsSearching(false);
+    }
+  }, [caseSensitive, wholeWord, useRegex, readBatch, getWorker]);
+
+  const handleSearchInternal = useCallback(async (searchQuery: string) => {
+    if (!searchQuery.trim() || !entries.length) return;
+    const currentSearchId = ++searchIdRef.current;
+
+    setIsSearching(true);
+    setResults([]);
+    setSearchedCount(0);
+    setTotalFileCount(0);
+    setIsTruncated(false);
+    totalMatchesRef.current = 0;
+
+    const needsWorker = useRegex || caseSensitive || wholeWord || hasNonWordChars(searchQuery);
+    const entriesKey = JSON.stringify(entries.map((e) => `${e.name}:${e.kind}`));
+
+    // 阶段 1: 收集文件路径
+    const cached = fileCacheRef.current;
+    let allFiles: { path: string; source: FileSource }[];
+    if (cached && cached.entriesSrc === entriesKey) {
+      allFiles = cached.files.slice();
+    } else {
+      const collected: { path: string; source: FileSource }[] = [];
+      await collectAllFiles(entries, '', collected);
+      allFiles = collected;
+      fileCacheRef.current = { entriesSrc: entriesKey, files: allFiles.slice() };
+      indexRef.current = null; // 目录结构变了，索引失效
+    }
+    if (searchIdRef.current !== currentSearchId) { setIsSearching(false); return; }
+    setTotalFileCount(allFiles.length);
+
+    // 阶段 2: 尝试倒排索引搜索（不需要 Worker 时）
+    if (!needsWorker) {
+      try {
+        const indexCached = indexRef.current;
+        let index: InvertedIndex;
+        if (indexCached && indexCached.entriesSrc === entriesKey) {
+          index = indexCached.index;
+        } else {
+          setIsSearching(true);
+          index = await buildIndex(allFiles);
+          indexRef.current = { entriesSrc: entriesKey, index };
+        }
+        if (searchIdRef.current !== currentSearchId) { setIsSearching(false); return; }
+        doIndexedSearch(searchQuery, index);
+        return;
+      } catch (err) {
+        console.warn('[SearchPanel] 倒排索引搜索失败，回退到 Worker 搜索:', err);
+        setIsSearching(true);
+        setResults([]);
       }
     }
-  }, [entries, caseSensitive, wholeWord, useRegex, collectAllFiles, readBatch, getWorker]);
 
-  /**
-   * 用户触发的搜索（从 state 读取 query）
-   */
-  const handleSearch = useCallback(() => {
-    void handleSearchInternal(query);
-  }, [handleSearchInternal, query]);
+    // 阶段 3: Worker + Boyer-Moore 回退
+    await doWorkerSearch(searchQuery, allFiles, currentSearchId);
+  }, [entries, useRegex, caseSensitive, wholeWord, collectAllFiles, buildIndex, doIndexedSearch, doWorkerSearch]);
 
-  /**
-   * 取消搜索
-   */
-  const handleCancel = useCallback(() => {
-    ++searchIdRef.current; // 使当前搜索无效
-    setIsSearching(false);
-  }, []);
-
-  /**
-   * 点击搜索结果跳转到对应文件位置
-   */
   const handleMatchClick = useCallback(
-    (filePath: string, match: SearchMatch) => {
-      // Electron 模式下：用 rootSource + 相对路径拼接出绝对路径
+    async (filePath: string, match: SearchMatch) => {
       if (isElectron() && rootSource && typeof rootSource === 'string') {
         const absolutePath = rootSource + '/' + filePath;
-
-        dispatch(
-          setSearchHighlight({
-            keyword: query,
-            line: match.line,
-            column: match.column,
-          })
-        );
-
         const entry: FileEntry = {
           name: filePath.slice(filePath.lastIndexOf('/') + 1),
           kind: 'file',
           source: absolutePath,
         };
-        dispatch(openFile(entry));
+        await dispatch(openFile(entry));
+        dispatch(setSearchHighlight({ keyword: query, line: match.line, column: match.column }));
       }
     },
     [dispatch, query, rootSource]
   );
 
   const toggleFileExpanded = useCallback((index: number) => {
-    setResults((prev) =>
-      prev.map((r, i) => (i === index ? { ...r, expanded: !r.expanded } : r))
-    );
+    setResults((prev) => prev.map((r, i) => (i === index ? { ...r, expanded: !r.expanded } : r)));
   }, []);
 
   const totalMatches = results.reduce((sum, r) => sum + r.matches.length, 0);
@@ -379,7 +394,6 @@ const SearchPanel = forwardRef<SearchPanelRef>((_props, ref) => {
 
   return (
     <div className="search-panel">
-      {/* 搜索输入 */}
       <div className="search-panel__inputs">
         <div className="search-input-wrap">
           <input
@@ -390,7 +404,8 @@ const SearchPanel = forwardRef<SearchPanelRef>((_props, ref) => {
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
                 e.preventDefault();
-                handleSearch();
+                if (debounceRef.current) clearTimeout(debounceRef.current);
+                void handleSearchInternal(query);
               }
             }}
           />
@@ -416,91 +431,54 @@ const SearchPanel = forwardRef<SearchPanelRef>((_props, ref) => {
             >
               <Regex size={14} strokeWidth={1.5} />
             </button>
+            <button
+              className={`search-input__btn ${fuzzyMode ? 'active' : ''}`}
+              title="模糊匹配（拼写纠错）"
+              onClick={() => setFuzzyMode((v) => !v)}
+            >
+              <Sparkles size={14} strokeWidth={1.5} />
+            </button>
+            <span className="search-input__sep" />
+            <button
+              className={`search-input__btn ${showReplace ? 'active' : ''}`}
+              title="切换替换"
+              onClick={() => setShowReplace((v) => !v)}
+            >
+              <ChevronDown size={14} strokeWidth={1.5} className={showReplace ? 'rotate-180' : ''} />
+            </button>
           </div>
         </div>
 
         {showReplace && (
           <div className="search-panel__replace">
-            <input
-              type="text"
-              placeholder="替换"
-              value={replaceQuery}
-              onChange={(e) => setReplaceQuery(e.target.value)}
-            />
+            <input type="text" placeholder="替换" value={replaceQuery} onChange={(e) => setReplaceQuery(e.target.value)} />
             <div className="replace-actions">
-              <button title="替换">
-                <Replace size={14} strokeWidth={1.5} />
-              </button>
-              <button title="全部替换">
-                <ReplaceAll size={14} strokeWidth={1.5} />
-              </button>
+              <button title="替换"><Replace size={14} strokeWidth={1.5} /></button>
+              <button title="全部替换"><ReplaceAll size={14} strokeWidth={1.5} /></button>
             </div>
           </div>
         )}
       </div>
 
-      {/* 包含/排除过滤 */}
       <div className="search-panel__filters">
         <div className="filter-row">
           <label>包含</label>
-          <input
-            type="text"
-            placeholder="例如: *.ts, *.tsx"
-            value={includePattern}
-            onChange={(e) => setIncludePattern(e.target.value)}
-          />
+          <input type="text" placeholder="例如: *.ts, *.tsx" value={includePattern} onChange={(e) => setIncludePattern(e.target.value)} />
         </div>
         <div className="filter-row">
           <label>排除</label>
-          <input
-            type="text"
-            placeholder="例如: node_modules, dist"
-            value={excludePattern}
-            onChange={(e) => setExcludePattern(e.target.value)}
-          />
+          <input type="text" placeholder="例如: node_modules, dist" value={excludePattern} onChange={(e) => setExcludePattern(e.target.value)} />
         </div>
       </div>
 
-      {/* 搜索按钮 */}
-      <div className="search-panel__action-bar">
-        <button
-          className="search-btn"
-          onClick={isSearching ? handleCancel : handleSearch}
-          disabled={!query.trim()}
-        >
-          {isSearching ? (
-            <>
-              <X size={14} strokeWidth={1.5} />
-              取消
-            </>
-          ) : (
-            <>
-              <Search size={14} strokeWidth={1.5} />
-              搜索
-            </>
-          )}
-        </button>
-        <button
-          className="search-btn"
-          style={{ background: '#3c3c3c', flex: '0 0 auto' }}
-          onClick={() => setShowReplace((v) => !v)}
-        >
-          {showReplace ? '隐藏替换' : '替换'}
-        </button>
-      </div>
-
-      {/* 结果统计 */}
       {(results.length > 0 || isSearching) && (
         <div className="search-panel__stats">
           {isSearching
             ? `正在搜索... ${searchedCount}/${totalFileCount} 文件`
-            : `${totalFiles} 文件中有 ${totalMatches} 个结果${
-                isTruncated ? '（已截断，最多 500 个）' : ''
-              }`}
+            : `${totalFiles} 文件中有 ${totalMatches} 个结果${isTruncated ? '（已截断，最多 500 个）' : ''}`}
         </div>
       )}
 
-      {/* 结果列表 */}
       <div className="search-panel__results">
         {results.length === 0 && !isSearching && query && (
           <div className="search-panel__empty">
@@ -508,43 +486,54 @@ const SearchPanel = forwardRef<SearchPanelRef>((_props, ref) => {
           </div>
         )}
 
-        {results.map((fileResult, fileIndex) => (
-          <div key={fileResult.filePath} className="search-result-file">
-            <div
-              className={`search-result-file__header ${fileResult.expanded ? 'expanded' : ''}`}
-              onClick={() => toggleFileExpanded(fileIndex)}
-            >
-              <ChevronRight size={14} strokeWidth={1.5} />
-              <span className="search-result-file__name">{fileResult.fileName}</span>
-              <span className="search-result-file__count">
-                {fileResult.matches.length}
-              </span>
-            </div>
+        {results.map((fileResult, fileIndex) => {
+          const lastSlash = fileResult.filePath.lastIndexOf('/');
+          const dirPath = lastSlash > 0 ? fileResult.filePath.slice(0, lastSlash) : '';
 
-            {fileResult.expanded && (
-              <div className="search-result-matches">
-                {fileResult.matches.map((match, matchIndex) => (
-                  <div
-                    key={matchIndex}
-                    className={`search-result-match ${match.isFileNameMatch ? 'search-result-match--filename' : ''}`}
-                    onClick={() => handleMatchClick(fileResult.filePath, match)}
-                  >
-                    <span className="search-result-match__line-num">
-                      {match.isFileNameMatch ? '📄' : match.line}
-                    </span>
-                    <span className="search-result-match__text">
-                      <HighlightText
-                        text={match.text}
-                        matchIndex={match.isFileNameMatch ? match.match.index : match.match.index - Math.max(0, match.match.index - 40)}
-                        matchLength={match.match.length}
-                      />
-                    </span>
-                  </div>
-                ))}
+          return (
+            <div key={fileResult.filePath} className="search-result-file">
+              <div
+                className={`search-result-file__header ${fileResult.expanded ? 'expanded' : ''}`}
+                onClick={() => toggleFileExpanded(fileIndex)}
+              >
+                <ChevronRight size={14} strokeWidth={1.5} />
+                <span className="search-result-file__name">{fileResult.fileName}</span>
+                {dirPath && (
+                  <span className="search-result-file__dir">{dirPath}</span>
+                )}
+                <span className="search-result-file__count">{fileResult.matches.length}</span>
               </div>
-            )}
-          </div>
-        ))}
+
+              {fileResult.expanded && (
+                <div className="search-result-matches">
+                  {fileResult.matches.map((match, matchIndex) => {
+                    const trimmed = match.text.replace(/^\s+/, '');
+                    const trimLen = match.text.length - trimmed.length;
+                    const textPos = match.match.length > 0
+                      ? Math.min(match.match.index, 40)   // Worker: file index → text index
+                      : match.match.index;                  // Inverted index: already text index
+                    const adjIndex = Math.max(0, textPos - trimLen);
+                    return (
+                    <div
+                      key={matchIndex}
+                      className="search-result-match"
+                      onClick={() => handleMatchClick(fileResult.filePath, match)}
+                    >
+                      <span className="search-result-match__text">
+                        <HighlightText
+                          text={trimmed}
+                          matchIndex={adjIndex}
+                          matchLength={match.match.length}
+                        />
+                      </span>
+                    </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -564,14 +553,7 @@ const HighlightText = ({
   const before = text.substring(0, matchIndex);
   const matched = text.substring(matchIndex, matchIndex + matchLength);
   const after = text.substring(matchIndex + matchLength);
-
-  return (
-    <>
-      {before}
-      <mark>{matched}</mark>
-      {after}
-    </>
-  );
+  return <>{before}<mark>{matched}</mark>{after}</>;
 };
 
 export default SearchPanel;

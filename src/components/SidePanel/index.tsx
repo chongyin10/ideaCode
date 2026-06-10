@@ -34,6 +34,7 @@ import {
   deleteEntry,
   renameEntry,
   copyEntry,
+  generateCopyName,
   revealInExplorer,
   getFileClipboard,
   setFileClipboard,
@@ -86,9 +87,10 @@ const ExplorerContent = () => {
   const [pendingCreate, setPendingCreate] = useState<PendingCreate | null>(null);
   const [pendingRename, setPendingRename] = useState<PendingRename | null>(null);
   const [lastOperation, setLastOperation] = useState<LastOperation | null>(null);
+  const [clipboardItem, setClipboardItem] = useState<FileClipboardItem | null>(null);
 
-  const notifyChange = useCallback((targetSource: FileSource) => {
-    setLastOperation({ targetSource, timestamp: Date.now() });
+  const notifyChange = useCallback((...targets: FileSource[]) => {
+    setLastOperation({ targets, timestamp: Date.now() });
   }, []);
 
   const handleOpenFolder = useCallback(async () => {
@@ -201,6 +203,43 @@ const ExplorerContent = () => {
     setPendingRename(null);
   }, []);
 
+  // ─── 粘贴操作（含同名冲突处理）───
+
+  const handlePaste = useCallback(async (destSource: FileSource) => {
+    const item = getFileClipboard();
+    if (!item) return;
+
+    const nameConflict = await exists(destSource, item.name);
+
+    if (nameConflict) {
+      const choice = window.confirm(
+        `"${item.name}" 已存在，是否创建副本？`
+      );
+
+      if (!choice) return;
+      // 确定 → 自动序列命名
+      const newName = await generateCopyName(destSource, item.name, item.kind);
+      await copyEntry(item.parentSource, item.name, destSource, newName);
+    } else {
+      await copyEntry(item.parentSource, item.name, destSource, item.name);
+    }
+
+    if (item.action === 'cut') {
+      await deleteEntry(item.parentSource, item.name, item.kind);
+      setFileClipboard(null);
+    }
+
+    if (item.action === 'cut') {
+      notifyChange(destSource, item.parentSource);
+    } else {
+      notifyChange(destSource);
+    }
+    setClipboardItem(null);
+    if (rootSource && isSameSource(destSource, rootSource)) {
+      dispatch(refreshDirectory(destSource));
+    }
+  }, [rootSource, dispatch, notifyChange]);
+
   // ─── 菜单构建 ───
 
   const buildMenuItems = useCallback((): MenuItem[] => {
@@ -279,13 +318,15 @@ const ExplorerContent = () => {
           group: '3_edit',
           order: 5,
           onClick: () => {
-            setFileClipboard({
+            const item = {
               source: targetEntry.source,
               name: targetEntry.name,
               kind: targetEntry.kind,
               parentSource: safeParentSource,
-              action: 'cut',
-            });
+              action: 'cut' as const,
+            };
+            setFileClipboard(item);
+            setClipboardItem(item);
           },
         },
         {
@@ -302,6 +343,7 @@ const ExplorerContent = () => {
               parentSource: safeParentSource,
               action: 'copy',
             });
+            setClipboardItem(null);
           },
         },
         {
@@ -311,21 +353,7 @@ const ExplorerContent = () => {
           group: '3_edit',
           order: 7,
           disabled: !canPasteHere,
-          onClick: async () => {
-            const item = getFileClipboard();
-            if (!item) return;
-            try {
-              await copyEntry(item.parentSource, item.name, pasteTargetSource, item.name);
-              if (item.action === 'cut') {
-                await deleteEntry(item.parentSource, item.name, item.kind);
-                setFileClipboard(null);
-              }
-              notifyChange(pasteTargetSource);
-              notifyChange(item.parentSource);
-            } catch (err) {
-              alert(`粘贴失败: ${err instanceof Error ? err.message : String(err)}`);
-            }
-          },
+          onClick: () => handlePaste(pasteTargetSource),
         },
         {
           id: 'copy-path',
@@ -387,20 +415,7 @@ const ExplorerContent = () => {
         group: '3_edit',
         order: 7,
         disabled: !canPasteHere,
-        onClick: async () => {
-          const item = getFileClipboard();
-          if (!item) return;
-          try {
-            await copyEntry(item.parentSource, item.name, pasteTargetSource, item.name);
-            if (item.action === 'cut') {
-              await deleteEntry(item.parentSource, item.name, item.kind);
-              setFileClipboard(null);
-            }
-            dispatch(refreshDirectory(pasteTargetSource));
-          } catch (err) {
-            alert(`粘贴失败: ${err instanceof Error ? err.message : String(err)}`);
-          }
-        },
+        onClick: () => handlePaste(pasteTargetSource),
       });
     }
 
@@ -422,7 +437,7 @@ const ExplorerContent = () => {
     });
 
     return items;
-  }, [contextMenu, rootSource, startCreate, startRename, handleFindInFiles, notifyChange, dispatch]);
+  }, [contextMenu, rootSource, startCreate, startRename, handleFindInFiles, handlePaste, notifyChange]);
 
   // 稳定回调引用（传递给 FileTree 的 props）
   const stableOnOpenFile = useCallback((entry: FileEntry) => {
@@ -488,6 +503,7 @@ const ExplorerContent = () => {
           onRenameConfirm={handleRenameConfirm}
           onRenameCancel={handleRenameCancel}
           lastOperation={lastOperation}
+          clipboardItem={clipboardItem}
         />
       ))}
       {renderRootInlineInput()}

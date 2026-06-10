@@ -88,6 +88,7 @@ export async function readFile(fileSource: FileSource): Promise<string> {
     // 先查缓存（带 mtime 验证）
     try {
       const stat = await window.electronAPI!.fs.stat(fileSource);
+      if (!stat) throw new Error('文件不存在');
       const cached = fileCache.getValid(fileSource, new Date(stat.mtime).getTime());
       if (cached) {
         return cached.content;
@@ -214,12 +215,8 @@ export async function watchDirectory(
  */
 export async function exists(parentSource: FileSource, name: string): Promise<boolean> {
   if (isElectron() && isPath(parentSource)) {
-    try {
-      await window.electronAPI!.fs.stat(parentSource + '/' + name);
-      return true;
-    } catch {
-      return false;
-    }
+    const result = await window.electronAPI!.fs.stat(parentSource + '/' + name);
+    return result !== null;
   }
   if (isHandle(parentSource) && parentSource.kind === 'directory') {
     const dirHandle = parentSource as FileSystemDirectoryHandle;
@@ -318,6 +315,39 @@ export async function copyEntry(srcParent: FileSource, srcName: string, destPare
   throw new Error('无法复制：不支持的文件源');
 }
 
+/**
+ * 生成不冲突的复制名称
+ * 如 "text1.txt" → "text1 (1).txt" → "text1 (2).txt"
+ */
+export async function generateCopyName(
+  parentSource: FileSource,
+  name: string,
+  kind: 'file' | 'directory'
+): Promise<string> {
+  if (kind === 'directory') {
+    let seq = 1;
+    let candidate = `${name} (${seq})`;
+    while (await exists(parentSource, candidate)) {
+      seq++;
+      candidate = `${name} (${seq})`;
+    }
+    return candidate;
+  }
+
+  const dotIdx = name.lastIndexOf('.');
+  const hasExt = dotIdx > 0;
+  const base = hasExt ? name.substring(0, dotIdx) : name;
+  const ext  = hasExt ? name.substring(dotIdx) : '';
+
+  let seq = 1;
+  let candidate = `${base} (${seq})${ext}`;
+  while (await exists(parentSource, candidate)) {
+    seq++;
+    candidate = `${base} (${seq})${ext}`;
+  }
+  return candidate;
+}
+
 export async function revealInExplorer(source: FileSource): Promise<boolean> {
   if (isElectron() && isPath(source)) {
     return window.electronAPI!.fs.reveal(source);
@@ -332,7 +362,7 @@ export async function revealInExplorer(source: FileSource): Promise<boolean> {
 /*  不依赖系统剪贴板，用内存存储                   */
 /* ────────────────────────────────────────────── */
 
-interface FileClipboardItem {
+export interface FileClipboardItem {
   source: FileSource;
   name: string;
   kind: 'file' | 'directory';

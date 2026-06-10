@@ -91,7 +91,7 @@ export interface ElectronAPI {
     readDir: (dirPath: string) => Promise<FsEntry[]>;
     readFile: (filePath: string) => Promise<string>;
     writeFile: (filePath: string, content: string) => Promise<boolean>;
-    stat: (filePath: string) => Promise<FsStat>;
+    stat: (filePath: string) => Promise<FsStat | null>;
     watch: (watchPath: string) => Promise<WatchResult>;
     unwatch: (watchPath: string) => Promise<WatchResult>;
     onChange: (callback: (data: FsChangeEvent) => void) => () => void;

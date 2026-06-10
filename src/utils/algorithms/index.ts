@@ -34,3 +34,9 @@ export {
   diffToHtml,
 } from './diff';
 export type { DiffType, DiffChunk, DiffResult } from './diff';
+
+export { InvertedIndex } from './invertedIndex';
+export type { IndexEntry, SearchHit } from './invertedIndex';
+
+export { levenshteinDistance, levenshteinSimilarity, fuzzyMatch } from './levenshtein';
+export type { FuzzyMatchResult } from './levenshtein';

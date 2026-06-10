@@ -1,7 +1,8 @@
 import Editor from '@monaco-editor/react';
-import { useRef } from 'react';
+import { useRef, useEffect, useCallback } from 'react';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import { clearSearchHighlight } from '../../store/slices/workspaceSlice';
+import type { SearchHighlight } from '../../store/slices/workspaceSlice';
 import './MonacoEditor.css';
 
 const Loading = () => (
@@ -20,7 +21,65 @@ interface MonacoEditorProps {
 const MonacoEditor = ({ value, language, onChange }: MonacoEditorProps) => {
   const dispatch = useAppDispatch();
   const searchHighlight = useAppSelector((state) => state.workspace.searchHighlight);
+
+  const editorRef = useRef<Parameters<Parameters<typeof Editor>[0]['onMount']>[0] | null>(null);
+  const monacoRef = useRef<Parameters<Parameters<typeof Editor>[0]['onMount']>[1] | null>(null);
   const decorationsRef = useRef<string[]>([]);
+  const pendingRef = useRef<SearchHighlight | null>(null);
+
+  const applyHighlight = useCallback(
+    (editor: typeof editorRef.current, monaco: typeof monacoRef.current, hl: SearchHighlight) => {
+      if (!editor || !monaco) return;
+      const { keyword, line, column } = hl;
+
+      if (line > 0) {
+        editor.setPosition({ lineNumber: line, column: Math.max(1, column) });
+        editor.revealLineInCenter(line);
+      }
+
+      const model = editor.getModel();
+      if (model && keyword) {
+        if (decorationsRef.current.length > 0) {
+          editor.deltaDecorations(decorationsRef.current, []);
+        }
+
+        const matches = model.findMatches(keyword, false, false, false, null, true);
+
+        const newDecorations = matches.map((m) => ({
+          range: m.range,
+          options: {
+            inlineClassName: 'search-highlight-match',
+            overviewRuler: {
+              color: '#ea5c1b',
+              position: monaco.editor.OverviewRulerLane.Center,
+            },
+            minimap: {
+              color: '#ea5c1b',
+              position: monaco.editor.MinimapPosition.Inline,
+            },
+          },
+        }));
+
+        decorationsRef.current = editor.deltaDecorations([], newDecorations);
+      }
+
+      dispatch(clearSearchHighlight());
+    },
+    [dispatch]
+  );
+
+  // 编辑器已就绪时响应 searchHighlight 变化（后续点击触发）
+  useEffect(() => {
+    if (!searchHighlight) return;
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    if (!editor || !monaco) {
+      // 编辑器尚未就绪，暂存待 onMount 后应用
+      pendingRef.current = searchHighlight;
+      return;
+    }
+    applyHighlight(editor, monaco, searchHighlight);
+  }, [searchHighlight, applyHighlight]);
 
   return (
     <Editor
@@ -32,57 +91,15 @@ const MonacoEditor = ({ value, language, onChange }: MonacoEditorProps) => {
       theme="vs-dark"
       loading={<Loading />}
       onMount={(editor, monaco) => {
-        // 挂载后强制刷新一次布局，确保 Minimap 等内部组件坐标计算正确
+        editorRef.current = editor;
+        monacoRef.current = monaco;
         requestAnimationFrame(() => editor.layout());
 
-        // 如果有搜索高亮，应用装饰并跳转
-        if (searchHighlight) {
-          const { keyword, line, column } = searchHighlight;
-
-          // 1. 跳转到匹配位置（居中显示）
-          if (line > 0) {
-            editor.setPosition({ lineNumber: line, column });
-            editor.revealLineInCenter(line);
-          }
-
-          // 2. 使用 deltaDecorations 高亮所有匹配
-          const model = editor.getModel();
-          if (model && keyword) {
-            // 清除旧装饰
-            if (decorationsRef.current.length > 0) {
-              editor.deltaDecorations(decorationsRef.current, []);
-            }
-
-            // 查找所有匹配（不区分大小写高亮时，忽略大小写）
-            const matches = model.findMatches(
-              keyword,
-              false,  // searchOnlyEditableRange
-              false,  // isRegex
-              false,  // matchCase
-              null,   // wordSeparators
-              true    // captureMatches
-            );
-
-            const newDecorations = matches.map((m) => ({
-              range: m.range,
-              options: {
-                inlineClassName: 'search-highlight-match',
-                overviewRuler: {
-                  color: '#ea5c1b',
-                  position: monaco.editor.OverviewRulerLane.Center,
-                },
-                minimap: {
-                  color: '#ea5c1b',
-                  position: monaco.editor.MinimapPosition.Inline,
-                },
-              },
-            }));
-
-            decorationsRef.current = editor.deltaDecorations([], newDecorations);
-          }
-
-          // 3. 消费后清除高亮状态
-          dispatch(clearSearchHighlight());
+        // onMount 时如有待处理的高亮，立即应用
+        const pending = pendingRef.current;
+        if (pending) {
+          pendingRef.current = null;
+          applyHighlight(editor, monaco, pending);
         }
       }}
       options={{

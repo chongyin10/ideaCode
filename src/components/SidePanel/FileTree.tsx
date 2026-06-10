@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, memo } from 'react';
 import { ChevronRight, FileText } from 'lucide-react';
-import type { FileEntry, FileSource } from '../../services/fileService';
+import type { FileEntry, FileSource, FileClipboardItem } from '../../services/fileService';
 import { isSameSource } from '../../services/fileService';
 import InlineInput from '../InlineInput';
 
@@ -15,7 +15,7 @@ export interface PendingRename {
 }
 
 export interface LastOperation {
-  targetSource: FileSource;
+  targets: FileSource[];
   timestamp: number;
 }
 
@@ -38,6 +38,8 @@ interface FileTreeProps {
   onRenameCancel?: () => void;
   /** 最近一次文件操作，用于触发目录刷新 */
   lastOperation?: LastOperation | null;
+  /** 当前剪贴板内容，用于显示剪切状态 */
+  clipboardItem?: FileClipboardItem | null;
 }
 
 /**
@@ -64,6 +66,7 @@ const FileTree = memo(({
   onRenameConfirm,
   onRenameCancel,
   lastOperation,
+  clipboardItem,
 }: FileTreeProps) => {
   const [expanded, setExpanded] = useState(false);
   const [children, setChildren] = useState<FileEntry[]>([]);
@@ -95,11 +98,15 @@ const FileTree = memo(({
     const prevOp = lastOpRef.current;
     lastOpRef.current = lastOperation;
 
-    if (!lastOperation || entry.kind !== 'directory' || !expanded) return;
+    if (!lastOperation || entry.kind !== 'directory') return;
     if (prevOp && prevOp.timestamp === lastOperation.timestamp) return;
 
-    if (isSameSource(entry.source, lastOperation.targetSource)) {
-      refreshChildren();
+    if (lastOperation.targets.some((t) => isSameSource(entry.source, t))) {
+      if (expanded) {
+        refreshChildren();
+      } else {
+        setChildren([]); // 折叠状态：清空缓存，展开时重新加载
+      }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastOperation]);
@@ -125,6 +132,7 @@ const FileTree = memo(({
   }, [myPendingCreateType, myIsRenaming]);
 
   const isActive = activeSource ? isSameSource(entry.source, activeSource) : false;
+  const isCut = clipboardItem?.action === 'cut' && isSameSource(entry.source, clipboardItem.source);
 
   const handleClick = useCallback(async () => {
     if (entry.kind === 'directory') {
@@ -155,7 +163,7 @@ const FileTree = memo(({
   return (
     <div onContextMenu={handleContextMenu} data-name={entry.name}>
       <div
-        className={`tree-item ${isActive ? 'active' : ''}`}
+        className={`tree-item ${isActive ? 'active' : ''} ${isCut ? 'is-cut' : ''}`}
         style={{ paddingLeft: 12 + level * 12 }}
         onClick={handleClick}
       >
@@ -222,6 +230,7 @@ const FileTree = memo(({
             onRenameConfirm={onRenameConfirm}
             onRenameCancel={onRenameCancel}
             lastOperation={lastOperation}
+            clipboardItem={clipboardItem}
           />
         ))}
     </div>

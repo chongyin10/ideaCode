@@ -169,6 +169,10 @@
   color: #cccccc;
 }
 
+.tree-item.is-cut {
+  opacity: 0.45;
+}
+
 .panel-placeholder {
   padding: 24px 12px;
   color: #858585;
