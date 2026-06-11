@@ -3,6 +3,7 @@ import type { PanelId } from '../../store/slices/layoutSlice';
 import ExplorerContent from './ExplorerContent';
 import SearchPanel from '../SearchPanel';
 import ExtensionsPanel from '../ExtensionsPanel';
+import SourceControlPanel from '../SourceControlPanel';
 import './SidePanel.css';
 
 const panelTitles: Record<PanelId, string> = {
@@ -32,7 +33,7 @@ const SidePanel = () => {
           <SearchPanel />
         </div>
         <div style={{ display: activePanel === 'git' ? 'block' : 'none', height: '100%' }}>
-          <div className="panel-placeholder">源代码管理</div>
+          <SourceControlPanel />
         </div>
         <div style={{ display: activePanel === 'debug' ? 'block' : 'none', height: '100%' }}>
           <div className="panel-placeholder">运行和调试</div>

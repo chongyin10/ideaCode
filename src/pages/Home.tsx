@@ -19,10 +19,13 @@ import {
   setGroupRatio,
   equalizeGroupRatios,
 } from '../store/slices/workspaceSlice';
+import { refreshGitStatus as refreshGitSliceStatus } from '../store/slices/gitSlice';
 import { openDirectory } from '../services/fileService';
 import TabBar from '../components/TabBar';
 import MonacoEditor from '../components/MonacoEditor';
 import QuickOpen from '../components/QuickOpen';
+import GitSetupPanel from '../components/GitSetupPanel';
+import DiffEditorPanel from '../components/DiffEditorPanel';
 import './Home.css';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -78,6 +81,8 @@ function Home() {
   const workspace = useAppSelector((state) => state.workspace);
   const { openedFiles, recentProjects, editorGroups, activeGroupIndex, allFilePaths, mirrorContent, splitPhase, editorSnapshots: snapshots } = workspace;
   const splitView = editorGroups.length > 1;
+  const showCloneForm = useAppSelector((state) => state.git.showCloneForm);
+  const diffView = useAppSelector((state) => state.workspace.diffView);
 
   const [quickOpenVisible, setQuickOpenVisible] = useState(false);
 
@@ -116,7 +121,8 @@ function Home() {
         e.preventDefault();
         const g = ws.editorGroups[ws.activeGroupIndex];
         if (g?.activeFileId) {
-          dispatch(saveFile({ id: g.activeFileId, groupIndex: ws.activeGroupIndex }));
+          dispatch(saveFile({ id: g.activeFileId, groupIndex: ws.activeGroupIndex }))
+            .then(() => { dispatch(refreshGitSliceStatus()); });
         }
       }
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'Tab') {
@@ -329,7 +335,11 @@ function Home() {
         <QuickOpen onClose={() => setQuickOpenVisible(false)} files={allFilePaths} />
       )}
 
-      {allFileIds.length === 0 ? (
+      {diffView ? (
+        <DiffEditorPanel />
+      ) : showCloneForm ? (
+        <GitSetupPanel />
+      ) : allFileIds.length === 0 ? (
         <div className="welcome-screen">
           <h2>欢迎使用 IDEACODE</h2>
           <p>基于 Monaco Editor 的轻量级 IDE</p>

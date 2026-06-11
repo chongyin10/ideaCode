@@ -9,6 +9,12 @@ const StatusBar = () => {
   const { openedFiles, activeFileId, rootSource, rootName } = useAppSelector(
     (state) => state.workspace
   );
+  const gitBranch = useAppSelector((state) => state.git.branch);
+  const stagedCount = Object.keys(useAppSelector((state) => state.git.staged)).length;
+  const changesCount = Object.keys(useAppSelector((state) => state.git.changes)).length;
+  const mergeCount = Object.keys(useAppSelector((state) => state.git.merge)).length;
+  const untrackedCount = Object.keys(useAppSelector((state) => state.git.untracked)).length;
+  const totalChanges = stagedCount + changesCount + mergeCount + untrackedCount;
 
   const activeFile = useMemo(
     () => openedFiles.find((f) => f.id === activeFileId),
@@ -38,7 +44,8 @@ const StatusBar = () => {
       <div className="status-bar__left">
         <span className="status-bar__branch">
           <GitBranch size={12} strokeWidth={1.5} />
-          master*
+          {gitBranch || 'master'}
+          {totalChanges > 0 ? '*' : ''}
         </span>
         <span className="status-bar__item">
           <AlertCircle size={12} strokeWidth={1.5} />

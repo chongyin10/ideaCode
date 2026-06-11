@@ -1,6 +1,5 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import {
-  FolderOpen,
   FilePlus,
   FolderPlus,
   FolderOpen as FolderOpenIcon,
@@ -12,6 +11,9 @@ import {
   FileSignature,
   Trash2,
   FileText,
+  RefreshCw,
+  ChevronsDownUp,
+  Download,
 } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import {
@@ -24,6 +26,7 @@ import {
   clearExpandPaths,
   toggleExpandDir,
 } from '../../store/slices/workspaceSlice';
+import { setShowCloneForm, refreshGitStatus as refreshGitSliceStatus } from '../../store/slices/gitSlice';
 import { switchPanel } from '../../store/slices/layoutSlice';
 import { openDirectory } from '../../services/fileService';
 import type { FileEntry, FileSource } from '../../services/fileService';
@@ -137,7 +140,12 @@ const ExplorerContent = () => {
   const rootName = useAppSelector((state) => state.workspace.rootName);
   const entries = useAppSelector((state) => state.workspace.entries);
   const activeFileSource = useAppSelector((state) => state.workspace.activeFileSource);
-  const gitStatus = useAppSelector((state) => state.workspace.gitStatus);
+  const gitStaged = useAppSelector((s) => s.git.staged);
+  const gitChanges = useAppSelector((s) => s.git.changes);
+  const gitMerge = useAppSelector((s) => s.git.merge);
+  const gitUntracked = useAppSelector((s) => s.git.untracked);
+  // 合并供 FileTree 使用
+  const gitStatus = useMemo(() => ({ ...gitStaged, ...gitChanges, ...gitMerge, ...gitUntracked }), [gitStaged, gitChanges, gitMerge, gitUntracked]);
   const expandPaths = useAppSelector((state) => state.workspace.expandPaths);
   const expandedDirs = useAppSelector((state) => state.workspace.expandedDirs);
 
@@ -247,6 +255,7 @@ const ExplorerContent = () => {
       setPendingCreate(null);
       notifyChange(parentSource);
       dispatch(refreshGitStatus());
+      dispatch(refreshGitSliceStatus());
       dispatch(refreshAllFilePaths());
       if (rootSource && isSameSource(parentSource, rootSource)) {
         dispatch(refreshDirectory(parentSource));
@@ -286,6 +295,7 @@ const ExplorerContent = () => {
       setPendingRename(null);
       notifyChange(parentSource);
       dispatch(refreshGitStatus());
+      dispatch(refreshGitSliceStatus());
       dispatch(refreshAllFilePaths());
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -526,7 +536,9 @@ const ExplorerContent = () => {
             for (const ps of parentSources) {
               notifyChange(ps);
             }
-            dispatch(refreshGitStatus());
+      dispatch(refreshGitStatus());
+      dispatch(refreshGitSliceStatus());
+      dispatch(refreshGitSliceStatus());
       dispatch(refreshAllFilePaths());
           }),
         }
@@ -617,12 +629,53 @@ const ExplorerContent = () => {
     <div className="folder-tree" onContextMenu={handleBlankContextMenu}>
       <div className="side-panel__actions">
         {rootSource ? (
-          <span className="folder-name">{rootName}</span>
+          <div className="explorer-header">
+            <span className="explorer-header__title">{rootName}</span>
+            <span className="explorer-header__tools">
+              <button
+                className="explorer-header__icon"
+                title="新建文件"
+                onClick={() => startCreate(rootSource, 'file')}
+              >
+                <FilePlus size={14} strokeWidth={1.5} />
+              </button>
+              <button
+                className="explorer-header__icon"
+                title="新建文件夹"
+                onClick={() => startCreate(rootSource, 'folder')}
+              >
+                <FolderPlus size={14} strokeWidth={1.5} />
+              </button>
+              <button
+                className="explorer-header__icon"
+                title="刷新"
+                onClick={() => dispatch(refreshDirectory(rootSource))}
+              >
+                <RefreshCw size={14} strokeWidth={1.5} />
+              </button>
+              <button
+                className="explorer-header__icon"
+                title="折叠所有"
+                onClick={() => dispatch(clearExpandPaths())}
+              >
+                <ChevronsDownUp size={14} strokeWidth={1.5} />
+              </button>
+            </span>
+          </div>
         ) : (
-          <button className="open-folder-btn" onClick={handleOpenFolder}>
-            <FolderOpen size={14} strokeWidth={1.5} />
-            打开文件夹
-          </button>
+          <div className="explorer-empty">
+            <p className="explorer-empty__text">尚未打开文件夹</p>
+            <div className="explorer-empty__btns">
+              <button className="explorer-empty__btn" onClick={handleOpenFolder}>
+                <FolderOpenIcon size={14} strokeWidth={1.5} />
+                打开文件夹
+              </button>
+              <button className="explorer-empty__btn" onClick={() => dispatch(setShowCloneForm(true))}>
+                <Download size={14} strokeWidth={1.5} />
+                克隆仓库
+              </button>
+            </div>
+          </div>
         )}
       </div>
       {rootSource && entries.map((entry) => (

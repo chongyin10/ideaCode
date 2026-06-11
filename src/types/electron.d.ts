@@ -1,7 +1,31 @@
-/* ─── Git 状态 ─── */
+/* ─── Git ─── */
 
-export type GitStatusCode = 'M' | 'A' | 'D' | 'R' | 'U';
+export type GitStatusCode = 'M' | 'A' | 'D' | 'R' | 'U' | 'C';
 export type GitStatusMap = Record<string, GitStatusCode>;
+export interface GitStatusResult {
+  /** 暂存区（已 git add） */
+  staged: GitStatusMap;
+  /** 工作区已修改/删除的文件 */
+  changes: GitStatusMap;
+  /** 合并冲突的文件 */
+  merge: GitStatusMap;
+  /** 未跟踪的新文件 */
+  untracked: GitStatusMap;
+}
+  name: string;
+  current: boolean;
+}
+
+export interface GitRemote {
+  name: string;
+  url: string;
+  type: string;
+}
+
+export interface GitBehindAhead {
+  ahead: number;
+  behind: number;
+}
 
 /* ─── IPC 数据结构 ─── */
 
@@ -130,9 +154,32 @@ export interface ElectronAPI {
     getFilePath: () => Promise<string>;
   };
 
-  /** Git 状态 */
+  /** Git 版本控制 */
   git: {
-    getStatus: (dirPath: string) => Promise<GitStatusMap>;
+    getStatus: (dirPath: string) => Promise<GitStatusResult>;
+    getBranch: (dirPath: string) => Promise<string>;
+    listBranches: (dirPath: string) => Promise<GitBranch[]>;
+    checkout: (dirPath: string, branch: string) => Promise<boolean>;
+    createBranch: (dirPath: string, branch: string) => Promise<boolean>;
+    stage: (dirPath: string, files: string | string[]) => Promise<boolean>;
+    unstage: (dirPath: string, files: string | string[]) => Promise<boolean>;
+    commit: (dirPath: string, message: string) => Promise<string>;
+    getDiff: (dirPath: string, staged?: boolean) => Promise<string>;
+    show: (dirPath: string, filePath: string) => Promise<string>;
+    pull: (dirPath: string) => Promise<string>;
+    push: (dirPath: string) => Promise<string>;
+    fetch: (dirPath: string) => Promise<boolean>;
+    listRemotes: (dirPath: string) => Promise<GitRemote[]>;
+    getLog: (dirPath: string, count?: number) => Promise<string[]>;
+    stashList: (dirPath: string) => Promise<string[]>;
+    stashPush: (dirPath: string, message?: string) => Promise<boolean>;
+    stashPop: (dirPath: string) => Promise<boolean>;
+    getBehindAhead: (dirPath: string) => Promise<GitBehindAhead>;
+    discard: (dirPath: string, file: string) => Promise<boolean>;
+    init: (dirPath: string) => Promise<boolean>;
+    clone: (repoUrl: string, targetPath: string) => Promise<string>;
+    onCloneProgress: (callback: (data: string) => void) => () => void;
+    isRepo: (dirPath: string) => Promise<boolean>;
   };
 }
 

@@ -1,0 +1,275 @@
+.scm-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  color: #cccccc;
+  overflow-y: auto;
+}
+
+/* ─── 头部：提交 + 工具栏 ─── */
+
+.scm-header {
+  flex-shrink: 0;
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.scm-header__input-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.scm-header__input {
+  flex: 1;
+  background: #3c3c3c;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  color: #cccccc;
+  font-size: 11px;
+  padding: 5px 8px;
+  outline: none;
+  font-family: inherit;
+  min-width: 0;
+}
+
+.scm-header__input:focus { border-color: #4a9eff; }
+.scm-header__input::placeholder { color: #5a5a5a; }
+
+.scm-header__commit {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #4177CD;
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.12s ease;
+}
+
+.scm-header__commit:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+.scm-header__commit:disabled { opacity: 0.25; cursor: default; }
+
+.scm-header__tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.scm-icon-btn {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: #858585;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.12s ease;
+}
+
+.scm-icon-btn:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+
+.scm-header__spacer { flex: 1; }
+
+/* ─── 分组 ─── */
+
+.scm-section {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.scm-section__header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px;
+  color: #858585;
+  font-weight: 600;
+  font-size: 11px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.scm-section__header:hover { color: #ccc; }
+
+.scm-section__title { text-transform: uppercase; }
+
+.scm-section__badge {
+  background: rgba(255, 255, 255, 0.06);
+  padding: 0 5px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 400;
+  color: #858585;
+}
+
+.scm-section__actions {
+  margin-left: auto;
+  display: flex;
+  gap: 1px;
+}
+
+.scm-section__actions button {
+  background: none;
+  border: none;
+  color: #858585;
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 2px;
+  display: flex;
+}
+
+.scm-section__actions button:hover { color: #fff; background: rgba(255, 255, 255, 0.08); }
+
+.scm-rotated { transform: rotate(90deg); }
+
+/* ─── 文件项 ─── */
+
+.scm-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px 3px 20px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.scm-item:hover { background: #2a2d2e; }
+.scm-item--empty { color: #5a5a5a; cursor: default; padding: 8px 20px; font-style: italic; }
+.scm-item--empty:hover { background: none; }
+
+.scm-item__status {
+  width: 16px;
+  font-weight: 700;
+  font-size: 11px;
+  text-align: center;
+  flex-shrink: 0;
+  letter-spacing: 0.5px;
+}
+
+.scm-item__name {
+  flex-shrink: 0;
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scm-item__name:hover { text-decoration: underline; }
+
+.scm-item__path {
+  color: #555;
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.scm-item__actions {
+  display: none;
+  gap: 1px;
+  flex-shrink: 0;
+}
+
+.scm-item:hover .scm-item__actions { display: flex; }
+
+.scm-item__actions button {
+  background: none;
+  border: none;
+  color: #858585;
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 2px;
+  display: flex;
+}
+
+.scm-item__actions button:hover { color: #fff; background: rgba(255, 255, 255, 0.08); }
+
+/* 状态色 */
+.scm-m .scm-item__status { color: #cca700; }
+.scm-a .scm-item__status { color: #73c991; }
+.scm-d .scm-item__status { color: #f85149; }
+.scm-r .scm-item__status { color: #4a9eff; }
+.scm-u .scm-item__status { color: #73c991; }
+
+/* ─── 底部 ─── */
+
+.scm-footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  font-size: 11px;
+  color: #858585;
+  flex-shrink: 0;
+}
+
+.scm-footer__branch { color: #ccc; }
+.scm-footer__down { color: #4a9eff; margin-left: auto; }
+.scm-footer__up { color: #73c991; }
+
+/* ─── 状态色 ─── */
+
+.scm-error {
+  background: #5a1d1d;
+  color: #f48771;
+  padding: 5px 8px;
+  margin: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.scm-spin { animation: scmSpin 1s linear infinite; }
+
+@keyframes scmSpin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ─── 克隆/初始化 ─── */
+
+.scm-setup { padding: 24px 16px; align-items: flex-start; }
+.scm-setup__hero {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 8px; text-align: center; width: 100%; padding-top: 16px;
+}
+.scm-setup__hero-icon { color: #666; margin-bottom: 6px; }
+.scm-setup h2 { color: #e0e0e0; font-size: 15px; font-weight: 500; margin: 0; }
+.scm-setup p { color: #858585; font-size: 12px; margin: 0 0 14px 0; }
+.scm-setup__title { margin-bottom: 10px; }
+.scm-setup__field { display: flex; flex-direction: column; gap: 4px; width: 100%; margin-bottom: 10px; }
+.scm-setup__field label { font-size: 10px; color: #858585; text-transform: uppercase; }
+.scm-setup__field input {
+  background: #3c3c3c; border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 4px; color: #ccc; font-size: 12px; padding: 6px 8px; outline: none;
+}
+.scm-setup__field input:focus { border-color: #4a9eff; }
+.scm-hint { font-size: 10px; color: #73c991; }
+.scm-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 8px 16px; border: none; border-radius: 5px;
+  cursor: pointer; font-size: 12px; font-weight: 500;
+  transition: all 0.15s ease; background: #3c3c3c; color: #ccc;
+}
+.scm-btn:hover { background: #4a4a4a; color: #fff; }
+.scm-btn:disabled { opacity: 0.4; cursor: default; }
+.scm-btn--primary { background: #0e639c; color: #fff; }
+.scm-btn--primary:hover { background: #1177bb; }
+.scm-back {
+  align-self: flex-start; background: none; border: none;
+  color: #4a9eff; cursor: pointer; font-size: 11px;
+  display: flex; align-items: center; gap: 4px; padding: 0; margin-bottom: 10px;
+}
+.scm-back:hover { text-decoration: underline; }

@@ -37,13 +37,20 @@ export type SplitPhase = 'closed' | 'opening' | 'open' | 'closing';
 
 /** 编辑器组（一个分屏列） */
 export interface EditorGroup {
-  /** 唯一 ID（如 "g0", "g1", ...） */
   id: string;
   fileIds: string[];
   activeFileId: string | null;
   tabHistory: string[];
-  /** 该列在水平方向上的 flex 比例（默认 1） */
   ratio: number;
+}
+
+/** Git Diff 视图数据 */
+export interface DiffView {
+  filePath: string;
+  fileName: string;
+  original: string;
+  modified: string;
+  language: string;
 }
 
 interface WorkspaceState {
@@ -72,6 +79,8 @@ interface WorkspaceState {
   splitPhase: SplitPhase;
   /** 下一个 group ID 序号 */
   nextGroupId: number;
+  /** Git Diff 视图 */
+  diffView: DiffView | null;
 }
 
 const initialState: WorkspaceState = {
@@ -95,6 +104,7 @@ const initialState: WorkspaceState = {
   mirrorContent: {},
   splitPhase: 'closed',
   nextGroupId: 1,
+  diffView: null,
 };
 
 /* ─── 工具函数 ─── */
@@ -231,7 +241,11 @@ export const refreshGitStatus = createAsyncThunk(
     const state = (getState() as { workspace: WorkspaceState }).workspace;
     if (!state.rootSource || !isPath(state.rootSource)) return {};
     if (!window.electronAPI?.git) return {};
-    try { return await window.electronAPI.git.getStatus(state.rootSource); }
+    try {
+      const result = await window.electronAPI.git.getStatus(state.rootSource);
+      // 合并所有分类为扁平 map，保持旧 API 兼容
+      return { ...result.staged, ...result.changes, ...result.merge, ...result.untracked };
+    }
     catch { return {}; }
   }
 );
@@ -521,6 +535,21 @@ const workspaceSlice = createSlice({
     equalizeGroupRatios: (state) => {
       for (const g of state.editorGroups) g.ratio = 1;
     },
+
+    /** 打开 Git Diff 视图 */
+    openDiffView: (state, action) => {
+      state.diffView = action.payload as DiffView;
+    },
+
+    /** 关闭 Git Diff 视图 */
+    closeDiffView: (state) => {
+      state.diffView = null;
+    },
+
+    /** 更新 Git Diff 视图内容（替换操作后） */
+    updateDiffView: (state, action) => {
+      state.diffView = action.payload as DiffView;
+    },
   },
 
   extraReducers: (builder) => {
@@ -617,6 +646,7 @@ export const {
   pinPreviewFile, setSearchHighlight, clearSearchHighlight, setClipboard,
   clearClipboard, setPendingSearchQuery, expandToFile, clearExpandPaths,
   toggleExpandDir, toggleSplitView, collapseAllGroups, setActiveGroup, saveEditorSnapshot, setGroupRatio, equalizeGroupRatios,
+  openDiffView, closeDiffView, updateDiffView,
 } = workspaceSlice.actions;
 
 export default workspaceSlice.reducer;

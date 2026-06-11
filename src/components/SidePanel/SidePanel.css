@@ -63,10 +63,16 @@
   margin-bottom: 4px;
 }
 
+.side-panel__actions-btns {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .side-panel__actions .open-folder-btn {
   width: 100%;
   padding: 8px 12px;
-  background: #3c3c3c;
+  background: #0e639c;
   color: #cccccc;
   border: none;
   border-radius: 6px;
@@ -80,7 +86,7 @@
 }
 
 .side-panel__actions .open-folder-btn:hover {
-  background: #4a4a4a;
+  background: #0e639c;
   color: #fff;
 }
 
@@ -94,6 +100,53 @@
 
 .folder-tree {
   font-size: 13px;
+}
+
+/* ─── Explorer 头部栏 ─── */
+
+.explorer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 4px 4px 0;
+  min-height: 28px;
+}
+
+.explorer-header__title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.explorer-header__tools {
+  display: flex;
+  gap: 1px;
+  flex-shrink: 0;
+}
+
+.explorer-header__icon {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: #858585;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.12s ease;
+}
+
+.explorer-header__icon:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #cccccc;
 }
 
 /* 树形缩进引导线 */
@@ -238,4 +291,43 @@
   color: #858585;
   font-size: 13px;
   text-align: center;
+}
+
+.explorer-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 8px;
+}
+
+.explorer-empty__text {
+  font-size: 13px;
+  color: #cccccc;
+  margin: 0;
+}
+
+.explorer-empty__btns {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.explorer-empty__btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 12px;
+  background: #0e639c;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.15s ease;
+}
+
+.explorer-empty__btn:hover {
+  background: #1177bb;
 }
