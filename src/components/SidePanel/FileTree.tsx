@@ -244,15 +244,27 @@ const FileTree = memo(({
   );
 
   return (
-    <div onContextMenu={handleContextMenu} data-name={entry.name}>
+    <div className="tree-row" onContextMenu={handleContextMenu} data-name={entry.name}>
+      {/* 缩进引导线：为每个缩进级别绘制一条竖线 */}
+      {level > 0 && (
+        <div className="tree-indent-guides" style={{ left: 0, width: level * 12 + 6 }}>
+          {Array.from({ length: level }).map((_, i) => (
+            <span
+              key={i}
+              className="tree-indent-guide"
+              style={{ left: 12 + i * 12 + 5 }}
+            />
+          ))}
+        </div>
+      )}
       <div
         className={`tree-item ${isActive ? 'active' : ''} ${isSelected ? 'selected' : ''} ${isCut ? 'is-cut' : ''}`}
         style={{ paddingLeft: 12 + level * 12 }}
         onClick={handleClick}
       >
-        <span className={`tree-item__chevron ${expanded ? 'expanded' : ''}`}>
+        <span className={`tree-item__chevron ${expanded ? 'expanded' : ''}`} style={entry.kind !== 'directory' ? { display: 'none' } : undefined}>
           {entry.kind === 'directory' ? (
-            <ChevronRight size={14} strokeWidth={1.5} />
+            <ChevronRight size={12} strokeWidth={1.5} />
           ) : (
             <span className="tree-item__indent" />
           )}

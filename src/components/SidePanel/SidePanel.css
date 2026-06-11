@@ -96,6 +96,27 @@
   font-size: 13px;
 }
 
+/* 树形缩进引导线 */
+.tree-row {
+  position: relative;
+}
+
+.tree-indent-guides {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.tree-indent-guide {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
 .tree-item {
   padding: 5px 8px;
   cursor: pointer;
@@ -108,6 +129,7 @@
   margin: 1px 0;
   transition: all 0.12s ease;
   position: relative;
+  z-index: 1;
 }
 
 .tree-item:hover {
@@ -121,8 +143,8 @@
 }
 
 .tree-item__chevron {
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -137,13 +159,13 @@
 
 .tree-item__indent {
   display: inline-block;
-  width: 14px;
+  width: 12px;
   flex-shrink: 0;
 }
 
 .tree-item__icon {
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
