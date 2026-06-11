@@ -343,3 +343,30 @@ kbd {
   background: #4a9eff;
   color: #fff;
 }
+
+/* 多分屏工具栏 */
+.editor-split__toolbar {
+  display: flex;
+  justify-content: center;
+  padding: 4px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  background: #1e1e1e;
+}
+
+.editor-split__toolbar-btn {
+  background: none;
+  border: none;
+  color: #858585;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.12s ease;
+}
+
+.editor-split__toolbar-btn:hover {
+  color: #cccccc;
+  background: rgba(255, 255, 255, 0.06);
+}

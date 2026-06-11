@@ -34,28 +34,30 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
   const pendingRef = useRef<SearchHighlight | null>(null);
   const snapshotAppliedRef = useRef(false);
 
+  // 用 ref 存 onSnapshot，避免 effect deps 中函数引用变化导致无限循环
+  const onSnapshotRef = useRef(onSnapshot);
+  onSnapshotRef.current = onSnapshot;
+
   // 当 value 或 snapshot 变化时重置标记（处理不 remount 的 prop 更新）
   useEffect(() => {
     snapshotAppliedRef.current = false;
   }, [value, snapshot]);
 
-  // 组件卸载时保存编辑器状态快照
+  // 组件卸载时保存编辑器状态快照（仅真正卸载时触发）
   useEffect(() => {
     return () => {
-      if (editorRef.current && onSnapshot) {
+      const snap = onSnapshotRef.current;
+      if (editorRef.current && snap) {
         try {
           const pos = editorRef.current.getPosition();
           const scroll = editorRef.current.getScrollTop();
           if (pos) {
-            onSnapshot({
-              cursor: { line: pos.lineNumber, column: pos.column },
-              scrollTop: scroll,
-            });
+            snap({ cursor: { line: pos.lineNumber, column: pos.column }, scrollTop: scroll });
           }
         } catch { /* 忽略 */ }
       }
     };
-  }, [onSnapshot]);
+  }, []);
 
   const applyHighlight = useCallback(
     (editor: typeof editorRef.current, monaco: typeof monacoRef.current, hl: SearchHighlight) => {

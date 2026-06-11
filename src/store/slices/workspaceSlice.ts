@@ -28,21 +28,32 @@ export interface ClipboardItem {
   action: 'cut' | 'copy';
 }
 
-/** 编辑器状态快照（光标、滚动位） */
 export interface EditorSnapshot {
   cursor: { line: number; column: number };
   scrollTop: number;
 }
 
-/** 分屏生命周期阶段 */
 export type SplitPhase = 'closed' | 'opening' | 'open' | 'closing';
+
+/** 编辑器组（一个分屏列） */
+export interface EditorGroup {
+  /** 唯一 ID（如 "g0", "g1", ...） */
+  id: string;
+  fileIds: string[];
+  activeFileId: string | null;
+  tabHistory: string[];
+  /** 该列在水平方向上的 flex 比例（默认 1） */
+  ratio: number;
+}
 
 interface WorkspaceState {
   rootSource: FileSource | null;
   rootName: string;
   entries: FileEntry[];
   openedFiles: OpenedFile[];
+  /** 当前焦点组的 activeFileId 镜像 */
   activeFileId: string | null;
+  /** 当前焦点组的 activeFileSource 镜像 */
   activeFileSource: FileSource | null;
   recentProjects: RecentProject[];
   searchHighlight: SearchHighlight | null;
@@ -52,22 +63,15 @@ interface WorkspaceState {
   allFilePaths: string[];
   expandPaths: string[];
   expandedDirs: string[];
-  leftFileIds: string[];
-  rightFileIds: string[];
-  rightActiveFileId: string | null;
+  /** 编辑器组列表（多列分屏） */
+  editorGroups: EditorGroup[];
+  /** 当前焦点组索引 */
   activeGroupIndex: number;
-  /** 左右面板的分割比例 (left flex ratio, 默认 golden ≈ 1.618) */
-  splitRatio: number;
-  /** 编辑器快照缓存: `${fileId}::${groupIndex}` → snapshot */
   editorSnapshots: Record<string, EditorSnapshot>;
-  /** 左面板 tab 访问历史栈 (MRU, 栈顶最新) */
-  leftTabHistory: string[];
-  /** 右面板 tab 访问历史栈 (MRU, 栈顶最新) */
-  rightTabHistory: string[];
-  /** 同文件跨面板时的独立编辑内容: `${fileId}::${groupIndex}` → content */
   mirrorContent: Record<string, string>;
-  /** 分屏生命周期阶段 */
   splitPhase: SplitPhase;
+  /** 下一个 group ID 序号 */
+  nextGroupId: number;
 }
 
 const initialState: WorkspaceState = {
@@ -85,32 +89,85 @@ const initialState: WorkspaceState = {
   allFilePaths: [],
   expandPaths: [],
   expandedDirs: [],
-  leftFileIds: [],
-  rightFileIds: [],
-  rightActiveFileId: null,
+  editorGroups: [{ id: 'g0', fileIds: [], activeFileId: null, tabHistory: [], ratio: 1 }],
   activeGroupIndex: 0,
-  splitRatio: 1.618,
   editorSnapshots: {},
-  leftTabHistory: [],
-  rightTabHistory: [],
   mirrorContent: {},
   splitPhase: 'closed',
+  nextGroupId: 1,
 };
+
+/* ─── 工具函数 ─── */
+
+function pushToHistory(stack: string[], id: string, maxLen = 20): string[] {
+  const filtered = stack.filter((h) => h !== id);
+  filtered.push(id);
+  if (filtered.length > maxLen) filtered.shift();
+  return filtered;
+}
+
+function removeFromHistory(stack: string[], id: string): string[] {
+  return stack.filter((h) => h !== id);
+}
+
+function getTopOfHistory(stack: string[], exclude: string | null): string | undefined {
+  for (let i = stack.length - 1; i >= 0; i--) {
+    if (stack[i] !== exclude) return stack[i];
+  }
+  return undefined;
+}
+
+function activeGroup(state: WorkspaceState): EditorGroup {
+  return state.editorGroups[state.activeGroupIndex];
+}
+
+/** 同步 activeFileId / activeFileSource 到焦点组 */
+function syncGlobalActive(state: WorkspaceState): void {
+  const g = activeGroup(state);
+  state.activeFileId = g.activeFileId;
+  if (g.activeFileId) {
+    const file = state.openedFiles.find((f) => f.id === g.activeFileId);
+    state.activeFileSource = file?.source ?? null;
+  } else {
+    state.activeFileSource = null;
+  }
+}
+
+/** 回收所有空组，保留至少一个组 */
+function removeEmptyGroups(state: WorkspaceState): void {
+  // 记住被关闭前的焦点组 ID
+  const focusedGroupId = state.editorGroups[state.activeGroupIndex]?.id;
+
+  const nonEmpty = state.editorGroups.filter((g) => g.fileIds.length > 0);
+  if (nonEmpty.length === 0) {
+    // 全部空了，回到初始状态
+    state.editorGroups = [{ id: 'g0', fileIds: [], activeFileId: null, tabHistory: [], ratio: 1 }];
+    state.activeGroupIndex = 0;
+    state.activeFileId = null;
+    state.activeFileSource = null;
+    state.splitPhase = 'closed';
+    return;
+  }
+  state.editorGroups = nonEmpty;
+  // 尝试恢复到之前的焦点组位置
+  const newIdx = state.editorGroups.findIndex((g) => g.id === focusedGroupId);
+  state.activeGroupIndex = newIdx >= 0 ? newIdx : 0;
+  if (state.editorGroups.length === 1) {
+    state.splitPhase = 'closed';
+  }
+}
+
+/* ─── Async Thunks ─── */
 
 export const loadDirectory = createAsyncThunk(
   'workspace/loadDirectory',
   async ({ source, name }: { source: FileSource; name: string }, { dispatch }) => {
     const entries = await readDirectory(source);
-
     if (isPath(source)) {
-      try {
-        await addRecentProject(source, name);
-      } catch { /* 历史记录写入失败不应阻塞主流程 */ }
+      try { await addRecentProject(source, name); } catch { /* 忽略 */ }
     }
-
     dispatch(refreshGitStatus());
     dispatch(refreshAllFilePaths(source));
-
     return { source, name, entries };
   }
 );
@@ -120,7 +177,6 @@ export const openFile = createAsyncThunk(
   async (entry: FileEntry) => {
     if (entry.kind !== 'file') return null;
     const content = await readFile(entry.source);
-
     const ext = entry.name.split('.').pop()?.toLowerCase() || '';
     const langMap: Record<string, string> = {
       ts: 'typescript', tsx: 'typescript',
@@ -129,7 +185,6 @@ export const openFile = createAsyncThunk(
       md: 'markdown', py: 'python',
     };
     const language = langMap[ext] || 'plaintext';
-
     return { id: entry.name, name: entry.name, source: entry.source, content, language, isDirty: false };
   }
 );
@@ -174,14 +229,10 @@ export const refreshGitStatus = createAsyncThunk(
   'workspace/refreshGitStatus',
   async (_: void, { getState }) => {
     const state = (getState() as { workspace: WorkspaceState }).workspace;
-    const rootSource = state.rootSource;
-    if (!rootSource || !isPath(rootSource)) return {};
+    if (!state.rootSource || !isPath(state.rootSource)) return {};
     if (!window.electronAPI?.git) return {};
-    try {
-      return await window.electronAPI.git.getStatus(rootSource);
-    } catch {
-      return {};
-    }
+    try { return await window.electronAPI.git.getStatus(state.rootSource); }
+    catch { return {}; }
   }
 );
 
@@ -191,14 +242,12 @@ export const refreshAllFilePaths = createAsyncThunk(
     const state = (getState() as { workspace: WorkspaceState }).workspace;
     const rootSource = overrideSource || state.rootSource;
     if (!rootSource) return [];
-
     const paths: string[] = [];
     const excludeDirs = new Set([
       'node_modules', '.git', 'dist', 'build', '.next', 'coverage',
       'out', '.vscode', '.idea', '__pycache__', 'vendor', '.yarn',
       '.nuxt', '.output', '.cache', 'tmp', 'temp',
     ]);
-
     async function collect(source: FileSource, prefix: string) {
       try {
         const entries = await readDirectory(source);
@@ -208,33 +257,14 @@ export const refreshAllFilePaths = createAsyncThunk(
           if (entry.kind === 'file') { paths.push(fullPath); }
           else { await collect(entry.source, fullPath); }
         }
-      } catch { /* 跳过无法读取的目录 */ }
+      } catch { /* 跳过 */ }
     }
-
     await collect(rootSource, '');
     return paths;
   }
 );
 
-/* ─── MRU 历史栈工具 ─── */
-
-function pushToHistory(stack: string[], id: string, maxLen = 20): string[] {
-  const filtered = stack.filter((h) => h !== id);
-  filtered.push(id);
-  if (filtered.length > maxLen) filtered.shift();
-  return filtered;
-}
-
-function removeFromHistory(stack: string[], id: string): string[] {
-  return stack.filter((h) => h !== id);
-}
-
-function getTopOfHistory(stack: string[], exclude: string | null): string | undefined {
-  for (let i = stack.length - 1; i >= 0; i--) {
-    if (stack[i] !== exclude) return stack[i];
-  }
-  return undefined;
-}
+/* ─── Slice ─── */
 
 const workspaceSlice = createSlice({
   name: 'workspace',
@@ -244,164 +274,103 @@ const workspaceSlice = createSlice({
       const payload = action.payload;
       const id = typeof payload === 'string' ? payload : (payload as { id: string; groupIndex?: number }).id;
       const groupIndex = typeof payload === 'string' ? state.activeGroupIndex : ((payload as { id: string; groupIndex?: number }).groupIndex ?? state.activeGroupIndex);
-      const groupFileIds = groupIndex === 0 ? state.leftFileIds : state.rightFileIds;
+      const group = state.editorGroups[groupIndex];
+      if (!group) return;
 
-      const newFileIds = groupFileIds.filter((fid) => fid !== id);
-      if (groupIndex === 0) {
-        state.leftFileIds = newFileIds;
-        state.leftTabHistory = removeFromHistory(state.leftTabHistory, id);
-        if (state.activeFileId === id) {
-          const nextId = getTopOfHistory(state.leftTabHistory, id) ?? newFileIds[0] ?? null;
-          state.activeFileId = nextId;
-          const nextFile = state.openedFiles.find((f) => f.id === nextId);
-          state.activeFileSource = nextFile?.source ?? null;
-        }
-      } else {
-        state.rightFileIds = newFileIds;
-        state.rightTabHistory = removeFromHistory(state.rightTabHistory, id);
-        if (state.rightActiveFileId === id) {
-          const nextId = getTopOfHistory(state.rightTabHistory, id) ?? newFileIds[0] ?? null;
-          state.rightActiveFileId = nextId;
-        }
+      const newFileIds = group.fileIds.filter((fid) => fid !== id);
+      group.fileIds = newFileIds;
+      group.tabHistory = removeFromHistory(group.tabHistory, id);
+      if (group.activeFileId === id) {
+        group.activeFileId = getTopOfHistory(group.tabHistory, id) ?? newFileIds[0] ?? null;
       }
 
-      const stillOpen = state.leftFileIds.includes(id) || state.rightFileIds.includes(id);
+      // 检查文件是否仍被任何组引用
+      const stillOpen = state.editorGroups.some((g) => g.fileIds.includes(id));
       if (!stillOpen) {
         state.openedFiles = state.openedFiles.filter((f) => f.id !== id);
-        // 清理快照和镜像内容
-        delete state.editorSnapshots[`${id}::0`];
-        delete state.editorSnapshots[`${id}::1`];
-        delete state.mirrorContent[`${id}::0`];
-        delete state.mirrorContent[`${id}::1`];
-      }
-      // 文件不再跨面板存在时清理镜像，但先同步剩余面板内容
-      const stillMirrored = state.leftFileIds.includes(id) && state.rightFileIds.includes(id);
-      if (!stillMirrored) {
-        // 将残留的镜像内容同步回共享文件
-        const remainingGroup = state.leftFileIds.includes(id) ? 0 : (state.rightFileIds.includes(id) ? 1 : -1);
-        if (remainingGroup >= 0) {
-          const remainingContent = state.mirrorContent[`${id}::${remainingGroup}`];
-          if (remainingContent !== undefined) {
-            const file = state.openedFiles.find((f) => f.id === id);
-            if (file) file.content = remainingContent;
-          }
-        }
-        delete state.mirrorContent[`${id}::0`];
-        delete state.mirrorContent[`${id}::1`];
+        // 清理所有组的快照和镜像
+        state.editorGroups.forEach((_, idx) => {
+          delete state.editorSnapshots[`${id}::${idx}`];
+          delete state.mirrorContent[`${id}::${idx}`];
+        });
       }
 
-      if (state.leftFileIds.length === 0 && state.rightFileIds.length === 0) {
-        state.activeFileId = null;
-        state.activeFileSource = null;
-        state.rightActiveFileId = null;
+      // 文件不再跨组存在时，同步镜像内容回共享文件
+      const groupsWithFile = state.editorGroups.filter((g) => g.fileIds.includes(id));
+      if (groupsWithFile.length <= 1) {
+        if (groupsWithFile.length === 1) {
+          const gIdx = state.editorGroups.indexOf(groupsWithFile[0]);
+          if (gIdx >= 0) {
+            const remainingContent = state.mirrorContent[`${id}::${gIdx}`];
+            if (remainingContent !== undefined) {
+              const file = state.openedFiles.find((f) => f.id === id);
+              if (file) file.content = remainingContent;
+            }
+          }
+        }
+        // 清理所有组的镜像（遍历所有可能的旧组索引）
+        const maxGroups = state.editorGroups.length;
+        for (let i = 0; i < maxGroups; i++) {
+          delete state.mirrorContent[`${id}::${i}`];
+        }
       }
 
-      // 当一侧面板无 tab 而另一侧有 tab 时，自动收起分屏
-      if (state.rightFileIds.length === 0 && state.leftFileIds.length > 0) {
-        state.splitPhase = 'closed';
-        state.rightActiveFileId = null;
-        state.rightTabHistory = [];
-        state.activeGroupIndex = 0;
-      } else if (state.leftFileIds.length === 0 && state.rightFileIds.length > 0) {
-        // 左面板空了，把右侧内容迁移到左侧
-        state.leftFileIds = state.rightFileIds;
-        state.activeFileId = state.rightActiveFileId;
-        if (state.activeFileId) {
-          const af = state.openedFiles.find((f) => f.id === state.activeFileId);
-          state.activeFileSource = af?.source ?? null;
+      // 焦点组空了 → 迁移焦点到最近的非空组
+      if (group.fileIds.length === 0) {
+        let newFocus = -1;
+        for (let i = 0; i < state.editorGroups.length; i++) {
+          if (state.editorGroups[i].fileIds.length > 0) { newFocus = i; break; }
         }
-        // 同步镜像内容
-        for (const id of state.rightFileIds) {
-          const mirrored = state.mirrorContent[`${id}::1`];
-          if (mirrored !== undefined) {
-            const file = state.openedFiles.find((f) => f.id === id);
-            if (file) file.content = mirrored;
-          }
-          delete state.mirrorContent[`${id}::0`];
-          delete state.mirrorContent[`${id}::1`];
-        }
-        state.rightFileIds = [];
-        state.rightActiveFileId = null;
-        state.rightTabHistory = [];
-        state.activeGroupIndex = 0;
-        state.splitPhase = 'closed';
+        if (newFocus >= 0) state.activeGroupIndex = newFocus;
       }
+
+      removeEmptyGroups(state);
+      syncGlobalActive(state);
     },
+
     activateFile: (state, action) => {
       const id = action.payload as string;
-      const fileIds = state.activeGroupIndex === 0 ? state.leftFileIds : state.rightFileIds;
-
-      if (!fileIds.includes(id)) {
-        fileIds.push(id);
+      const group = activeGroup(state);
+      if (!group.fileIds.includes(id)) {
+        group.fileIds.push(id);
       }
-
-      if (state.activeGroupIndex === 0) {
-        state.activeFileId = id;
-        state.leftTabHistory = pushToHistory(state.leftTabHistory, id);
-        const file = state.openedFiles.find((f) => f.id === id);
-        if (file) {
-          state.activeFileSource = file.source;
-        }
-      } else {
-        state.rightActiveFileId = id;
-        state.rightTabHistory = pushToHistory(state.rightTabHistory, id);
-        // 同步更新 activeFileSource
-        const file = state.openedFiles.find((f) => f.id === id);
-        if (file) {
-          state.activeFileSource = file.source;
-        }
-      }
+      group.activeFileId = id;
+      group.tabHistory = pushToHistory(group.tabHistory, id);
+      syncGlobalActive(state);
     },
-    /** Ctrl+Tab MRU 导航：在 activeGroupIndex 的面板内切换到历史栈上一个 */
+
     navigateTabHistory: (state, action) => {
       const direction = (action.payload as 'forward' | 'backward') || 'backward';
-      const isLeft = state.activeGroupIndex === 0;
-      const history = isLeft ? state.leftTabHistory : state.rightTabHistory;
-      const currentId = isLeft ? state.activeFileId : state.rightActiveFileId;
-
-      if (history.length <= 1) return;
-
+      const group = activeGroup(state);
+      if (group.tabHistory.length <= 1) return;
       if (direction === 'backward') {
-        // 在历史栈中找上一个（跳过当前 active 的）
-        const target = getTopOfHistory(history, currentId);
+        const target = getTopOfHistory(group.tabHistory, group.activeFileId);
         if (target) {
-          if (isLeft) {
-            state.activeFileId = target;
-            const file = state.openedFiles.find((f) => f.id === target);
-            if (file) state.activeFileSource = file.source;
-            state.leftTabHistory = pushToHistory(state.leftTabHistory, target);
-          } else {
-            state.rightActiveFileId = target;
-            const file = state.openedFiles.find((f) => f.id === target);
-            if (file) state.activeFileSource = file.source;
-            state.rightTabHistory = pushToHistory(state.rightTabHistory, target);
-          }
+          group.activeFileId = target;
+          group.tabHistory = pushToHistory(group.tabHistory, target);
+          syncGlobalActive(state);
         }
       }
     },
+
     setFileContent: (state, action) => {
       const { id, content } = action.payload as { id: string; content: string };
-      // 同文件跨面板编辑：存入镜像而非直接覆盖共享内容
-      const isMirrored = state.leftFileIds.includes(id) && state.rightFileIds.includes(id);
+      // 跨组编辑：存入镜像
+      const groupsWithFile = state.editorGroups.filter((g) => g.fileIds.includes(id));
+      const isMirrored = groupsWithFile.length > 1;
       if (isMirrored) {
         state.mirrorContent[`${id}::${state.activeGroupIndex}`] = content;
       }
       const file = state.openedFiles.find((f) => f.id === id);
       if (file) {
-        if (!isMirrored) {
-          file.content = content;
-        }
+        if (!isMirrored) file.content = content;
         file.isDirty = true;
         file.isPreview = false;
       }
     },
-    /** 设置镜像文件内容（跨面板编辑时用） */
+
     setMirrorFileContent: (state, action) => {
-      const { fileId, groupIndex, content } = action.payload as {
-        fileId: string;
-        groupIndex: number;
-        content: string;
-      };
+      const { fileId, groupIndex, content } = action.payload as { fileId: string; groupIndex: number; content: string };
       state.mirrorContent[`${fileId}::${groupIndex}`] = content;
       const file = state.openedFiles.find((f) => f.id === fileId);
       if (file) {
@@ -409,39 +378,45 @@ const workspaceSlice = createSlice({
         file.isPreview = false;
       }
     },
+
     pinPreviewFile: (state) => {
-      const fileIds = state.activeGroupIndex === 0 ? state.leftFileIds : state.rightFileIds;
-      const previewId = fileIds.find((fid) => {
+      const group = activeGroup(state);
+      const previewId = group.fileIds.find((fid) => {
         const f = state.openedFiles.find((of) => of.id === fid);
         return f?.isPreview;
       });
       if (previewId) {
         const preview = state.openedFiles.find((f) => f.id === previewId);
-        if (preview) {
-          preview.isPreview = false;
-        }
+        if (preview) preview.isPreview = false;
       }
     },
+
     markFileSaved: (state, action) => {
       const id = action.payload as string;
       const file = state.openedFiles.find((f) => f.id === id);
-      if (file) { file.isDirty = false; }
+      if (file) file.isDirty = false;
     },
+
     setSearchHighlight: (state, action) => {
       state.searchHighlight = action.payload as SearchHighlight;
     },
+
     clearSearchHighlight: (state) => {
       state.searchHighlight = null;
     },
+
     setClipboard: (state, action) => {
       state.clipboard = action.payload as ClipboardItem | null;
     },
+
     clearClipboard: (state) => {
       state.clipboard = null;
     },
+
     setPendingSearchQuery: (state, action) => {
       state.pendingSearchQuery = action.payload as string | null;
     },
+
     expandToFile: (state, action) => {
       const filePath = action.payload as string;
       const parts = filePath.split('/');
@@ -453,75 +428,101 @@ const workspaceSlice = createSlice({
       }
       state.expandPaths = paths;
     },
+
     clearExpandPaths: (state) => {
       state.expandPaths = [];
     },
+
     toggleExpandDir: (state, action) => {
       const { path, expand } = action.payload as { path: string; expand: boolean };
       if (expand) {
-        if (!state.expandedDirs.includes(path)) {
-          state.expandedDirs.push(path);
-        }
+        if (!state.expandedDirs.includes(path)) state.expandedDirs.push(path);
       } else {
         state.expandedDirs = state.expandedDirs.filter((p) => p !== path);
       }
     },
+
+    /** 在当前焦点组右侧新建分屏列（始终新建，不切换关闭） */
     toggleSplitView: (state) => {
-      if (state.rightFileIds.length === 0) {
-        state.splitPhase = 'opening';
-        if (state.activeFileId) {
-          state.rightFileIds = [state.activeFileId];
-          state.rightActiveFileId = state.activeFileId;
-          // 同文件跨面板：初始化镜像内容
-          const mirroredFile = state.openedFiles.find((f) => f.id === state.activeFileId);
-          if (mirroredFile) {
-            state.mirrorContent[`${state.activeFileId}::0`] = mirroredFile.content;
-            state.mirrorContent[`${state.activeFileId}::1`] = mirroredFile.content;
-          }
+      const totalOpen = state.editorGroups.reduce((s, g) => s + g.fileIds.length, 0);
+      if (totalOpen === 0) return;
+      state.splitPhase = 'opening';
+      const srcGroup = activeGroup(state);
+      const newGroup: EditorGroup = {
+        id: `g${state.nextGroupId++}`,
+        fileIds: srcGroup.activeFileId ? [srcGroup.activeFileId] : [],
+        activeFileId: srcGroup.activeFileId,
+        tabHistory: srcGroup.activeFileId ? [srcGroup.activeFileId] : [],
+        ratio: 1,
+      };
+      state.editorGroups.splice(state.activeGroupIndex + 1, 0, newGroup);
+      state.activeGroupIndex = state.activeGroupIndex + 1;
+
+      if (srcGroup.activeFileId) {
+        const mirroredId = srcGroup.activeFileId;
+        const mirroredFile = state.openedFiles.find((f) => f.id === mirroredId);
+        if (mirroredFile) {
+          state.mirrorContent[`${mirroredId}::${state.activeGroupIndex - 1}`] = mirroredFile.content;
+          state.mirrorContent[`${mirroredId}::${state.activeGroupIndex}`] = mirroredFile.content;
         }
-        state.activeGroupIndex = 1;
-        state.splitPhase = 'open';
-      } else {
-        state.splitPhase = 'closing';
-        // 关闭前同步镜像内容回共享文件
-        for (const id of state.rightFileIds) {
-          if (!state.leftFileIds.includes(id)) {
-            state.leftFileIds.push(id);
-          }
-          const mirrored = state.mirrorContent[`${id}::1`];
+      }
+      state.splitPhase = 'open';
+      syncGlobalActive(state);
+    },
+
+    /** 合并所有组到第一个（手动关闭所有分屏） */
+    collapseAllGroups: (state) => {
+      if (state.editorGroups.length <= 1) return;
+      state.splitPhase = 'closing';
+      const primary = state.editorGroups[0];
+      for (let i = 1; i < state.editorGroups.length; i++) {
+        const g = state.editorGroups[i];
+        for (const id of g.fileIds) {
+          if (!primary.fileIds.includes(id)) primary.fileIds.push(id);
+          const mirrored = state.mirrorContent[`${id}::${i}`];
           if (mirrored !== undefined) {
             const file = state.openedFiles.find((f) => f.id === id);
-            if (file) {
-              file.content = mirrored;
-            }
+            if (file) file.content = mirrored;
           }
-          delete state.mirrorContent[`${id}::0`];
-          delete state.mirrorContent[`${id}::1`];
         }
-        state.rightFileIds = [];
-        state.rightActiveFileId = null;
-        state.rightTabHistory = [];
-        state.activeGroupIndex = 0;
-        state.splitPhase = 'closed';
+        g.fileIds.forEach((id) => { delete state.mirrorContent[`${id}::${i}`]; });
+      }
+      for (const key of Object.keys(state.mirrorContent)) { delete state.mirrorContent[key]; }
+      state.editorGroups = [primary];
+      state.activeGroupIndex = 0;
+      state.splitPhase = 'closed';
+      syncGlobalActive(state);
+    },
+
+    setActiveGroup: (state, action) => {
+      const idx = action.payload as number;
+      if (idx >= 0 && idx < state.editorGroups.length) {
+        state.activeGroupIndex = idx;
+        syncGlobalActive(state);
       }
     },
-    setActiveGroup: (state, action) => {
-      state.activeGroupIndex = action.payload as number;
-    },
-    /** 保存编辑器快照 */
+
     saveEditorSnapshot: (state, action) => {
       const { fileId, groupIndex, snapshot } = action.payload as {
-        fileId: string;
-        groupIndex: number;
-        snapshot: EditorSnapshot;
+        fileId: string; groupIndex: number; snapshot: EditorSnapshot;
       };
       state.editorSnapshots[`${fileId}::${groupIndex}`] = snapshot;
     },
-    /** 设置面板分割比例 */
-    setSplitRatio: (state, action) => {
-      state.splitRatio = Math.max(0.5, Math.min(4.0, action.payload as number));
+
+    /** 设置指定组的 flex 比例 */
+    setGroupRatio: (state, action) => {
+      const { groupIndex, ratio } = action.payload as { groupIndex: number; ratio: number };
+      if (state.editorGroups[groupIndex]) {
+        state.editorGroups[groupIndex].ratio = Math.max(0.3, Math.min(4.0, ratio));
+      }
+    },
+
+    /** 均匀化所有组的比例 */
+    equalizeGroupRatios: (state) => {
+      for (const g of state.editorGroups) g.ratio = 1;
     },
   },
+
   extraReducers: (builder) => {
     builder
       .addCase(loadDirectory.fulfilled, (state, action) => {
@@ -532,44 +533,52 @@ const workspaceSlice = createSlice({
       .addCase(openFile.fulfilled, (state, action) => {
         if (!action.payload) return;
         const file = action.payload;
-        const fileIds = state.activeGroupIndex === 0 ? state.leftFileIds : state.rightFileIds;
-
         if (!state.openedFiles.find((f) => f.id === file.id)) {
           state.openedFiles.push({ ...file, isPreview: true });
         }
+        const group = activeGroup(state);
 
-        // 文件已在当前面板 tab 列表中：直接激活
-        if (fileIds.includes(file.id)) {
-          if (state.activeGroupIndex === 0) {
-            state.activeFileId = file.id;
-            state.activeFileSource = file.source;
-            state.leftTabHistory = pushToHistory(state.leftTabHistory, file.id);
-          } else {
-            state.rightActiveFileId = file.id;
-            state.activeFileSource = file.source;
-            state.rightTabHistory = pushToHistory(state.rightTabHistory, file.id);
-          }
+        // 已在当前组 → 直接激活
+        if (group.fileIds.includes(file.id)) {
+          group.activeFileId = file.id;
+          group.tabHistory = pushToHistory(group.tabHistory, file.id);
+          syncGlobalActive(state);
           return;
         }
 
-        // 在当前面板 active Tab 后面插入新 tab
-        const activeId = state.activeGroupIndex === 0 ? state.activeFileId : state.rightActiveFileId;
-        const activeIndex = activeId ? fileIds.indexOf(activeId) : -1;
-        if (activeIndex >= 0) {
-          fileIds.splice(activeIndex + 1, 0, file.id);
-        } else {
-          fileIds.push(file.id);
+        // 查找当前组内的预览 Tab，存在则替换它（不新增 tab）
+        const previewFileId = group.fileIds.find((fid) => {
+          const f = state.openedFiles.find((of) => of.id === fid);
+          return f?.isPreview;
+        });
+        if (previewFileId) {
+          const previewIdx = group.fileIds.indexOf(previewFileId);
+          // 如果预览 Tab 不再被其他组引用，从 openedFiles 移除旧文件
+          const stillUsed = state.editorGroups.some((g) => g.id !== group.id && g.fileIds.includes(previewFileId));
+          if (!stillUsed) {
+            state.openedFiles = state.openedFiles.filter((f) => f.id !== previewFileId);
+            delete state.editorSnapshots[`${previewFileId}::${state.activeGroupIndex}`];
+            delete state.mirrorContent[`${previewFileId}::${state.activeGroupIndex}`];
+          }
+          // 替换 tab 列表中的旧文件 ID
+          group.fileIds[previewIdx] = file.id;
+          group.tabHistory = removeFromHistory(group.tabHistory, previewFileId);
+          group.activeFileId = file.id;
+          group.tabHistory = pushToHistory(group.tabHistory, file.id);
+          syncGlobalActive(state);
+          return;
         }
 
-        if (state.activeGroupIndex === 0) {
-          state.activeFileId = file.id;
-          state.activeFileSource = file.source;
-          state.leftTabHistory = pushToHistory(state.leftTabHistory, file.id);
+        // 插入到当前 active tab 后面
+        const activeIdx = group.activeFileId ? group.fileIds.indexOf(group.activeFileId) : -1;
+        if (activeIdx >= 0) {
+          group.fileIds.splice(activeIdx + 1, 0, file.id);
         } else {
-          state.rightActiveFileId = file.id;
-          state.activeFileSource = file.source;
-          state.rightTabHistory = pushToHistory(state.rightTabHistory, file.id);
+          group.fileIds.push(file.id);
         }
+        group.activeFileId = file.id;
+        group.tabHistory = pushToHistory(group.tabHistory, file.id);
+        syncGlobalActive(state);
       })
       .addCase(fetchRecentProjects.fulfilled, (state, action) => {
         state.recentProjects = action.payload;
@@ -589,9 +598,10 @@ const workspaceSlice = createSlice({
           file.content = content;
           file.isDirty = false;
         }
-        // 清理所有镜像内容（已同步到共享文件）
-        delete state.mirrorContent[`${id}::0`];
-        delete state.mirrorContent[`${id}::1`];
+        // 清理所有组镜像
+        state.editorGroups.forEach((_, idx) => {
+          delete state.mirrorContent[`${id}::${idx}`];
+        });
       })
       .addCase(refreshGitStatus.fulfilled, (state, action) => {
         state.gitStatus = action.payload;
@@ -606,7 +616,7 @@ export const {
   closeFile, activateFile, navigateTabHistory, setFileContent, setMirrorFileContent, markFileSaved,
   pinPreviewFile, setSearchHighlight, clearSearchHighlight, setClipboard,
   clearClipboard, setPendingSearchQuery, expandToFile, clearExpandPaths,
-  toggleExpandDir, toggleSplitView, setActiveGroup, saveEditorSnapshot, setSplitRatio,
+  toggleExpandDir, toggleSplitView, collapseAllGroups, setActiveGroup, saveEditorSnapshot, setGroupRatio, equalizeGroupRatios,
 } = workspaceSlice.actions;
 
 export default workspaceSlice.reducer;

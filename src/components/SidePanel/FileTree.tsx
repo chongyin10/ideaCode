@@ -5,7 +5,7 @@ import type { GitStatusMap, GitStatusCode } from '../../types/electron';
 import { isSameSource } from '../../services/fileService';
 import type { FileClipboardItem } from '../../services/fileClipboard';
 import InlineInput from '../InlineInput';
-import { StaticFileIcon, StaticClosedFolderIcon, MemoFolderIcon } from './FileTree.icons';
+import { FileIcon, ClosedFolderIcon, DefaultFileIcon } from './FileTree.icons';
 
 export interface PendingCreate {
   parentSource: FileSource;
@@ -100,6 +100,10 @@ const FileTree = memo(({
   // 展开状态由外部 expandedDirs 控制
   const expanded = expandedDirs?.includes(entryRelPath) ?? false;
 
+  // 用 ref 存储最新 expanded 值，避免 useCallback 闭包捕获过期值
+  const expandedRef = useRef(expanded);
+  expandedRef.current = expanded;
+
   // 由当前节点自行判断是否匹配 pending 状态
   const myPendingCreateType =
     pendingCreate && entry.kind === 'directory' && isSameSource(entry.source, pendingCreate.parentSource)
@@ -173,8 +177,8 @@ const FileTree = memo(({
   useEffect(() => {
     if (entry.kind !== 'directory') return;
 
-    // QuickOpen 触发的展开
-    if (expandPaths?.length && expandPaths.includes(entryRelPath) && !expanded && !autoExpandedRef.current) {
+    // QuickOpen 触发的展开 — expandPaths 变化时重置 ref 以确保优先展开
+    if (expandPaths?.length && expandPaths.includes(entryRelPath) && !expanded) {
       autoExpandedRef.current = true;
       onToggleExpandRef.current?.(entryRelPath, true);
     }
@@ -188,7 +192,6 @@ const FileTree = memo(({
       activeFileExpandedRef.current = true;
       onToggleExpandRef.current?.(entryRelPath, true);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expandPaths, activeSource, entryRelPath, entry.kind, entry.source, expanded]);
 
   const isActive = activeSource ? isSameSource(entry.source, activeSource) : false;
@@ -213,12 +216,16 @@ const FileTree = memo(({
       onItemSelect?.(entry, parentSource, false);
 
       if (entry.kind === 'directory') {
-        onToggleExpand?.(entryRelPath, !expanded);
+        // 手动折叠时标记为已操作，防止 containsActiveFile effect 立刻重新展开
+        if (expandedRef.current) {
+          activeFileExpandedRef.current = true;
+        }
+        onToggleExpand?.(entryRelPath, !expandedRef.current);
       } else {
         onOpenFile(entry);
       }
     },
-    [entry, entryRelPath, parentSource, expanded, onOpenFile, onItemSelect, onToggleExpand]
+    [entry, entryRelPath, parentSource, onOpenFile, onItemSelect, onToggleExpand]
   );
 
   const refreshChildren = useCallback(async () => {
@@ -251,11 +258,7 @@ const FileTree = memo(({
           )}
         </span>
         <span className="tree-item__icon">
-          {entry.kind === 'directory' ? (
-            <MemoFolderIcon expanded={expanded} />
-          ) : (
-            <StaticFileIcon />
-          )}
+          <FileIcon name={entry.name} kind={entry.kind} expanded={expanded} />
         </span>
         {myIsRenaming ? (
           <InlineInput
@@ -278,7 +281,7 @@ const FileTree = memo(({
         >
           <span className="tree-item__indent" />
           <span className="tree-item__icon">
-            {myPendingCreateType === 'file' ? <StaticFileIcon /> : <StaticClosedFolderIcon />}
+            {myPendingCreateType === 'file' ? <DefaultFileIcon /> : <ClosedFolderIcon />}
           </span>
           <InlineInput
             placeholder={myPendingCreateType === 'file' ? '请输入文件名' : '请输入文件夹名'}

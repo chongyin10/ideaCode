@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Search, FileText, Settings } from 'lucide-react';
+import { Search, Settings } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import { openFile, expandToFile } from '../../store/slices/workspaceSlice';
 import { quickOpenFiles } from '../../services/searchService';
 import type { QuickOpenItem } from '../../services/searchService';
 import type { FileEntry } from '../../services/fileService';
+import { FileIcon } from '../SidePanel/FileTree.icons';
 import './QuickOpen.css';
 
 const DEFAULT_EXCLUDES = 'node_modules, .git, dist, build';
@@ -193,7 +194,7 @@ const QuickOpen = ({ onClose, files }: QuickOpenProps) => {
                 onMouseEnter={() => setSelectedIndex(index)}
               >
                 <span className="quick-open-item__icon">
-                  <FileText size={16} strokeWidth={1.5} />
+                  <FileIcon name={item.name} kind="file" />
                 </span>
                 <div className="quick-open-item__info">
                   <FilePathHighlight path={item.path} highlights={item.highlights} />
