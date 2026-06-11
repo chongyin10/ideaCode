@@ -19,7 +19,7 @@
 }
 
 .side-panel__header {
-  height: 40px;
+  height: 30px;
   padding: 0 16px;
   display: flex;
   align-items: center;
@@ -60,7 +60,7 @@
 
 .side-panel__actions {
   padding: 0px 8px;
-  margin-bottom: 4px;
+  margin-bottom: 0px;
 }
 
 .side-panel__actions-btns {
@@ -100,6 +100,26 @@
 
 .folder-tree {
   font-size: 13px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+}
+
+/* 细滚动条 — Webkit (Chrome/Edge/Safari) + Firefox */
+.folder-tree::-webkit-scrollbar {
+  width: 5px;
+}
+
+.folder-tree::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.folder-tree::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
+}
+
+.folder-tree::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.22);
 }
 
 /* ─── Explorer 头部栏 ─── */
@@ -107,8 +127,7 @@
 .explorer-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 4px 4px 4px 0;
+  padding: 0 5px 0 0;
   min-height: 28px;
 }
 
@@ -128,6 +147,9 @@
   display: flex;
   gap: 1px;
   flex-shrink: 0;
+  margin-left: auto;
+  position: absolute;
+  right: 4px;
 }
 
 .explorer-header__icon {

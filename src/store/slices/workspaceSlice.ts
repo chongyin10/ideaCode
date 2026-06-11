@@ -445,6 +445,7 @@ const workspaceSlice = createSlice({
 
     clearExpandPaths: (state) => {
       state.expandPaths = [];
+      state.expandedDirs = [];
     },
 
     toggleExpandDir: (state, action) => {

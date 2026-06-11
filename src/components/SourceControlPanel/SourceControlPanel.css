@@ -5,6 +5,25 @@
   font-size: 12px;
   color: #cccccc;
   overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+}
+
+.scm-panel::-webkit-scrollbar {
+  width: 5px;
+}
+
+.scm-panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scm-panel::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
+}
+
+.scm-panel::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.22);
 }
 
 /* ─── 头部：提交 + 工具栏 ─── */
