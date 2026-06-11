@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { Check, Loader2, FolderOpen } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import { loadDirectory } from '../../store/slices/workspaceSlice';
@@ -14,6 +14,14 @@ const GitSetupPanel = () => {
   const error = useAppSelector((s) => s.git.error);
   const cloneProgress = useAppSelector((s) => s.git.cloneProgress);
   const clonePercent = useAppSelector((s) => s.git.clonePercent);
+  const [eta, setEta] = useState<number | null>(null);
+
+  // 监听 ETA 消息
+  useEffect(() => {
+    if (cloneProgress.startsWith('eta:')) {
+      setEta(parseInt(cloneProgress.slice(4), 10) || null);
+    }
+  }, [cloneProgress]);
 
   const [repoUrl, setRepoUrl] = useState('');
   const [clonePath, setClonePath] = useState('');
@@ -63,11 +71,9 @@ const GitSetupPanel = () => {
         <div className="gitsetup-progress">
           <h2>{clonePercent > 0 ? `正在克隆... ${clonePercent}%` : '正在克隆仓库...'}</h2>
           <div className="gitsetup-progress__bar">
-            <div
-              className="gitsetup-progress__fill"
-              style={{ width: `${Math.max(clonePercent, 3)}%` }}
-            />
+            <div className="gitsetup-progress__fill" style={{ width: `${Math.max(clonePercent, 3)}%` }} />
           </div>
+          {eta !== null && <span className="gitsetup-progress__eta">预计剩余 {eta} 秒</span>}
           {cloneProgress && (
             <pre className="gitsetup-progress__log">{cloneProgress}</pre>
           )}

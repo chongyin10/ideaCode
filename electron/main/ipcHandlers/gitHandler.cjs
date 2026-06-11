@@ -240,7 +240,6 @@ function registerGitHandlers() {
     const safeUrl = repoUrl.replace(/['"\\;|&`$!]/g, '');
     const safePath = targetPath.replace(/['"\\;|&`$!]/g, '');
     const sender = event.sender;
-    const CLONE_TIMEOUT = 120000;
 
     return new Promise((resolve, reject) => {
       const child = spawn('git', ['clone', '--progress', safeUrl, safePath], {
@@ -248,40 +247,75 @@ function registerGitHandlers() {
       });
 
       let resolved = false;
+
+      // #3 自适应超时: 初始 120s，进度 >30% 时用 sigmoid 扩展到 max 900s
+      const BASE_TIMEOUT = 120000;
+      const MAX_TIMEOUT = 900000;
+      let currentTimeout = BASE_TIMEOUT;
+      let timer = null;
+      let lastPercent = 0;
+      // #2 ETA: 记录进度采样
+      const samples = [];
+
+      const scheduleTimeout = (pct) => {
+        if (timer) clearTimeout(timer);
+        // sigmoid 扩展: 进度越高超时越大
+        if (pct > 10) {
+          currentTimeout = Math.min(
+            BASE_TIMEOUT + 180000 * (1 / (1 + Math.exp(-0.08 * (pct - 35)))),
+            MAX_TIMEOUT
+          );
+        }
+        timer = setTimeout(() => {
+          done(`克隆超时（超过 ${Math.round(currentTimeout / 1000)} 秒，进度 ${pct}%）`, null);
+        }, currentTimeout);
+      };
+      scheduleTimeout(0);
+
       const done = (err, result) => {
         if (resolved) return;
         resolved = true;
-        clearTimeout(timer);
+        if (timer) clearTimeout(timer);
         child.kill('SIGTERM');
         err ? reject(err) : resolve(result);
       };
 
-      // 手动超时（spawn 不支持 timeout 选项）
-      const timer = setTimeout(() => {
-        done(`克隆超时（超过 ${CLONE_TIMEOUT / 1000} 秒）`, null);
-      }, CLONE_TIMEOUT);
-
       let lastProgress = '';
-
       const sendProgress = (text) => {
         if (text && text !== lastProgress) {
           lastProgress = text;
-          try { sender.send(Channels.GIT_CLONE_PROGRESS, text); } catch { /* 窗口可能已关闭 */ }
+          try { sender.send(Channels.GIT_CLONE_PROGRESS, text); } catch {}
         }
       };
 
       child.stderr.on('data', (data) => {
         const text = data.toString().trim();
-        // git clone --progress 输出到 stderr
         const lines = text.split('\n').filter(Boolean);
         for (const line of lines) {
           sendProgress(line);
-          // 解析百分比：Receiving objects:  45% (123/456)
           const pct = line.match(/(\d+)%/)
             || line.match(/Resolving deltas:\s+(\d+)%/)
             || line.match(/Compressing objects:\s+(\d+)%/);
           if (pct) {
-            try { sender.send(Channels.GIT_CLONE_PROGRESS, `percent:${pct[1]}`); } catch {}
+            const val = parseInt(pct[1], 10);
+            lastPercent = val;
+            samples.push({ time: Date.now(), pct: val });
+            if (samples.length > 8) samples.shift();
+            try { sender.send(Channels.GIT_CLONE_PROGRESS, `percent:${val}`); } catch {}
+            scheduleTimeout(val);
+            // #2 ETA: 用最近 3+ 个样本做线性回归预测
+            if (samples.length >= 3) {
+              const n = samples.length;
+              let sx = 0, sy = 0, sxx = 0, sxy = 0;
+              for (const s of samples) { sx += s.time; sy += s.pct; sxx += s.time * s.time; sxy += s.time * s.pct; }
+              const slope = (n * sxy - sx * sy) / (n * sxx - sx * sx);
+              if (slope > 0) {
+                const eta = Math.round((100 - val) / slope / 1000);
+                if (eta > 0) {
+                  try { sender.send(Channels.GIT_CLONE_PROGRESS, `eta:${eta}`); } catch {}
+                }
+              }
+            }
           }
         }
       });

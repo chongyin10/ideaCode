@@ -25,6 +25,7 @@ import {
   refreshAllFilePaths,
   clearExpandPaths,
   toggleExpandDir,
+  closeDiffView,
 } from '../../store/slices/workspaceSlice';
 import { setShowCloneForm, refreshGitStatus as refreshGitSliceStatus } from '../../store/slices/gitSlice';
 import { switchPanel } from '../../store/slices/layoutSlice';
@@ -584,6 +585,7 @@ const ExplorerContent = () => {
   }, [contextMenu, rootSource, startCreate, startRename, handleFindInFiles, handlePaste, notifyChange, selectedEntries, wrapWithClickTracking]);
 
   const stableOnOpenFile = useCallback((entry: FileEntry) => {
+    dispatch(closeDiffView());
     dispatch(openFile(entry));
   }, [dispatch]);
 

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, memo } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react';
 import { ChevronRight } from 'lucide-react';
 import type { FileEntry, FileSource } from '../../services/fileService';
 import type { GitStatusMap, GitStatusCode } from '../../types/electron';
@@ -200,7 +200,25 @@ const FileTree = memo(({
     (item) => item.action === 'cut' && isSameSource(entry.source, item.source)
   ) ?? false;
 
+  // 文件的 git 状态
   const gitCode: GitStatusCode | undefined = gitStatus?.[entryRelPath];
+
+  // 目录的派生 git 状态：检查是否有任何子文件被 git 跟踪变更
+  const dirGitCode: GitStatusCode | undefined = useMemo(() => {
+    if (entry.kind !== 'directory' || !gitStatus) return undefined;
+    const prefix = entryRelPath + '/';
+    for (const key of Object.keys(gitStatus)) {
+      if (key.startsWith(prefix)) {
+        const code = gitStatus[key];
+        // 优先级: M > U > A > D > R
+        return code;
+      }
+    }
+    return undefined;
+  }, [entry.kind, entryRelPath, gitStatus]);
+
+  // 实际生效的状态码（目录用派生值，文件用直接值）
+  const activeGitCode = entry.kind === 'directory' ? dirGitCode : gitCode;
 
   const handleClick = useCallback(
     async (e: React.MouseEvent) => {
@@ -262,7 +280,7 @@ const FileTree = memo(({
         style={{ paddingLeft: 12 + level * 12 }}
         onClick={handleClick}
       >
-        <span className={`tree-item__chevron ${expanded ? 'expanded' : ''}`} style={entry.kind !== 'directory' ? { display: 'none' } : undefined}>
+        <span className={`tree-item__chevron ${expanded ? 'expanded' : ''}`} >
           {entry.kind === 'directory' ? (
             <ChevronRight size={12} strokeWidth={1.5} />
           ) : (
@@ -281,9 +299,15 @@ const FileTree = memo(({
             onCancel={() => onRenameCancel?.()}
           />
         ) : (
-          <span className="tree-item__label">{entry.name}</span>
+          <span className={`tree-item__label ${activeGitCode ? 'git-' + activeGitCode.toLowerCase() : ''}`}>{entry.name}</span>
         )}
-        {gitCode && <span className={`git-status ${gitCode}`}>{gitCode}</span>}
+        {activeGitCode && (
+          entry.kind === 'directory' ? (
+            <span className="git-dot" title="包含修改" />
+          ) : (
+            <span className={`git-status ${activeGitCode}`}>{activeGitCode}</span>
+          )
+        )}
       </div>
 
       {expanded && myPendingCreateType && (

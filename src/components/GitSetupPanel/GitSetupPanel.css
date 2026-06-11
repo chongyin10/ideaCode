@@ -205,6 +205,11 @@
   font-size: 12px;
 }
 
+.gitsetup-progress__eta {
+  color: #73c991;
+  font-size: 11px;
+}
+
 .gitsetup-progress__log {
   background: #1e1e1e;
   color: #6a9955;

@@ -5,36 +5,23 @@ import { gitService } from '../../services/gitService';
 /* ─── State ─── */
 
 interface GitState {
-  /** 暂存区文件状态 */
   staged: Record<string, string>;
-  /** 工作区文件状态 */
   changes: Record<string, string>;
-  /** 合并冲突 */
   merge: Record<string, string>;
-  /** 未跟踪文件 */
   untracked: Record<string, string>;
-  /** 当前分支名 */
   branch: string;
-  /** 所有分支 */
   branches: GitBranch[];
-  /** 远程仓库 */
   remotes: GitRemote[];
-  /** 超前/落后 */
   behindAhead: GitBehindAhead;
-  /** 提交日志 */
   log: string[];
-  /** 暂存列表 */
   stashes: string[];
-  /** 正在加载 */
   loading: boolean;
-  /** 错误信息 */
   error: string | null;
-  /** 在内容区域显示克隆表单 */
   showCloneForm: boolean;
-  /** 克隆进度文本（流式输出） */
   cloneProgress: string;
-  /** 克隆百分比 */
   clonePercent: number;
+  /** #12 熔断器: 连续失败计数 */
+  failureCount: number;
 }
 
 const initialState: GitState = {
@@ -53,6 +40,7 @@ const initialState: GitState = {
   showCloneForm: false,
   cloneProgress: '',
   clonePercent: 0,
+  failureCount: 0,
 };
 
 /* ─── Thunks ─── */
@@ -118,7 +106,11 @@ export const stageFiles = createAsyncThunk(
   async (files: string[], { getState, dispatch }) => {
     const root = getRootPath(getState() as { workspace: { rootSource: unknown } });
     if (!root) throw new Error('no project');
-    await gitService.stage(root, files);
+    // #1 分块批量暂存: 单批 ≤50 个文件，避免 shell 参数过长
+    const BATCH = 50;
+    for (let i = 0; i < files.length; i += BATCH) {
+      await gitService.stage(root, files.slice(i, i + BATCH));
+    }
     dispatch(refreshGitStatus());
   }
 );
@@ -298,6 +290,8 @@ const gitSlice = createSlice({
       state.cloneProgress = '';
       state.clonePercent = 0;
     },
+    /** #12 熔断器: 重置失败计数 */
+    resetFailureCount: (state) => { state.failureCount = 0; },
   },
   extraReducers: (builder) => {
     builder
@@ -332,13 +326,18 @@ const gitSlice = createSlice({
       )
       .addMatcher(
         (action) => action.type.startsWith('git/') && action.type.endsWith('/fulfilled'),
-        (state) => { state.loading = false; }
+        (state) => { state.loading = false; state.failureCount = 0; }
       )
       .addMatcher(
         (action) => action.type.startsWith('git/') && action.type.endsWith('/rejected'),
         (state, action) => {
           state.loading = false;
           state.error = (action.error as { message?: string }).message || '操作失败';
+          // #12 熔断器: 连续失败计数
+          state.failureCount = (state.failureCount || 0) + 1;
+          if (state.failureCount >= 5) {
+            state.error = 'Git 操作连续失败，请检查仓库状态。点击刷新重试。';
+          }
         }
       );
   },
