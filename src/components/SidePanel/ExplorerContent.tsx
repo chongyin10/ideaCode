@@ -14,6 +14,7 @@ import {
   RefreshCw,
   ChevronsDownUp,
   Download,
+  ChevronRight,
 } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import {
@@ -26,6 +27,7 @@ import {
   clearExpandPaths,
   toggleExpandDir,
   closeDiffView,
+  activateFile,
 } from '../../store/slices/workspaceSlice';
 import { setShowCloneForm, refreshGitStatus as refreshGitSliceStatus } from '../../store/slices/gitSlice';
 import { switchPanel } from '../../store/slices/layoutSlice';
@@ -149,6 +151,13 @@ const ExplorerContent = () => {
   const gitStatus = useMemo(() => ({ ...gitStaged, ...gitChanges, ...gitMerge, ...gitUntracked }), [gitStaged, gitChanges, gitMerge, gitUntracked]);
   const expandPaths = useAppSelector((state) => state.workspace.expandPaths);
   const expandedDirs = useAppSelector((state) => state.workspace.expandedDirs);
+  const openedFiles = useAppSelector((state) => state.workspace.openedFiles);
+  const activeFileId = useAppSelector((state) => state.workspace.activeFileId);
+
+  // 各区域展开状态
+  const [openEditorsExpanded, setOpenEditorsExpanded] = useState(true);
+  const [projectExpanded, setProjectExpanded] = useState(true);
+  const [timelineExpanded, setTimelineExpanded] = useState(false);
 
   // expandPaths 只在 QuickOpen 触发时设置一次，延迟清空避免影响后续手动折叠/展开
   const processedExpandPathsRef = useRef('');
@@ -629,42 +638,9 @@ const ExplorerContent = () => {
 
   return (
     <div className="folder-tree" onContextMenu={handleBlankContextMenu}>
-      <div className="side-panel__actions">
-        {rootSource ? (
-          <div className="explorer-header">
-            <span className="explorer-header__title">{rootName}</span>
-            <span className="explorer-header__tools">
-              <button
-                className="explorer-header__icon"
-                title="新建文件"
-                onClick={() => startCreate(rootSource, 'file')}
-              >
-                <FilePlus size={14} strokeWidth={1.5} />
-              </button>
-              <button
-                className="explorer-header__icon"
-                title="新建文件夹"
-                onClick={() => startCreate(rootSource, 'folder')}
-              >
-                <FolderPlus size={14} strokeWidth={1.5} />
-              </button>
-              <button
-                className="explorer-header__icon"
-                title="刷新"
-                onClick={() => dispatch(refreshDirectory(rootSource))}
-              >
-                <RefreshCw size={14} strokeWidth={1.5} />
-              </button>
-              <button
-                className="explorer-header__icon"
-                title="折叠所有"
-                onClick={() => dispatch(clearExpandPaths())}
-              >
-                <ChevronsDownUp size={14} strokeWidth={1.5} />
-              </button>
-            </span>
-          </div>
-        ) : (
+      {/* 空状态 */}
+      {!rootSource && (
+        <div className="side-panel__actions">
           <div className="explorer-empty">
             <p className="explorer-empty__text">尚未打开文件夹</p>
             <div className="explorer-empty__btns">
@@ -678,36 +654,145 @@ const ExplorerContent = () => {
               </button>
             </div>
           </div>
-        )}
-      </div>
-      {rootSource && entries.map((entry) => (
-        <FileTree
-          key={`${entry.name}:${entry.kind}`}
-          entry={entry}
-          level={0}
-          activeSource={activeFileSource}
-          onOpenFile={stableOnOpenFile}
-          parentSource={rootSource}
-          rootSource={rootSource}
-          onFindInFiles={handleFindInFiles}
-          onContextMenu={stableOnContextMenu}
-          pendingCreate={pendingCreate}
-          onCreateConfirm={handleCreateConfirm}
-          onCreateCancel={handleCreateCancel}
-          pendingRename={pendingRename}
-          onRenameConfirm={handleRenameConfirm}
-          onRenameCancel={handleRenameCancel}
-          lastOperation={lastOperation}
-          clipboardItems={clipboardState?.items}
-          selectedEntries={selectedEntries.map((s) => s.entry)}
-          onItemSelect={handleItemSelect}
-          gitStatus={gitStatus}
-          expandPaths={expandPaths}
-          expandedDirs={expandedDirs}
-          onToggleExpand={stableOnToggleExpand}
-        />
-      ))}
-      {renderRootInlineInput()}
+        </div>
+      )}
+
+      {rootSource && (
+        <>
+          {/* ── 打开的编辑器 ── */}
+          <div className="explorer-section">
+            <div
+              className="explorer-section__header"
+              onClick={() => setOpenEditorsExpanded(!openEditorsExpanded)}
+            >
+              <ChevronRight
+                size={12}
+                strokeWidth={1.5}
+                className={openEditorsExpanded ? 'explorer-rotated' : ''}
+              />
+              <span className="explorer-section__title">打开的编辑器</span>
+            </div>
+            {openEditorsExpanded && (
+              <div className="explorer-section__content">
+                {openedFiles.length === 0 && (
+                  <div className="explorer-open-editor explorer-open-editor--empty">
+                    没有打开的编辑器
+                  </div>
+                )}
+                {openedFiles.map((file) => (
+                  <div
+                    key={file.id}
+                    className={`explorer-open-editor ${file.id === activeFileId ? 'active' : ''}`}
+                    onClick={() => dispatch(activateFile(file.id))}
+                    title={typeof file.source === 'string' ? file.source : file.name}
+                  >
+                    <span className="explorer-open-editor__name">{file.name}</span>
+                    {file.isDirty && <span className="explorer-open-editor__dirty" />}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* ── IDEACODE 项目结构 ── */}
+          <div className="explorer-section">
+            <div
+              className="explorer-section__header"
+              onClick={() => setProjectExpanded(!projectExpanded)}
+            >
+              <ChevronRight
+                size={12}
+                strokeWidth={1.5}
+                className={projectExpanded ? 'explorer-rotated' : ''}
+              />
+              <span className="explorer-section__title">{rootName || 'IDEACODE'}</span>
+              <span className="explorer-section__tools">
+                <button
+                  className="explorer-header__icon"
+                  title="新建文件"
+                  onClick={(e) => { e.stopPropagation(); startCreate(rootSource, 'file'); }}
+                >
+                  <FilePlus size={14} strokeWidth={1.5} />
+                </button>
+                <button
+                  className="explorer-header__icon"
+                  title="新建文件夹"
+                  onClick={(e) => { e.stopPropagation(); startCreate(rootSource, 'folder'); }}
+                >
+                  <FolderPlus size={14} strokeWidth={1.5} />
+                </button>
+                <button
+                  className="explorer-header__icon"
+                  title="刷新"
+                  onClick={(e) => { e.stopPropagation(); dispatch(refreshDirectory(rootSource)); }}
+                >
+                  <RefreshCw size={14} strokeWidth={1.5} />
+                </button>
+                <button
+                  className="explorer-header__icon"
+                  title="折叠所有"
+                  onClick={(e) => { e.stopPropagation(); dispatch(clearExpandPaths()); }}
+                >
+                  <ChevronsDownUp size={14} strokeWidth={1.5} />
+                </button>
+              </span>
+            </div>
+            {projectExpanded && (
+              <div className="explorer-section__content">
+                {entries.map((entry) => (
+                  <FileTree
+                    key={`${entry.name}:${entry.kind}`}
+                    entry={entry}
+                    level={0}
+                    activeSource={activeFileSource}
+                    onOpenFile={stableOnOpenFile}
+                    parentSource={rootSource}
+                    rootSource={rootSource}
+                    onFindInFiles={handleFindInFiles}
+                    onContextMenu={stableOnContextMenu}
+                    pendingCreate={pendingCreate}
+                    onCreateConfirm={handleCreateConfirm}
+                    onCreateCancel={handleCreateCancel}
+                    pendingRename={pendingRename}
+                    onRenameConfirm={handleRenameConfirm}
+                    onRenameCancel={handleRenameCancel}
+                    lastOperation={lastOperation}
+                    clipboardItems={clipboardState?.items}
+                    selectedEntries={selectedEntries.map((s) => s.entry)}
+                    onItemSelect={handleItemSelect}
+                    gitStatus={gitStatus}
+                    expandPaths={expandPaths}
+                    expandedDirs={expandedDirs}
+                    onToggleExpand={stableOnToggleExpand}
+                  />
+                ))}
+                {renderRootInlineInput()}
+              </div>
+            )}
+          </div>
+
+          {/* ── 时间线 ── */}
+          <div className="explorer-section">
+            <div
+              className="explorer-section__header"
+              onClick={() => setTimelineExpanded(!timelineExpanded)}
+            >
+              <ChevronRight
+                size={12}
+                strokeWidth={1.5}
+                className={timelineExpanded ? 'explorer-rotated' : ''}
+              />
+              <span className="explorer-section__title">时间线</span>
+            </div>
+            {timelineExpanded && (
+              <div className="explorer-section__content">
+                <div className="explorer-timeline--empty">时间线功能即将推出</div>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
       <ContextMenu
         items={buildMenuItems()}
         x={contextMenu.x}

@@ -44,8 +44,9 @@
 
 .side-panel__content {
   flex: 1;
-  overflow: auto;
-  padding: 4px 8px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 0px;
   opacity: 0;
   transform: translateX(-6px);
   transition:
@@ -169,6 +170,118 @@
 .explorer-header__icon:hover {
   background: rgba(255, 255, 255, 0.08);
   color: #cccccc;
+}
+
+/* ─── VS Code 风格可折叠区域 ─── */
+
+.explorer-section {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.explorer-section__header {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 11px;
+  font-weight: 600;
+  color: #bbbbbb;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  transition: background 0.1s;
+  position: relative;
+}
+
+.explorer-section__header:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: #cccccc;
+}
+
+.explorer-section__title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.explorer-section__tools {
+  display: flex;
+  gap: 1px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.explorer-section__header:hover .explorer-section__tools {
+  opacity: 1;
+}
+
+.explorer-section__content {
+  padding-bottom: 0;
+}
+
+.explorer-rotated {
+  transform: rotate(90deg);
+  transition: transform 0.15s ease;
+}
+
+/* ─── 打开的编辑器 ─── */
+
+.explorer-open-editor {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px 3px 26px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #cccccc;
+  transition: background 0.1s;
+}
+
+.explorer-open-editor:hover {
+  background: #2a2d2e;
+}
+
+.explorer-open-editor.active {
+  background-color: #37373d;
+  color: #fff;
+}
+
+.explorer-open-editor--empty {
+  color: #5a5a5a;
+  cursor: default;
+  font-style: italic;
+  padding: 6px 8px 6px 26px;
+}
+
+.explorer-open-editor--empty:hover {
+  background: none;
+}
+
+.explorer-open-editor__name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.explorer-open-editor__dirty {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #cccccc;
+  flex-shrink: 0;
+}
+
+/* ─── 时间线 ─── */
+
+.explorer-timeline--empty {
+  color: #5a5a5a;
+  font-style: italic;
+  padding: 8px 8px 8px 26px;
+  font-size: 13px;
 }
 
 /* 树形缩进引导线 */
