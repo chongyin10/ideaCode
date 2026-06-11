@@ -72,6 +72,17 @@ const Channels = {
   GIT_CLONE: 'git:clone',
   GIT_CLONE_PROGRESS: 'git:cloneProgress',
   GIT_IS_REPO: 'git:isRepo',
+
+  /* ─── tsserver LSP ─── */
+  TSSERVER_START: 'tsserver:start',
+  TSSERVER_STOP: 'tsserver:stop',
+  TSSERVER_OPEN: 'tsserver:open',
+  TSSERVER_CLOSE: 'tsserver:close',
+  TSSERVER_CHANGE: 'tsserver:change',
+  TSSERVER_COMPLETIONS: 'tsserver:completions',
+  TSSERVER_DEFINITION: 'tsserver:definition',
+  TSSERVER_QUICKINFO: 'tsserver:quickinfo',
+  TSSERVER_DIAGNOSTICS: 'tsserver:diagnostics',
 };
 
 /**
@@ -181,6 +192,19 @@ const electronAPI = {
     clone: (repoUrl, targetPath) => ipcRenderer.invoke(Channels.GIT_CLONE, repoUrl, targetPath),
     onCloneProgress: (callback) => onChannel(Channels.GIT_CLONE_PROGRESS, callback),
     isRepo: (dirPath) => ipcRenderer.invoke(Channels.GIT_IS_REPO, dirPath),
+  },
+
+  /** tsserver LSP — TypeScript 语言服务 */
+  tsserver: {
+    start: (root) => ipcRenderer.invoke(Channels.TSSERVER_START, root),
+    stop: () => ipcRenderer.invoke(Channels.TSSERVER_STOP),
+    open: (file, content) => ipcRenderer.invoke(Channels.TSSERVER_OPEN, file, content),
+    close: (file) => ipcRenderer.invoke(Channels.TSSERVER_CLOSE, file),
+    change: (file, content) => ipcRenderer.invoke(Channels.TSSERVER_CHANGE, file, content),
+    completions: (file, line, offset) => ipcRenderer.invoke(Channels.TSSERVER_COMPLETIONS, file, line, offset),
+    definition: (file, line, offset) => ipcRenderer.invoke(Channels.TSSERVER_DEFINITION, file, line, offset),
+    quickInfo: (file, line, offset) => ipcRenderer.invoke(Channels.TSSERVER_QUICKINFO, file, line, offset),
+    onDiagnostics: (cb) => onChannel(Channels.TSSERVER_DIAGNOSTICS, cb),
   },
 };
 

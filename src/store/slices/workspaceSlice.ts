@@ -175,6 +175,8 @@ export const loadDirectory = createAsyncThunk(
     const entries = await readDirectory(source);
     if (isPath(source)) {
       try { await addRecentProject(source, name); } catch { /* 忽略 */ }
+      // 启动 tsserver 语言服务
+      try { window.electronAPI?.tsserver?.start(source); } catch { /* tsserver 未可用 */ }
     }
     dispatch(refreshGitStatus());
     dispatch(refreshAllFilePaths(source));
@@ -231,6 +233,11 @@ export const saveFile = createAsyncThunk(
     const contentToSave = state.mirrorContent[mirrorKey] ?? file.content;
     await writeFile(file.source, contentToSave);
     dispatch(refreshGitStatus());
+    // 同步刷新 Git Slice 状态（FileTree 读取此 slice）
+    try {
+      const { refreshGitStatus: refreshGitSliceStatus } = await import('./gitSlice');
+      dispatch(refreshGitSliceStatus());
+    } catch { /* gitSlice 可能未初始化 */ }
     return { id, groupIndex: gIdx, content: contentToSave };
   }
 );
@@ -551,6 +558,13 @@ const workspaceSlice = createSlice({
     updateDiffView: (state, action) => {
       state.diffView = action.payload as DiffView;
     },
+
+    /** 设置文件的语法高亮语言 */
+    setFileLanguage: (state, action) => {
+      const { id, language } = action.payload as { id: string; language: string };
+      const file = state.openedFiles.find((f) => f.id === id);
+      if (file) file.language = language;
+    },
   },
 
   extraReducers: (builder) => {
@@ -647,7 +661,7 @@ export const {
   pinPreviewFile, setSearchHighlight, clearSearchHighlight, setClipboard,
   clearClipboard, setPendingSearchQuery, expandToFile, clearExpandPaths,
   toggleExpandDir, toggleSplitView, collapseAllGroups, setActiveGroup, saveEditorSnapshot, setGroupRatio, equalizeGroupRatios,
-  openDiffView, closeDiffView, updateDiffView,
+  openDiffView, closeDiffView, updateDiffView, setFileLanguage,
 } = workspaceSlice.actions;
 
 export default workspaceSlice.reducer;

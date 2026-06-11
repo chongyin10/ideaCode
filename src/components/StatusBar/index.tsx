@@ -1,10 +1,37 @@
 import { useState, useMemo } from 'react';
-import { GitBranch, AlertCircle, XCircle, FileText } from 'lucide-react';
-import { useAppSelector } from '../../store/hooks';
+import { GitBranch, AlertCircle, XCircle, FileText, ChevronDown } from 'lucide-react';
+import { useAppSelector, useAppDispatch } from '../../store/hooks';
+import { setFileLanguage } from '../../store/slices/workspaceSlice';
 import { isPath } from '../../services/fileService';
 import './StatusBar.css';
 
+const LANGUAGES = [
+  'typescript',
+  'javascript',
+  'css', 'html', 'json',
+  'markdown', 'python', 'java',
+  'xml', 'yaml', 'sql', 'shell',
+  'plaintext',
+];
+
+const LANG_DISPLAY: Record<string, string> = {
+  typescript: 'TypeScript',
+  javascript: 'JavaScript',
+  css: 'CSS',
+  html: 'HTML',
+  json: 'JSON',
+  markdown: 'Markdown',
+  python: 'Python',
+  java: 'Java',
+  xml: 'XML',
+  yaml: 'YAML',
+  sql: 'SQL',
+  shell: 'Shell',
+  plaintext: 'Plain Text',
+};
+
 const StatusBar = () => {
+  const dispatch = useAppDispatch();
   const [pathMode, setPathMode] = useState<'relative' | 'absolute'>('relative');
   const { openedFiles, activeFileId, rootSource, rootName } = useAppSelector(
     (state) => state.workspace
@@ -15,6 +42,8 @@ const StatusBar = () => {
   const mergeCount = Object.keys(useAppSelector((state) => state.git.merge)).length;
   const untrackedCount = Object.keys(useAppSelector((state) => state.git.untracked)).length;
   const totalChanges = stagedCount + changesCount + mergeCount + untrackedCount;
+
+  const [langOpen, setLangOpen] = useState(false);
 
   const activeFile = useMemo(
     () => openedFiles.find((f) => f.id === activeFileId),
@@ -75,7 +104,30 @@ const StatusBar = () => {
       <div className="status-bar__right">
         <span>Ln 12, Col 34</span>
         <span>UTF-8</span>
-        <span>TypeScript</span>
+        {activeFile && (
+          <div className="status-bar__lang">
+            <button className="status-bar__lang-btn" onClick={() => setLangOpen(!langOpen)} title="选择语言模式">
+              {LANG_DISPLAY[activeFile.language] || activeFile.language}
+              <ChevronDown size={10} strokeWidth={1.5} />
+            </button>
+            {langOpen && (
+              <div className="status-bar__lang-dropdown">
+                {LANGUAGES.map((lang) => (
+                    <button
+                    key={lang}
+                    className={`status-bar__lang-opt ${lang === activeFile.language ? 'active' : ''}`}
+                    onClick={() => {
+                      dispatch(setFileLanguage({ id: activeFile.id, language: lang }));
+                      setLangOpen(false);
+                    }}
+                  >
+                    {LANG_DISPLAY[lang] || lang}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         <span>Prettier</span>
       </div>
     </div>

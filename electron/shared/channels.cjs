@@ -42,6 +42,7 @@ const Channels = {
   EXTENSION_HOST_STOP: 'extensionHost:stop',
   EXTENSION_HOST_RPC: 'extensionHost:rpc',
   EXTENSION_HOST_MESSAGE: 'extensionHost:message',
+  EXTENSION_MESSAGE: 'extensionHost:message',  // 兼容旧引用
 
   /* ─── 应用生命周期 ─── */
   APP_QUIT: 'app:quit',
@@ -78,9 +79,16 @@ const Channels = {
   GIT_CLONE_PROGRESS: 'git:cloneProgress',
   GIT_IS_REPO: 'git:isRepo',
 
-  /* ─── 推送型通道 (主进程 → 渲染进程) ─── */
-  FS_CHANGE: 'fs:change',
-  EXTENSION_MESSAGE: 'extension:message',
+  /* ─── tsserver LSP ─── */
+  TSSERVER_START: 'tsserver:start',
+  TSSERVER_STOP: 'tsserver:stop',
+  TSSERVER_OPEN: 'tsserver:open',
+  TSSERVER_CLOSE: 'tsserver:close',
+  TSSERVER_CHANGE: 'tsserver:change',
+  TSSERVER_COMPLETIONS: 'tsserver:completions',
+  TSSERVER_DEFINITION: 'tsserver:definition',
+  TSSERVER_QUICKINFO: 'tsserver:quickinfo',
+  TSSERVER_DIAGNOSTICS: 'tsserver:diagnostics',
 };
 
 module.exports = { Channels };

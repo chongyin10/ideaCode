@@ -99,6 +99,26 @@
   color: #d4b98d;
 }
 
+.tab-bar__name.git-m {
+  color: #cca700;
+}
+
+.tab-bar__name.git-a {
+  color: #73c991;
+}
+
+.tab-bar__name.git-u {
+  color: #73c991;
+}
+
+.tab-bar__name.git-d {
+  color: #f85149;
+}
+
+.tab-bar__name.git-r {
+  color: #4a9eff;
+}
+
 .tab-bar__close {
   font-size: 14px;
   opacity: 0.4;

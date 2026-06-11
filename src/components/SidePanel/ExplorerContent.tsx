@@ -679,17 +679,23 @@ const ExplorerContent = () => {
                     没有打开的编辑器
                   </div>
                 )}
-                {openedFiles.map((file) => (
-                  <div
-                    key={file.id}
-                    className={`explorer-open-editor ${file.id === activeFileId ? 'active' : ''}`}
-                    onClick={() => dispatch(activateFile(file.id))}
-                    title={typeof file.source === 'string' ? file.source : file.name}
-                  >
-                    <span className="explorer-open-editor__name">{file.name}</span>
-                    {file.isDirty && <span className="explorer-open-editor__dirty" />}
-                  </div>
-                ))}
+                {openedFiles.map((file) => {
+                  const fileRelPath = typeof file.source === 'string' && typeof rootSource === 'string' && rootSource
+                    ? file.source.replace(rootSource + '/', '')
+                    : '';
+                  const fileGitCode = fileRelPath ? gitStatus[fileRelPath] : '';
+                  return (
+                    <div
+                      key={file.id}
+                      className={`explorer-open-editor ${file.id === activeFileId ? 'active' : ''}`}
+                      onClick={() => dispatch(activateFile(file.id))}
+                      title={typeof file.source === 'string' ? file.source : file.name}
+                    >
+                      <span className={`explorer-open-editor__name ${fileGitCode ? 'git-' + fileGitCode.toLowerCase() : ''}`}>{file.name}</span>
+                      {file.isDirty && <span className="explorer-open-editor__dirty" />}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>

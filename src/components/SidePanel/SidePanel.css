@@ -267,6 +267,26 @@
   white-space: nowrap;
 }
 
+.explorer-open-editor__name.git-m {
+  color: #cca700;
+}
+
+.explorer-open-editor__name.git-a {
+  color: #73c991;
+}
+
+.explorer-open-editor__name.git-u {
+  color: #73c991;
+}
+
+.explorer-open-editor__name.git-d {
+  color: #f85149;
+}
+
+.explorer-open-editor__name.git-r {
+  color: #4a9eff;
+}
+
 .explorer-open-editor__dirty {
   width: 6px;
   height: 6px;

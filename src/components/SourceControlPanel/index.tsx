@@ -50,7 +50,8 @@ function sortByHebbian(entries: { path: string; code: string }[]): { path: strin
 /* ─── #6 贝叶斯语言推断 ─── */
 
 const LANG_BASE: Record<string, string> = {
-  ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript',
+  ts: 'typescript', tsx: 'typescript',
+  js: 'javascript', jsx: 'javascript',
   mjs: 'javascript', cjs: 'javascript',
   css: 'css', scss: 'css', sass: 'css', less: 'css',
   html: 'html', htm: 'html', json: 'json',

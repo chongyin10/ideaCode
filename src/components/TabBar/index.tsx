@@ -2,7 +2,7 @@ import { X, Columns2 } from 'lucide-react';
 import './TabBar.css';
 
 interface TabBarProps {
-  tabs: { id: string; name: string; isDirty?: boolean; isPreview?: boolean }[];
+  tabs: { id: string; name: string; isDirty?: boolean; isPreview?: boolean; gitStatus?: string }[];
   activeId: string | null;
   onActivate: (id: string) => void;
   onClose: (id: string) => void;
@@ -29,7 +29,7 @@ const TabBar = ({ tabs, activeId, onActivate, onClose, onPin, onSplitView, split
               }
             }}
           >
-            <span className={`tab-bar__name ${tab.isDirty ? 'dirty' : ''}`}>{tab.name}</span>
+            <span className={`tab-bar__name ${tab.isDirty ? 'dirty' : ''} ${tab.gitStatus ? 'git-' + tab.gitStatus.toLowerCase() : ''}`}>{tab.name}</span>
             {tab.isDirty && <span className="tab-bar__dirty">●</span>}
             <span
               className="tab-bar__close"

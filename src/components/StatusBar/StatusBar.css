@@ -77,3 +77,62 @@
   cursor: default;
   transition: opacity 0.15s ease;
 }
+
+/* 语言选择器 */
+.status-bar__lang {
+  position: relative;
+}
+
+.status-bar__lang-btn {
+  background: none;
+  border: none;
+  color: #858585;
+  cursor: pointer;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 2px;
+  transition: color 0.15s ease;
+}
+
+.status-bar__lang-btn:hover {
+  color: #cccccc;
+}
+
+.status-bar__lang-dropdown {
+  position: absolute;
+  bottom: 100%;
+  right: 0;
+  margin-bottom: 4px;
+  background: #252526;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  max-height: 200px;
+  overflow-y: auto;
+  z-index: 1000;
+  min-width: 160px;
+}
+
+.status-bar__lang-opt {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: #cccccc;
+  font-size: 12px;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.status-bar__lang-opt:hover {
+  background: #094771;
+}
+
+.status-bar__lang-opt.active {
+  color: #fff;
+  background: #094771;
+}

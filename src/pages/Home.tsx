@@ -19,7 +19,6 @@ import {
   setGroupRatio,
   equalizeGroupRatios,
 } from '../store/slices/workspaceSlice';
-import { refreshGitStatus as refreshGitSliceStatus } from '../store/slices/gitSlice';
 import { openDirectory } from '../services/fileService';
 import TabBar from '../components/TabBar';
 import MonacoEditor from '../components/MonacoEditor';
@@ -83,6 +82,13 @@ function Home() {
   const splitView = editorGroups.length > 1;
   const showCloneForm = useAppSelector((state) => state.git.showCloneForm);
   const diffView = useAppSelector((state) => state.workspace.diffView);
+  const rootSource = useAppSelector((state) => state.workspace.rootSource);
+  const rootPath = typeof rootSource === 'string' ? rootSource : '';
+  const gitStaged = useAppSelector((s) => s.git.staged);
+  const gitChanges = useAppSelector((s) => s.git.changes);
+  const gitMerge = useAppSelector((s) => s.git.merge);
+  const gitUntracked = useAppSelector((s) => s.git.untracked);
+  const gitStatus = useMemo(() => ({ ...gitStaged, ...gitChanges, ...gitMerge, ...gitUntracked }), [gitStaged, gitChanges, gitMerge, gitUntracked]);
 
   const [quickOpenVisible, setQuickOpenVisible] = useState(false);
 
@@ -121,8 +127,7 @@ function Home() {
         e.preventDefault();
         const g = ws.editorGroups[ws.activeGroupIndex];
         if (g?.activeFileId) {
-          dispatch(saveFile({ id: g.activeFileId, groupIndex: ws.activeGroupIndex }))
-            .then(() => { dispatch(refreshGitSliceStatus()); });
+          dispatch(saveFile({ id: g.activeFileId, groupIndex: ws.activeGroupIndex }));
         }
       }
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'Tab') {
@@ -294,7 +299,19 @@ function Home() {
       return (
         <>
           <TabBar
-            tabs={tabs.map((f) => ({ id: f.id, name: f.name, isDirty: f.isDirty, isPreview: f.isPreview }))}
+            tabs={tabs.map((f) => {
+              const relPath = typeof f.source === 'string' && rootPath
+                ? f.source.replace(rootPath + '/', '')
+                : '';
+              const gitCode = relPath ? gitStatus[relPath] : '';
+              return {
+                id: f.id,
+                name: f.name,
+                isDirty: f.isDirty,
+                isPreview: f.isPreview,
+                gitStatus: gitCode,
+              };
+            })}
             activeId={group.activeFileId}
             onActivate={(id) => dispatch(activateFile(id))}
             onClose={(id) => handleCloseTab(id, groupIndex)}
@@ -309,6 +326,7 @@ function Home() {
                 key={`${file.id}-g${groupIndex}`}
                 value={panelContent ?? file.content}
                 language={file.language}
+                path={file.name}
                 onChange={handleEditorChange(group.activeFileId, groupIndex)}
                 snapshot={snapshot}
                 onSnapshot={saveSnapshot}
@@ -326,7 +344,7 @@ function Home() {
         </>
       );
     },
-    [dispatch, handleCloseTab, handleEditorChange, handleOpenQuickOpen, splitView, getPanelContent]
+    [dispatch, handleCloseTab, handleEditorChange, handleOpenQuickOpen, splitView, getPanelContent, rootPath, gitStatus]
   );
 
   return (

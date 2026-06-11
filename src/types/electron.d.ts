@@ -181,6 +181,19 @@ export interface ElectronAPI {
     onCloneProgress: (callback: (data: string) => void) => () => void;
     isRepo: (dirPath: string) => Promise<boolean>;
   };
+
+  /** tsserver LSP */
+  tsserver: {
+    start: (root: string) => Promise<boolean>;
+    stop: () => Promise<boolean>;
+    open: (file: string, content: string) => Promise<any>;
+    close: (file: string) => Promise<void>;
+    change: (file: string, content: string) => Promise<void>;
+    completions: (file: string, line: number, offset: number) => Promise<any[]>;
+    definition: (file: string, line: number, offset: number) => Promise<any[]>;
+    quickInfo: (file: string, line: number, offset: number) => Promise<any>;
+    onDiagnostics: (cb: (data: any) => void) => () => void;
+  };
 }
 
 declare global {
