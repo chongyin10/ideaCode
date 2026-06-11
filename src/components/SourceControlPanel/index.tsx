@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
-  Plus, Check, RefreshCw, GitBranch, GitPullRequest,
-  ChevronRight, Download, Loader2, Ellipsis, Undo2,
+  Plus, Minus, Check, RefreshCw, GitBranch, GitPullRequest,
+  ChevronRight, Download, Loader2, Ellipsis, Undo2, FileText,
 } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import { openFile, openDiffView } from '../../store/slices/workspaceSlice';
@@ -95,6 +95,13 @@ const SourceControlPanel = () => {
   const handleDiscard = useCallback((file: string) => {
     if (window.confirm(`确定要丢弃 "${file}" 的更改吗？`)) dispatch(discardFile(file));
   }, [dispatch]);
+  /** 打开文件到编辑器（正常模式，非 diff） */
+  const handleOpenFileNormal = useCallback((filePath: string) => {
+    if (!rootPath) return;
+    const base = rootPath.replace(/\/$/, '');
+    const file = filePath.replace(/^\//, '');
+    dispatch(openFile({ name: filePath, kind: 'file', source: `${base}/${file}` }));
+  }, [dispatch, rootPath]);
   const handleInit = useCallback(() => dispatch(initRepo()), [dispatch]);
 
   /** 渲染一个可折叠的文件分组 */
@@ -217,9 +224,10 @@ const SourceControlPanel = () => {
 
       {/* ── 暂存的更改 ── */}
       {renderSection('暂存的更改', stagedEntries, stagedOpen, setStagedOpen, 'undo', [
-        { label: '全部取消暂存', icon: Undo2, handler: handleUnstageAll },
+        { label: '全部取消暂存', icon: Minus, handler: handleUnstageAll },
       ], [
-        { icon: Undo2, handler: handleUnstage, title: '取消暂存' },
+        { icon: Minus, handler: handleUnstage, title: '取消暂存' },
+        { icon: FileText, handler: handleOpenFileNormal, title: '打开文件' },
       ])}
 
       {/* ── 更改 ── */}
@@ -228,10 +236,13 @@ const SourceControlPanel = () => {
       ], [
         { icon: Plus, handler: handleStage, title: '暂存' },
         { icon: Undo2, handler: handleDiscard, title: '丢弃更改' },
+        { icon: FileText, handler: handleOpenFileNormal, title: '打开文件' },
       ])}
 
       {/* ── 合并更改 ── */}
-      {renderSection('合并更改', mergeEntries, mergeOpen, setMergeOpen, 'alert', [], [])}
+      {renderSection('合并更改', mergeEntries, mergeOpen, setMergeOpen, 'alert', [], [
+        { icon: FileText, handler: handleOpenFileNormal, title: '打开文件' },
+      ])}
 
       {/* ── 未跟踪的文件 ── */}
       {renderSection('未跟踪的文件', untrackedEntries, untrackedOpen, setUntrackedOpen, 'plus', [
@@ -241,6 +252,7 @@ const SourceControlPanel = () => {
         }},
       ], [
         { icon: Plus, handler: handleStage, title: '暂存' },
+        { icon: FileText, handler: handleOpenFileNormal, title: '打开文件' },
       ])}
 
       {/* ── Stash ── */}
