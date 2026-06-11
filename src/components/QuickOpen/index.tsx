@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Search, FileText, Settings, X } from 'lucide-react';
+import { Search, FileText, Settings } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import { openFile, expandToFile } from '../../store/slices/workspaceSlice';
 import { quickOpenFiles } from '../../services/searchService';
@@ -32,6 +32,7 @@ function parseQuery(raw: string): { prefix: string; query: string } {
 
 interface QuickOpenProps {
   onClose: () => void;
+  files?: string[];
 }
 
 /**
@@ -44,9 +45,10 @@ interface QuickOpenProps {
  * 算法核心：动态规划计算最优匹配得分，支持不连续字符匹配
  * 时间复杂度：O(m × n)，m=输入长度, n=文件路径长度
  */
-const QuickOpen = ({ onClose }: QuickOpenProps) => {
+const QuickOpen = ({ onClose, files }: QuickOpenProps) => {
   const dispatch = useAppDispatch();
-  const { allFilePaths, rootSource } = useAppSelector((state) => state.workspace);
+  const { allFilePaths: storeAllFilePaths, rootSource } = useAppSelector((state) => state.workspace);
+  const allFilePaths = files ?? storeAllFilePaths;
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [showSettings, setShowSettings] = useState(false);

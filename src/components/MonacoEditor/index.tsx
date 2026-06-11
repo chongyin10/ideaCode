@@ -2,7 +2,7 @@ import Editor from '@monaco-editor/react';
 import { useRef, useEffect, useCallback } from 'react';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import { clearSearchHighlight } from '../../store/slices/workspaceSlice';
-import type { SearchHighlight } from '../../store/slices/workspaceSlice';
+import type { SearchHighlight, EditorSnapshot } from '../../store/slices/workspaceSlice';
 import './MonacoEditor.css';
 
 const Loading = () => (
@@ -16,9 +16,15 @@ interface MonacoEditorProps {
   value: string;
   language: string;
   onChange?: (value: string) => void;
+  /** 恢复光标/滚动位快照 */
+  snapshot?: EditorSnapshot;
+  /** 保存光标/滚动位快照 */
+  onSnapshot?: (snapshot: EditorSnapshot) => void;
+  /** 面板是否聚焦，非聚焦时降低渲染开销 */
+  focused?: boolean;
 }
 
-const MonacoEditor = ({ value, language, onChange }: MonacoEditorProps) => {
+const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused = true }: MonacoEditorProps) => {
   const dispatch = useAppDispatch();
   const searchHighlight = useAppSelector((state) => state.workspace.searchHighlight);
 
@@ -26,6 +32,30 @@ const MonacoEditor = ({ value, language, onChange }: MonacoEditorProps) => {
   const monacoRef = useRef<Parameters<Parameters<typeof Editor>[0]['onMount']>[1] | null>(null);
   const decorationsRef = useRef<string[]>([]);
   const pendingRef = useRef<SearchHighlight | null>(null);
+  const snapshotAppliedRef = useRef(false);
+
+  // 当 value 或 snapshot 变化时重置标记（处理不 remount 的 prop 更新）
+  useEffect(() => {
+    snapshotAppliedRef.current = false;
+  }, [value, snapshot]);
+
+  // 组件卸载时保存编辑器状态快照
+  useEffect(() => {
+    return () => {
+      if (editorRef.current && onSnapshot) {
+        try {
+          const pos = editorRef.current.getPosition();
+          const scroll = editorRef.current.getScrollTop();
+          if (pos) {
+            onSnapshot({
+              cursor: { line: pos.lineNumber, column: pos.column },
+              scrollTop: scroll,
+            });
+          }
+        } catch { /* 忽略 */ }
+      }
+    };
+  }, [onSnapshot]);
 
   const applyHighlight = useCallback(
     (editor: typeof editorRef.current, monaco: typeof monacoRef.current, hl: SearchHighlight) => {
@@ -68,13 +98,11 @@ const MonacoEditor = ({ value, language, onChange }: MonacoEditorProps) => {
     [dispatch]
   );
 
-  // 编辑器已就绪时响应 searchHighlight 变化（后续点击触发）
   useEffect(() => {
     if (!searchHighlight) return;
     const editor = editorRef.current;
     const monaco = monacoRef.current;
     if (!editor || !monaco) {
-      // 编辑器尚未就绪，暂存待 onMount 后应用
       pendingRef.current = searchHighlight;
       return;
     }
@@ -95,7 +123,20 @@ const MonacoEditor = ({ value, language, onChange }: MonacoEditorProps) => {
         monacoRef.current = monaco;
         requestAnimationFrame(() => editor.layout());
 
-        // onMount 时如有待处理的高亮，立即应用
+        // 恢复光标/滚动位快照
+        if (snapshot && !snapshotAppliedRef.current) {
+          snapshotAppliedRef.current = true;
+          requestAnimationFrame(() => {
+            try {
+              editor.setPosition({
+                lineNumber: snapshot.cursor.line,
+                column: snapshot.cursor.column,
+              });
+              editor.setScrollTop(snapshot.scrollTop);
+            } catch { /* 忽略位置越界 */ }
+          });
+        }
+
         const pending = pendingRef.current;
         if (pending) {
           pendingRef.current = null;
@@ -103,12 +144,16 @@ const MonacoEditor = ({ value, language, onChange }: MonacoEditorProps) => {
         }
       }}
       options={{
-        minimap: { enabled: true, showSlider: 'always' },
+        minimap: { enabled: focused, showSlider: 'always' },
         fontSize: 14,
         wordWrap: 'on',
         automaticLayout: true,
         scrollBeyondLastLine: false,
-        smoothScrolling: true,
+        smoothScrolling: focused,
+        renderWhitespace: focused ? 'selection' : 'none',
+        renderLineHighlight: focused ? 'all' : 'none',
+        matchBrackets: focused ? 'always' : 'never',
+        occurrencesHighlight: focused ? 'singleFile' : 'off',
       }}
     />
   );

@@ -3,10 +3,48 @@
   background-color: #1e1e1e;
   display: flex;
   align-items: flex-end;
-  overflow-x: auto;
   flex-shrink: 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   padding-left: 4px;
+}
+
+.tab-bar__tabs {
+  display: flex;
+  align-items: flex-end;
+  flex: 1;
+  overflow-x: auto;
+  min-width: 0;
+}
+
+.tab-bar__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px;
+  flex-shrink: 0;
+  height: 100%;
+}
+
+.tab-bar__action-btn {
+  background: none;
+  border: none;
+  color: #858585;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.tab-bar__action-btn:hover {
+  background-color: rgba(255, 255, 255, 0.08);
+  color: #cccccc;
+}
+
+.tab-bar__actions.split-active .tab-bar__action-btn {
+  color: #4a9eff;
 }
 
 .tab-bar__item {

@@ -242,3 +242,104 @@ kbd {
   opacity: 0;
   animation: fadeInUp 0.4s ease forwards;
 }
+
+/* 分屏布局 */
+.editor-split {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+}
+
+.editor-split__panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+  transition: opacity 0.2s ease;
+}
+
+/* 注意力引导：非聚焦面板降低视觉权重 */
+.editor-split__panel--dimmed {
+  opacity: 0.72;
+}
+
+.editor-split__panel--dimmed .tab-bar__item {
+  color: #858585;
+}
+
+.editor-split__panel--dimmed .monaco-editor {
+  filter: brightness(0.9);
+}
+
+.editor-split__divider {
+  width: 4px;
+  background: rgba(255, 255, 255, 0.04);
+  cursor: col-resize;
+  flex-shrink: 0;
+  transition: background 0.15s ease;
+  position: relative;
+  z-index: 1;
+}
+
+.editor-split__divider:hover,
+.editor-split--dragging .editor-split__divider {
+  background: rgba(74, 158, 255, 0.4);
+}
+
+.editor-split--dragging {
+  user-select: none;
+  cursor: col-resize;
+}
+
+/* 分屏开幕动画 */
+@keyframes splitReveal {
+  from { opacity: 0; transform: translateX(20px); clip-path: inset(0 0 0 100%); }
+  to { opacity: 1; transform: translateX(0); clip-path: inset(0 0 0 0); }
+}
+
+.editor-split--opening .editor-split__panel:last-child {
+  animation: splitReveal 0.2s ease forwards;
+}
+
+/* Hebbian 协同推荐 */
+.cooc-suggestions {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: #2d2d30;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 8px 10px;
+  z-index: 10;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  animation: fadeInUp 0.25s ease forwards;
+}
+
+.cooc-suggestions__label {
+  font-size: 11px;
+  color: #858585;
+  margin-bottom: 2px;
+}
+
+.cooc-suggestions__btn {
+  background: #3c3c3c;
+  color: #cccccc;
+  border: none;
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.12s ease;
+}
+
+.cooc-suggestions__btn:hover {
+  background: #4a9eff;
+  color: #fff;
+}
