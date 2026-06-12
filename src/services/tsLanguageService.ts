@@ -12,6 +12,13 @@ export interface TsDiagnostic {
   code?: number;
 }
 
+export interface TsLocation {
+  file: string;
+  start: { line: number; offset: number };
+  end: { line: number; offset: number };
+  originSelectionRange?: { start: { line: number; offset: number }; end: { line: number; offset: number } };
+}
+
 function api() {
   return window.electronAPI?.tsserver;
 }
@@ -48,7 +55,7 @@ export const tsService = {
   },
 
   /** 跳转到定义 */
-  async definition(filePath: string, line: number, offset: number) {
+  async definition(filePath: string, line: number, offset: number): Promise<TsLocation[]> {
     return api()?.definition(filePath, line, offset) ?? [];
   },
 

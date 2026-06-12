@@ -218,11 +218,22 @@ function registerTsServerHandlers() {
         const result = msg.result;
         if (!result || (Array.isArray(result) && result.length === 0)) return resolve([]);
         const locations = Array.isArray(result) ? result : [result];
-        resolve(locations.map((loc) => ({
-          file: (loc.uri || loc.targetUri || '').replace('file://', ''),
-          start: { line: loc.range?.start?.line ?? 0, offset: loc.range?.start?.character ?? 0 },
-          end: { line: loc.range?.end?.line ?? 0, offset: loc.range?.end?.character ?? 0 },
-        })));
+        resolve(locations.map((loc) => {
+          // LSP 返回 Location 或 LocationLink；LocationLink 用 targetRange/targetUri
+          const targetRange = loc.targetRange || loc.range;
+          const ret = {
+            file: (loc.uri || loc.targetUri || '').replace('file://', ''),
+            start: { line: targetRange?.start?.line ?? 0, offset: targetRange?.start?.character ?? 0 },
+            end: { line: targetRange?.end?.line ?? 0, offset: targetRange?.end?.character ?? 0 },
+          };
+          if (loc.originSelectionRange) {
+            ret.originSelectionRange = {
+              start: { line: loc.originSelectionRange.start.line, offset: loc.originSelectionRange.start.character },
+              end: { line: loc.originSelectionRange.end.line, offset: loc.originSelectionRange.end.character },
+            };
+          }
+          return ret;
+        }));
       });
       setTimeout(() => { pendingRequests.delete(id); resolve([]); }, 3000);
     });

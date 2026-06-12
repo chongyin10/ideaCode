@@ -13,6 +13,59 @@ const Loading = () => (
   </div>
 );
 
+/** 计算光标所在字符串字面量的范围（不含引号），用于让下划线覆盖整个 import 路径 */
+function getStringLiteralRange(
+  model: { getLineContent(lineNumber: number): string },
+  position: { lineNumber: number; column: number }
+) {
+  const lineContent = model.getLineContent(position.lineNumber);
+  const col = position.column - 1; // 0-based
+
+  let start = col;
+  let quote = '';
+  while (start >= 0) {
+    const ch = lineContent[start];
+    if (ch === '"' || ch === "'" || ch === '`') {
+      let escapes = 0;
+      let i = start - 1;
+      while (i >= 0 && lineContent[i] === '\\') {
+        escapes++;
+        i--;
+      }
+      if (escapes % 2 === 0) {
+        quote = ch;
+        start++;
+        break;
+      }
+    }
+    start--;
+  }
+  if (!quote) return null;
+
+  let end = col;
+  while (end < lineContent.length) {
+    const ch = lineContent[end];
+    if (ch === quote) {
+      let escapes = 0;
+      let i = end - 1;
+      while (i >= 0 && lineContent[i] === '\\') {
+        escapes++;
+        i--;
+      }
+      if (escapes % 2 === 0) break;
+    }
+    end++;
+  }
+  if (end <= start) return null;
+
+  return {
+    startLineNumber: position.lineNumber,
+    startColumn: start + 1,
+    endLineNumber: position.lineNumber,
+    endColumn: end + 1,
+  };
+}
+
 interface MonacoEditorProps {
   value: string;
   language: string;
@@ -21,9 +74,11 @@ interface MonacoEditorProps {
   onSnapshot?: (snapshot: EditorSnapshot) => void;
   focused?: boolean;
   path?: string;
+  /** Cmd/Ctrl+Click 跳转文件时的回调 */
+  onOpenFileByPath?: (path: string) => void;
 }
 
-const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused = true, path }: MonacoEditorProps) => {
+const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused = true, path, onOpenFileByPath }: MonacoEditorProps) => {
   const dispatch = useAppDispatch();
   const searchHighlight = useAppSelector((state) => state.workspace.searchHighlight);
 
@@ -38,6 +93,12 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
 
   const onSnapshotRef = useRef(onSnapshot);
   onSnapshotRef.current = onSnapshot;
+
+  const pathRef = useRef(path);
+  pathRef.current = path;
+
+  const onOpenFileByPathRef = useRef(onOpenFileByPath);
+  onOpenFileByPathRef.current = onOpenFileByPath;
 
   useEffect(() => {
     snapshotAppliedRef.current = false;
@@ -55,7 +116,9 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
         } catch { /* 忽略 */ }
       }
       // 关闭 tsserver 文件 + 清理 LSP providers
-      if (path && !isBrowser) tsService.close(path).catch(() => {});
+      if (path && !isBrowser) {
+        tsService.close(path).catch(() => {});
+      }
       diagUnsubRef.current?.();
       lspDisposablesRef.current.forEach((d) => d.dispose());
       lspDisposablesRef.current = [];
@@ -154,7 +217,7 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
         monacoRef.current = monaco;
         requestAnimationFrame(() => editor.layout());
 
-        // ── TS/TSX 编译选项 ──
+        // 处理定义跳转事件，打开目标文件
         const tsDefaults = monaco.languages.typescript.typescriptDefaults;
         tsDefaults.setCompilerOptions({
           jsx: monaco.languages.typescript.JsxEmit.React,
@@ -184,6 +247,39 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
           moduleResolution: monaco.languages.typescript.ModuleResolutionKind.NodeJs,
           esModuleInterop: true,
         });
+
+        // ── 拦截 definition / link 跳转，转到应用内文件打开 ──
+        // Monaco standalone 模式下，如果目标 model 不存在会抛 "Model not found"，
+        // 因此必须全部接管，自己处理滚动或文件打开。
+        const openerDisposable = monaco.editor.registerEditorOpener({
+          openCodeEditor(source, resource, selectionOrPosition) {
+            if (!resource) return false;
+            const targetPath = resource.path;
+            const currentPath = pathRef.current;
+            const openFile = onOpenFileByPathRef.current;
+            if (!targetPath || !openFile) return false;
+
+            // 同一文件 → 手动滚动到定义位置
+            if (targetPath === currentPath && source) {
+              const range = selectionOrPosition as {
+                lineNumber?: number; column?: number;
+                startLineNumber?: number; startColumn?: number;
+              } | undefined;
+              const line = range?.lineNumber ?? range?.startLineNumber;
+              const col = range?.column ?? range?.startColumn;
+              if (line) {
+                source.setPosition({ lineNumber: line, column: col ?? 1 });
+                source.revealPositionInCenter({ lineNumber: line, column: col ?? 1 });
+              }
+              return true;
+            }
+
+            // 不同文件 → 应用内打开
+            openFile(targetPath);
+            return true;
+          },
+        });
+        lspDisposablesRef.current.push(openerDisposable);
 
         // ── tsserver LSP 集成 ──
         if (!isBrowser && path) {
@@ -248,18 +344,53 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
           // 注册定义跳转 provider
           lspDisposablesRef.current.push(monaco.languages.registerDefinitionProvider(language, {
             provideDefinition: async (_model, position) => {
-              if (!path) return null;
-              const defs = await tsService.definition(path, position.lineNumber - 1, position.column - 1);
+              const currentPath = pathRef.current;
+              if (!currentPath) return null;
+              const defs = await tsService.definition(currentPath, position.lineNumber - 1, position.column - 1);
               if (!defs || !defs.length) return null;
-              return defs.map((d: { file: string; start: { line: number; offset: number }; end: { line: number; offset: number } }) => ({
-                uri: monaco.Uri.file(d.file),
-                range: {
-                  startLineNumber: (d.start?.line ?? 0) + 1,
-                  startColumn: (d.start?.offset ?? 0) + 1,
-                  endLineNumber: (d.end?.line ?? 0) + 1,
-                  endColumn: (d.end?.offset ?? 0) + 1,
-                },
-              }));
+
+              // 预创建目标 model，避免 Monaco 在 hover/click 阶段报 "Model not found"
+              for (const d of defs) {
+                const uri = monaco.Uri.file(d.file);
+                if (!monaco.editor.getModel(uri)) {
+                  try {
+                    const content = await window.electronAPI?.fs?.readFile(d.file);
+                    if (content !== undefined) {
+                      monaco.editor.createModel(content, undefined, uri);
+                    }
+                  } catch {}
+                }
+              }
+
+              // 对于字符串字面量中的符号（如 import 'xxx' 的路径），LSP 返回的 originSelectionRange
+              // 往往只覆盖当前单词（如 electron），导致下划线不连续。这里主动计算出整段字符串范围。
+              const stringRange = getStringLiteralRange(_model, position);
+
+              return defs.map((d: {
+                file: string;
+                start: { line: number; offset: number };
+                end: { line: number; offset: number };
+                originSelectionRange?: { start: { line: number; offset: number }; end: { line: number; offset: number } };
+              }) => {
+                const targetOrigin = d.originSelectionRange
+                  ? {
+                      startLineNumber: d.originSelectionRange.start.line + 1,
+                      startColumn: d.originSelectionRange.start.offset + 1,
+                      endLineNumber: d.originSelectionRange.end.line + 1,
+                      endColumn: d.originSelectionRange.end.offset + 1,
+                    }
+                  : undefined;
+                return {
+                  uri: monaco.Uri.file(d.file),
+                  range: {
+                    startLineNumber: (d.start?.line ?? 0) + 1,
+                    startColumn: (d.start?.offset ?? 0) + 1,
+                    endLineNumber: (d.end?.line ?? 0) + 1,
+                    endColumn: (d.end?.offset ?? 0) + 1,
+                  },
+                  originSelectionRange: stringRange ?? targetOrigin,
+                };
+              });
             },
           }));
         }
@@ -289,6 +420,9 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
         renderLineHighlight: focused ? 'all' : 'none',
         matchBrackets: focused ? 'always' : 'never',
         occurrencesHighlight: focused ? 'singleFile' : 'off',
+        gotoLocation: { multipleDefinitions: 'goto', multipleDeclarations: 'goto', multipleReferences: 'peek' },
+        // hover 优先显示在光标下方，避免靠近编辑器顶部时被 tab-bar/容器裁切
+        hover: { above: false },
       }}
     />
   );

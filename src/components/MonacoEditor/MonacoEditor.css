@@ -45,3 +45,11 @@
   border-radius: 2px;
   color: #fff !important;
 }
+
+/* ─── 按住 Cmd/Ctrl 跳转定义或链接时，只保留下划线，不要高亮背景 ─── */
+
+.monaco-editor .hoverHighlight,
+.monaco-editor .goto-definition-link,
+.monaco-editor .detected-link-active {
+  background-color: transparent !important;
+}

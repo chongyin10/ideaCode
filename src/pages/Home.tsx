@@ -4,6 +4,7 @@ import { useAppSelector, useAppDispatch } from '../store/hooks';
 import type { OpenedFile, EditorSnapshot } from '../store/slices/workspaceSlice';
 import {
   loadDirectory,
+  openFile,
   closeFile,
   activateFile,
   setFileContent,
@@ -114,6 +115,22 @@ function Home() {
   }, [editorGroups]);
 
   useEffect(() => { dispatch(fetchRecentProjects()); }, [dispatch]);
+
+  /* ─── Cmd+Click 跳转到定义 ─── */
+  useEffect(() => {
+    const handler = (e: CustomEvent<{ path: string }>) => {
+      let filePath = e.detail.path;
+      if (!filePath) return;
+      // 确保绝对路径以 / 开头
+      if (!filePath.startsWith('/')) filePath = '/' + filePath;
+      const fileName = filePath.split('/').pop();
+      if (fileName) {
+        dispatch(openFile({ name: fileName, kind: 'file', source: filePath }));
+      }
+    };
+    window.addEventListener('ideacode:openDefinition', handler as EventListener);
+    return () => window.removeEventListener('ideacode:openDefinition', handler as EventListener);
+  }, [dispatch]);
 
   /* ─── 键盘快捷键（用 ref 避免 deps 变化） ─── */
 
@@ -266,6 +283,17 @@ function Home() {
     setDraggingIdx(dividerIndex);
   }, []);
 
+  // Cmd/Ctrl+Click 跳转文件：已存在则激活，不存在以预览态打开
+  const handleOpenFileByPath = useCallback((filePath: string) => {
+    const existing = openedFiles.find((f) => typeof f.source === 'string' && f.source === filePath);
+    if (existing) {
+      dispatch(activateFile(existing.id));
+      return;
+    }
+    const name = filePath.split('/').pop() || filePath;
+    dispatch(openFile({ name, kind: 'file', source: filePath }));
+  }, [openedFiles, dispatch]);
+
   /* ─── 编辑器快照 ─── */
 
   const snapshotsRef = useRef(snapshots);
@@ -326,11 +354,12 @@ function Home() {
                 key={`${file.id}-g${groupIndex}`}
                 value={panelContent ?? file.content}
                 language={file.language}
-                path={file.name}
+                path={typeof file.source === 'string' ? file.source : file.name}
                 onChange={handleEditorChange(group.activeFileId, groupIndex)}
                 snapshot={snapshot}
                 onSnapshot={saveSnapshot}
                 focused={focused}
+                onOpenFileByPath={handleOpenFileByPath}
               />
             ) : (
               <div className="no-active-file">
