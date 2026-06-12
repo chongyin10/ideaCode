@@ -6,6 +6,71 @@ import type { SearchHighlight, EditorSnapshot } from '../../store/slices/workspa
 import { tsService } from '../../services/tsLanguageService';
 import './MonacoEditor.css';
 
+// ─── 语义 token 装饰着色层 ───
+// 绕过 Monaco 内部的 scope 转换（semantic token type → TextMate scope → theme rule 匹配），
+// 直接在编辑器文本上以 CSS class decoration 方式着色，复刻 VS Code Dark+ 语义着色标准。
+
+/** VS Code Dark+ 语义 token 类型 → CSS 颜色组 */
+const TOKEN_COLOR_GROUP: Record<string, string> = {
+  // 函数 / 方法 → 黄色
+  function: 'sem-func',
+  member:   'sem-func',
+  // 类型 / 类 / 接口 / 枚举 → 绿色
+  class:         'sem-type',
+  enum:          'sem-type',
+  interface:     'sem-type',
+  namespace:     'sem-type',
+  typeParameter: 'sem-type',
+  type:          'sem-type',
+  // 变量 / 参数 / 属性 / 枚举成员 → 浅蓝色
+  parameter:  'sem-variable',
+  variable:   'sem-variable',
+  enumMember: 'sem-variable',
+  property:   'sem-variable',
+};
+
+/** 将 LSP semantic tokens 压缩数据还原为 Monaco decoration 数组 */
+function buildSemanticDecorations(
+  data: Uint32Array,
+  legend: { tokenTypes: string[]; tokenModifiers: string[] },
+  monaco: { Range: new (sl: number, sc: number, el: number, ec: number) => unknown },
+): Array<{ range: unknown; options: { inlineClassName: string } }> {
+  const decs: Array<{ range: unknown; options: { inlineClassName: string } }> = [];
+  let line = 0;
+  let col = 0;
+
+  for (let i = 0; i < data.length; i += 5) {
+    const dLine = data[i];
+    const dCol = data[i + 1];
+    const len = data[i + 2];
+    const typeIdx = data[i + 3];
+    const mods = data[i + 4];
+
+    // 相对坐标解码
+    if (dLine > 0) {
+      line += dLine;
+      col = dCol;
+    } else {
+      col += dCol;
+    }
+
+    const typeName = legend.tokenTypes[typeIdx];
+    const baseClass = TOKEN_COLOR_GROUP[typeName];
+    if (!baseClass) continue; // 跳过未知/未映射类型
+
+    // 修饰符检测：declaration → 附加 italic 类
+    const isDeclaration = !!(mods & 1); // legend.modifiers[0] === 'declaration'
+    const className = isDeclaration ? `${baseClass} sem-italic` : baseClass;
+
+    decs.push({
+      range: new monaco.Range(line + 1, col + 1, line + 1, col + 1 + len),
+      options: { inlineClassName: className },
+    });
+  }
+
+  return decs;
+}
+
 const Loading = () => (
   <div className="monaco-loading">
     <div className="monaco-loading__spinner" />
@@ -152,9 +217,6 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
   const searchHighlight = useAppSelector((state) => state.workspace.searchHighlight);
   const { theme, fontSize, semanticHighlightingEnabled, wordWrap, minimapEnabled } = useAppSelector((state) => state.settings);
 
-  // vs-dark 映射为 ideacode-dark（含语义 token 颜色覆盖：方法橘色、标签变量色）
-  const effectiveTheme = theme === 'vs-dark' ? 'ideacode-dark' : theme;
-
   const editorRef = useRef<Parameters<Parameters<typeof Editor>[0]['onMount']>[0] | null>(null);
   const monacoRef = useRef<Parameters<Parameters<typeof Editor>[0]['onMount']>[1] | null>(null);
   const decorationsRef = useRef<string[]>([]);
@@ -164,8 +226,7 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
   const changeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lspDisposablesRef = useRef<Array<{ dispose(): void }>>([]);
   const semTokenGenRef = useRef(0);
-  const jsxDecorationsRef = useRef<string[]>([]);
-  const jsxTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const semDecoRef = useRef<string[]>([]);
 
   const onSnapshotRef = useRef(onSnapshot);
   onSnapshotRef.current = onSnapshot;
@@ -184,12 +245,11 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
   }, [value, snapshot]);
 
   // settings 中 theme 变化时同步 Monaco 主题
-  // vs-dark 映射为 ideacode-dark（包含语义 token 颜色覆盖）
   useEffect(() => {
     if (monacoRef.current) {
-      monacoRef.current.editor.setTheme(effectiveTheme);
+      monacoRef.current.editor.setTheme(theme);
     }
-  }, [effectiveTheme]);
+  }, [theme]);
 
   // 卸载时保存快照 + 关闭 tsserver 文件
   useEffect(() => {
@@ -207,6 +267,10 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
         tsService.close(path).catch(() => {});
       }
       diagUnsubRef.current?.();
+      // 清除语义 decorations
+      if (editorRef.current && semDecoRef.current.length > 0) {
+        try { editorRef.current.deltaDecorations(semDecoRef.current, []); } catch { /* 忽略 */ }
+      }
       lspDisposablesRef.current.forEach((d) => d.dispose());
       lspDisposablesRef.current = [];
     };
@@ -298,7 +362,7 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
           }, 500);
         }
       }}
-      theme={effectiveTheme}
+      theme={theme}
       loading={<Loading />}
       onMount={async (editor, monaco) => {
         editorRef.current = editor;
@@ -535,6 +599,21 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
               // 忽略 stale 响应（新的请求已发出，旧结果不再需要）
               if (gen !== semTokenGenRef.current) return null;
               if (!tokens) return null;
+
+              // ── 语义 decoration 着色：用 CSS 直接覆盖颜色，绕过 Monaco 的 scope 转换 ──
+              const editor = editorRef.current;
+              const legend = semanticTokensLegend ?? defaultSemanticTokensLegend;
+              if (editor && tokens.data.length > 0) {
+                try {
+                  const decs = buildSemanticDecorations(
+                    new Uint32Array(tokens.data),
+                    legend,
+                    monaco,
+                  );
+                  semDecoRef.current = editor.deltaDecorations(semDecoRef.current, decs);
+                } catch { /* decoration 更新失败不阻塞语义 tokens 返回 */ }
+              }
+
               return { resultId: tokens.resultId, data: new Uint32Array(tokens.data) };
             },
             releaseDocumentSemanticTokens: () => {},
@@ -549,88 +628,10 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
           }, 100);
         }
 
-        // ── JSX 属性名着色（Monarch 语法无法区分标签名与属性名，使用装饰覆盖） ──
-        {
-          const updateJsxAttrDecorations = () => {
-            const model = editor.getModel();
-            if (!model) return;
-            const lineCount = model.getLineCount();
-            const decs: Array<{ range: unknown; options: { inlineClassName: string } }> = [];
-            let inTag = false;
-
-            for (let i = 1; i <= lineCount; i++) {
-              const line = model.getLineContent(i);
-              const len = line.length;
-              let j = 0;
-              while (j < len) {
-                if (!inTag) {
-                  // 进入 JSX 标签：< 后跟字母（排除 </ 闭合标签）
-                  if (line[j] === '<' && j + 1 < len && /[a-zA-Z]/.test(line[j + 1])) {
-                    inTag = true;
-                    j += 2;
-                  } else {
-                    j++;
-                  }
-                } else {
-                  // 跳过空白
-                  while (j < len && /\s/.test(line[j])) j++;
-                  if (j >= len) break;
-
-                  // 标签结束：> 或 />
-                  if (line[j] === '>' || (line[j] === '/' && j + 1 < len && line[j + 1] === '>')) {
-                    // 自闭合标签 /> → 颜色覆盖为与 < 一致的蓝灰色（与 delimiter 主题规则对齐）
-                    if (line[j] === '/') {
-                      decs.push({
-                        range: new monaco.Range(i, j + 1, i, j + 3),
-                        options: { inlineClassName: 'jsx-self-close' },
-                      });
-                    }
-                    inTag = false;
-                    j += line[j] === '/' ? 2 : 1;
-                    continue;
-                  }
-                  // 跳过 JSX 表达式 {}
-                  if (line[j] === '{') {
-                    let depth = 1; j++;
-                    while (j < len && depth > 0) { if (line[j] === '{') depth++; if (line[j] === '}') depth--; j++; }
-                    continue;
-                  }
-                  // 属性名（identifier）
-                  const attrStart = j;
-                  while (j < len && /[\w-]/.test(line[j])) j++;
-                  const wordLen = j - attrStart;
-                  if (wordLen > 0) {
-                    // 跳过属性名后的空白
-                    while (j < len && /\s/.test(line[j])) j++;
-                    // 后跟 = 则为属性名 → 装饰
-                    if (j < len && line[j] === '=') {
-                      decs.push({
-                        range: new monaco.Range(i, attrStart + 1, i, attrStart + 1 + wordLen),
-                        options: { inlineClassName: 'jsx-attribute-name' },
-                      });
-                      // 跳过属性值
-                      j++; while (j < len && /\s/.test(line[j])) j++;
-                      if (j < len && (line[j] === '"' || line[j] === "'")) { const q = line[j]; j++; while (j < len && line[j] !== q) { if (line[j] === '\\') j++; j++; } j++; }
-                      else if (j < len && line[j] === '{') { let d = 1; j++; while (j < len && d > 0) { if (line[j] === '{') d++; if (line[j] === '}') d--; j++; } }
-                    }
-                    // 否则为布尔属性或标签名 → 不装饰
-                  } else {
-                    j++; // 非单词字符（如 . < { 等），跳过避免死循环
-                  }
-                }
-              }
-            }
-            jsxDecorationsRef.current = editor.deltaDecorations(jsxDecorationsRef.current, decs);
-          };
-
-          const runJsxDeco = () => {
-            clearTimeout(jsxTimerRef.current);
-            jsxTimerRef.current = setTimeout(updateJsxAttrDecorations, 300);
-          };
-          const modelDisposable = editor.getModel()?.onDidChangeContent(runJsxDeco);
-          if (modelDisposable) lspDisposablesRef.current.push({ dispose: () => modelDisposable.dispose() });
-          runJsxDeco();
-        }
+        // ── JSX/TSX 语义高亮 ──
+        // Monaco 的 semanticHighlighting.enabled + tsserver semantic tokens
+        // 会自动区分 JSX 标签名、属性名、属性值等，无需额外的 decoration 覆盖。
+        // 参考：https://github.com/microsoft/TypeScript-TmLanguage/issues/756
 
         const pending = pendingRef.current;
         if (pending) { pendingRef.current = null; applyHighlight(editor, monaco, pending); }

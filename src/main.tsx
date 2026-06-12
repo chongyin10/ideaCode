@@ -44,43 +44,11 @@ import 'monaco-editor/esm/vs/basic-languages/scss/scss.contribution.js'
 import 'monaco-editor/esm/vs/basic-languages/html/html.contribution.js'
 import 'monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution.js'
 
-// ─── 自定义编辑器主题 ───
-// 基于 vs-dark，覆盖语义 token 和 Monarch token 着色
-// 语义 token 类型（如 function/method/variable）通过 rules 规则名称匹配
-// 注：TSX 中 JSX 标签名（如 div）被 Monarch 语法标记为 identifier，而非 tag
-monaco.editor.defineTheme('ideacode-dark', {
-  base: 'vs-dark',
-  inherit: true,
-  rules: [
-    // ── 方法/函数 → 橘色 ──
-    { token: 'function',  foreground: 'DADAAE' },
-    { token: 'method',    foreground: 'DADAAE' },
-    // ── 成员访问（属性链中的中间节点）→ 与变量/参数同色，仅在明确为方法时保留橘色 ──
-    { token: 'member',    foreground: '6DBBF5' },
-    // ── 变量/标识符/参数/属性 → 浅蓝色 ──
-    { token: 'identifier',        foreground: '6DBBF5' },
-    { token: 'variable',           foreground: '6DBBF5' },
-    { token: 'variable.readonly',  foreground: '6DBBF5' },
-    { token: 'property',           foreground: '6DBBF5' },
-    { token: 'parameter',          foreground: '9CDCFE' },
-    // ── 类型标识（Java/C++/C# 类型名、Python 函数/类定义）→ 青色 ──
-    { token: 'type',            foreground: '4EC9B0' },
-    { token: 'type.identifier', foreground: '4EC9B0' },
-    // ── Python 内置函数/预定义标识 → 与方法同色 ──
-    { token: 'predefined', foreground: 'DADAAE' },
-    // ── Java 注解 → 区分色 ──
-    { token: 'annotation', foreground: 'BBB529' },
-    // ── CSS / Less / Scss 专用 ──
-    { token: 'tag',              foreground: '6DBBF5' },   // 选择器 → 与变量同色
-    { token: 'attribute.name',   foreground: '9CDCFE' },   // 属性名 → 明亮蓝
-    { token: 'attribute.value',  foreground: 'CE9178' },   // 属性值 → 与字符串同色
-    // ── 分隔符 → 蓝灰色 ──
-    { token: 'delimiter.angle', foreground: '9BA4B5' },
-    { token: 'delimiter.curly', foreground: '9BA4B5' },
-    { token: 'delimiter',       foreground: '9BA4B5' },
-  ],
-  colors: {},
-})
+// ─── 编辑器主题 ───
+// 直接使用 Monaco 内置的 vs-dark 主题，配合 semanticHighlighting.enabled
+// Monaco 会将语义 tokens（function/variable/property/type/class 等）
+// 自动映射到对应的 TextMate scope（entity.name.function / variable.other.readwrite 等），
+// vs-dark 内置了 VS Code Dark+ 标准的 scope 着色，无需手动定义 rules。
 
 // ─── 初始化插件系统 ───
 const pluginManager = createPluginManager((pluginId, manifest) =>
