@@ -31,9 +31,18 @@ self.MonacoEnvironment = {
 // 使用本地 monaco 包，彻底脱离 CDN
 loader.config({ monaco })
 
-// 确保 TypeScript/JSX 语言注册（防止 Vite tree-shaking 丢弃）
+// 确保多语言注册（防止 Vite tree-shaking 丢弃）
 import 'monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution.js'
 import 'monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/java/java.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/cpp/cpp.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/csharp/csharp.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/python/python.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/css/css.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/less/less.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/scss/scss.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/html/html.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution.js'
 
 // ─── 自定义编辑器主题 ───
 // 基于 vs-dark，覆盖语义 token 和 Monarch token 着色
@@ -43,22 +52,32 @@ monaco.editor.defineTheme('ideacode-dark', {
   base: 'vs-dark',
   inherit: true,
   rules: [
-    // 方法/函数 → 橘色 (用户期望)
-    { token: 'function', foreground: 'DADAAE' },
-    { token: 'method', foreground: 'DADAAE' },
-    { token: 'member', foreground: 'DADAAE' },
-    // JSX 标签名（identifier）→ 与变量相同的浅蓝色
-    // TypeScript Monarch 语法将 `<div>` 中的 `div` 标记为 identifier
-    { token: 'identifier', foreground: '6DBBF5' },
-    // 变量显式设置为浅蓝色（确保一致性）
-    { token: 'variable', foreground: '6DBBF5' },
-    { token: 'variable.readonly', foreground: '6DBBF5' },
-    { token: 'property', foreground: '6DBBF5' },
-    { token: 'parameter', foreground: '6DBBF5' },
-    // JSX 尖括号 < > → 干净蓝灰色（默认 bracket 映射为 delimiter.angle）
+    // ── 方法/函数 → 橘色 ──
+    { token: 'function',  foreground: 'DADAAE' },
+    { token: 'method',    foreground: 'DADAAE' },
+    // ── 成员访问（属性链中的中间节点）→ 与变量/参数同色，仅在明确为方法时保留橘色 ──
+    { token: 'member',    foreground: '6DBBF5' },
+    // ── 变量/标识符/参数/属性 → 浅蓝色 ──
+    { token: 'identifier',        foreground: '6DBBF5' },
+    { token: 'variable',           foreground: '6DBBF5' },
+    { token: 'variable.readonly',  foreground: '6DBBF5' },
+    { token: 'property',           foreground: '6DBBF5' },
+    { token: 'parameter',          foreground: '9CDCFE' },
+    // ── 类型标识（Java/C++/C# 类型名、Python 函数/类定义）→ 青色 ──
+    { token: 'type',            foreground: '4EC9B0' },
+    { token: 'type.identifier', foreground: '4EC9B0' },
+    // ── Python 内置函数/预定义标识 → 与方法同色 ──
+    { token: 'predefined', foreground: 'DADAAE' },
+    // ── Java 注解 → 区分色 ──
+    { token: 'annotation', foreground: 'BBB529' },
+    // ── CSS / Less / Scss 专用 ──
+    { token: 'tag',              foreground: '6DBBF5' },   // 选择器 → 与变量同色
+    { token: 'attribute.name',   foreground: '9CDCFE' },   // 属性名 → 明亮蓝
+    { token: 'attribute.value',  foreground: 'CE9178' },   // 属性值 → 与字符串同色
+    // ── 分隔符 → 蓝灰色 ──
     { token: 'delimiter.angle', foreground: '9BA4B5' },
-    // </ 闭合标签及其他分隔符（逗号、分号等）→ 与尖括号一致的蓝灰色
-    { token: 'delimiter', foreground: '9BA4B5' },
+    { token: 'delimiter.curly', foreground: '9BA4B5' },
+    { token: 'delimiter',       foreground: '9BA4B5' },
   ],
   colors: {},
 })

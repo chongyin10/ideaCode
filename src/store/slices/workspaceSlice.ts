@@ -196,8 +196,13 @@ export const openFile = createAsyncThunk(
     const langMap: Record<string, string> = {
       ts: 'typescript', tsx: 'typescript',
       js: 'javascript', jsx: 'javascript',
-      css: 'css', html: 'html', json: 'json',
+      cjs: 'javascript', mjs: 'javascript',
+      css: 'css', scss: 'scss', sass: 'scss', less: 'less',
+      html: 'html', htm: 'html', json: 'json',
       md: 'markdown', py: 'python',
+      java: 'java',
+      c: 'c', h: 'c', cpp: 'cpp', cc: 'cpp', cxx: 'cpp', hpp: 'cpp',
+      cs: 'csharp',
     };
     const language = langMap[ext] || 'plaintext';
     // 用完整路径作为唯一 id，避免不同目录下的同名文件（如 index.tsx）冲突

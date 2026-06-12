@@ -56,5 +56,10 @@
 
 /* ─── JSX 属性名着色覆盖 ─── */
 .monaco-editor .jsx-attribute-name {
-  color: #9FCCE9 !important;
+  color: #9CDCFE !important;
+}
+
+/* ─── JSX 自闭合标签 /> 颜色统一 ─── */
+.monaco-editor .jsx-self-close {
+  color: #9BA4B5 !important;
 }

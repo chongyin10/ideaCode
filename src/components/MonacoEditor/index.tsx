@@ -13,6 +13,10 @@ const Loading = () => (
   </div>
 );
 
+// 保存 Monaco 原始的 registerHoverProvider，用于在拦截后仍能注册自定义 hover provider
+let originalRegisterHoverProvider: ((languageSelector: unknown, provider: unknown) => { dispose(): void }) | null = null;
+const TSJS_LANGS = new Set(['typescript', 'javascript', 'typescriptreact', 'javascriptreact']);
+
 /** 在 model 创建前配置 Monaco TypeScript/JavaScript 默认选项 */
 const beforeMount: Parameters<typeof Editor>[0]['beforeMount'] = (monaco) => {
   const tsDefaults = monaco.languages.typescript.typescriptDefaults;
@@ -42,6 +46,18 @@ const beforeMount: Parameters<typeof Editor>[0]['beforeMount'] = (monaco) => {
     moduleResolution: monaco.languages.typescript.ModuleResolutionKind.NodeJs,
     esModuleInterop: true,
   });
+
+  // 拦截 Monaco 内置 TS/JS worker 的 hover provider，避免自定义 LSP hover 与内置 hover 重复显示
+  if (!originalRegisterHoverProvider) {
+    originalRegisterHoverProvider = monaco.languages.registerHoverProvider.bind(monaco.languages);
+  }
+  monaco.languages.registerHoverProvider = ((languageSelector: unknown, provider: unknown) => {
+    const langs = Array.isArray(languageSelector) ? languageSelector : [languageSelector];
+    if (langs.some((l) => TSJS_LANGS.has(l as string))) {
+      return { dispose: () => {} };
+    }
+    return originalRegisterHoverProvider!(languageSelector, provider);
+  }) as typeof monaco.languages.registerHoverProvider;
 };
 
 /** 计算光标所在字符串字面量的范围（不含引号），用于让下划线覆盖整个 import 路径 */
@@ -117,6 +133,7 @@ function getStringLiteralRange(
   };
 }
 
+/** 判断指定 token 是否位于对象字面量键位置（如 { jsx: ... } 中的 jsx） */
 interface MonacoEditorProps {
   value: string;
   language: string;
@@ -286,7 +303,36 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
       onMount={async (editor, monaco) => {
         editorRef.current = editor;
         monacoRef.current = monaco;
+
+        // ── 快照恢复（layout 先行，消除抖动 + 保证位置正确）──
+        // 1. 先同步执行 layout，确保 Monaco 已完成内容测量（scrollHeight 已知），
+        //    否则 setScrollTop 会因为可滚动区域尚未计算而被忽略。
+        // 2. 再设置快照位置。
+        // 3. requestAnimationFrame 补一次 layout，处理容器最终尺寸就绪。
+        editor.layout();
+        if (snapshot && !snapshotAppliedRef.current) {
+          snapshotAppliedRef.current = true;
+          try {
+            editor.setScrollTop(snapshot.scrollTop);
+            editor.setPosition({ lineNumber: snapshot.cursor.line, column: snapshot.cursor.column });
+          } catch { /* 忽略 */ }
+        }
         requestAnimationFrame(() => editor.layout());
+
+        // 去掉 definition link hover 上的 "Click to show N definitions." 提示
+        const gotoDefContribution = editor.getContribution('editor.contrib.gotodefinitionatposition') as unknown as { linkDecorations?: { set: (v: unknown[]) => void } } | null;
+        if (gotoDefContribution?.linkDecorations) {
+          const linkDecorations = gotoDefContribution.linkDecorations;
+          (gotoDefContribution as { addDecoration?: (range: unknown, hoverMessage: unknown) => void }).addDecoration = (range) => {
+            linkDecorations.set([{
+              range,
+              options: {
+                description: 'goto-definition-link',
+                inlineClassName: 'goto-definition-link',
+              },
+            }]);
+          };
+        }
 
         // 确保 model 语言与 prop 一致，并强制刷新一次 tokenization；
         // 解决首次打开 tsx/jsx 时 Monaco worker 尚未就绪导致无高亮的问题。
@@ -385,8 +431,9 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
             },
           }));
 
-          // 注册悬停 provider
-          lspDisposablesRef.current.push(monaco.languages.registerHoverProvider(language, {
+          // 注册悬停 provider（使用原始函数，绕过上方拦截）
+          const registerHover = originalRegisterHoverProvider || monaco.languages.registerHoverProvider;
+          lspDisposablesRef.current.push(registerHover(language, {
             provideHover: async (_model, position) => {
               if (!path) return null;
               const info = await tsService.quickInfo(path, position.lineNumber - 1, position.column - 1);
@@ -480,7 +527,7 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
 
           lspDisposablesRef.current.push(monaco.languages.registerDocumentSemanticTokensProvider(language, {
             getLegend: () => semanticTokensLegend ?? defaultSemanticTokensLegend,
-            provideDocumentSemanticTokens: async () => {
+            provideDocumentSemanticTokens: async (_model) => {
               const currentPath = pathRef.current;
               if (!currentPath) return null;
               const gen = ++semTokenGenRef.current;
@@ -492,17 +539,6 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
             },
             releaseDocumentSemanticTokens: () => {},
           }));
-        }
-
-        // ── 快照恢复 ──
-        if (snapshot && !snapshotAppliedRef.current) {
-          snapshotAppliedRef.current = true;
-          requestAnimationFrame(() => {
-            try {
-              editor.setPosition({ lineNumber: snapshot.cursor.line, column: snapshot.cursor.column });
-              editor.setScrollTop(snapshot.scrollTop);
-            } catch { /* 忽略 */ }
-          });
         }
 
         // 非 Electron 环境或无 tsserver 时直接标记就绪
@@ -542,6 +578,13 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
 
                   // 标签结束：> 或 />
                   if (line[j] === '>' || (line[j] === '/' && j + 1 < len && line[j + 1] === '>')) {
+                    // 自闭合标签 /> → 颜色覆盖为与 < 一致的蓝灰色（与 delimiter 主题规则对齐）
+                    if (line[j] === '/') {
+                      decs.push({
+                        range: new monaco.Range(i, j + 1, i, j + 3),
+                        options: { inlineClassName: 'jsx-self-close' },
+                      });
+                    }
                     inTag = false;
                     j += line[j] === '/' ? 2 : 1;
                     continue;
