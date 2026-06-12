@@ -81,6 +81,7 @@ const Channels = {
   TSSERVER_CHANGE: 'tsserver:change',
   TSSERVER_COMPLETIONS: 'tsserver:completions',
   TSSERVER_DEFINITION: 'tsserver:definition',
+  TSSERVER_SEMANTIC_TOKENS: 'tsserver:semanticTokens',
   TSSERVER_QUICKINFO: 'tsserver:quickinfo',
   TSSERVER_DIAGNOSTICS: 'tsserver:diagnostics',
 };
@@ -203,6 +204,7 @@ const electronAPI = {
     change: (file, content) => ipcRenderer.invoke(Channels.TSSERVER_CHANGE, file, content),
     completions: (file, line, offset) => ipcRenderer.invoke(Channels.TSSERVER_COMPLETIONS, file, line, offset),
     definition: (file, line, offset) => ipcRenderer.invoke(Channels.TSSERVER_DEFINITION, file, line, offset),
+    semanticTokens: (file) => ipcRenderer.invoke(Channels.TSSERVER_SEMANTIC_TOKENS, file),
     quickInfo: (file, line, offset) => ipcRenderer.invoke(Channels.TSSERVER_QUICKINFO, file, line, offset),
     onDiagnostics: (cb) => onChannel(Channels.TSSERVER_DIAGNOSTICS, cb),
   },

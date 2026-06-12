@@ -19,6 +19,12 @@ export interface TsLocation {
   originSelectionRange?: { start: { line: number; offset: number }; end: { line: number; offset: number } };
 }
 
+export interface TsSemanticTokens {
+  legend?: { tokenTypes: string[]; tokenModifiers: string[] };
+  resultId?: string;
+  data: number[];
+}
+
 function api() {
   return window.electronAPI?.tsserver;
 }
@@ -57,6 +63,11 @@ export const tsService = {
   /** 跳转到定义 */
   async definition(filePath: string, line: number, offset: number): Promise<TsLocation[]> {
     return api()?.definition(filePath, line, offset) ?? [];
+  },
+
+  /** 语义高亮 tokens */
+  async semanticTokens(filePath: string): Promise<TsSemanticTokens | null> {
+    return api()?.semanticTokens(filePath) ?? null;
   },
 
   /** 悬停信息 */

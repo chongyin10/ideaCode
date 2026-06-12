@@ -2,6 +2,7 @@ import { Files, Search, GitBranch, Bug, Blocks, User, Settings } from 'lucide-re
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import { switchPanel } from '../../store/slices/layoutSlice';
 import type { PanelId } from '../../store/slices/layoutSlice';
+import { setSettingsVisible } from '../../store/slices/workspaceSlice';
 import './ActivityBar.css';
 
 const panels: { id: PanelId; icon: React.ReactNode; title: string }[] = [
@@ -37,7 +38,14 @@ const ActivityBar = () => {
       </div>
       <div className="activity-bar__bottom">
         {bottomItems.map((item, idx) => (
-          <div key={idx} className="activity-bar__item" title={item.title}>
+          <div
+            key={idx}
+            className="activity-bar__item"
+            title={item.title}
+            onClick={() => {
+              if (item.title === '设置') dispatch(setSettingsVisible(true));
+            }}
+          >
             {item.icon}
           </div>
         ))}

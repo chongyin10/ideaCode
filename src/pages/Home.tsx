@@ -26,6 +26,7 @@ import MonacoEditor from '../components/MonacoEditor';
 import QuickOpen from '../components/QuickOpen';
 import GitSetupPanel from '../components/GitSetupPanel';
 import DiffEditorPanel from '../components/DiffEditorPanel';
+import SettingsPanel from '../components/SettingsPanel';
 import './Home.css';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -83,6 +84,7 @@ function Home() {
   const splitView = editorGroups.length > 1;
   const showCloneForm = useAppSelector((state) => state.git.showCloneForm);
   const diffView = useAppSelector((state) => state.workspace.diffView);
+  const settingsVisible = useAppSelector((state) => state.workspace.settingsVisible);
   const rootSource = useAppSelector((state) => state.workspace.rootSource);
   const rootPath = typeof rootSource === 'string' ? rootSource : '';
   const gitStaged = useAppSelector((s) => s.git.staged);
@@ -92,6 +94,54 @@ function Home() {
   const gitStatus = useMemo(() => ({ ...gitStaged, ...gitChanges, ...gitMerge, ...gitUntracked }), [gitStaged, gitChanges, gitMerge, gitUntracked]);
 
   const [quickOpenVisible, setQuickOpenVisible] = useState(false);
+  const [loadingFiles, setLoadingFiles] = useState<Set<string>>(new Set());
+  const loadingTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  // Tab 加载就绪回调（tsserver 返回诊断时）
+  const handleTabReady = useCallback((fileId: string) => {
+    const timer = loadingTimersRef.current.get(fileId);
+    if (timer) { clearTimeout(timer); loadingTimersRef.current.delete(fileId); }
+    setLoadingFiles((prev) => {
+      if (!prev.has(fileId)) return prev;
+      const next = new Set(prev);
+      next.delete(fileId);
+      return next;
+    });
+  }, []);
+
+  // 监听新打开文件，标记加载中 + 3秒保底超时
+  const prevFileIdsRef = useRef<string[]>([]);
+  // 用字符串 key 替代整个 editorGroups 数组，避免无关 workspace action 触发重计算
+  const fileIdKey = useMemo(
+    () => editorGroups.flatMap((g) => g.fileIds).join(','),
+    [editorGroups]
+  );
+  useEffect(() => {
+    const currentIds = editorGroups.flatMap((g) => g.fileIds);
+    const newIds = currentIds.filter((id) => !prevFileIdsRef.current.includes(id));
+    const removedIds = prevFileIdsRef.current.filter((id) => !currentIds.includes(id));
+
+    // 清理已关闭文件的超时
+    removedIds.forEach((id) => {
+      const timer = loadingTimersRef.current.get(id);
+      if (timer) { clearTimeout(timer); loadingTimersRef.current.delete(id); }
+    });
+
+    if (newIds.length > 0) {
+      setLoadingFiles((prev) => {
+        const next = new Set(prev);
+        newIds.forEach((id) => {
+          next.add(id);
+          // 3 秒保底：即使 tsserver 无响应也停止动画
+          const timer = setTimeout(() => handleTabReady(id), 3000);
+          loadingTimersRef.current.set(id, timer);
+        });
+        return next;
+      });
+    }
+    prevFileIdsRef.current = currentIds;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fileIdKey]);
 
   // 预构建 openedFiles 查找表
   const openedFileMap = useMemo(
@@ -347,6 +397,7 @@ function Home() {
             onSplitView={() => dispatch(toggleSplitView())}
             splitActive={splitView}
             focused={focused}
+            loadingFiles={loadingFiles}
           />
           <div className="editor-area">
             {file ? (
@@ -360,6 +411,7 @@ function Home() {
                 onSnapshot={saveSnapshot}
                 focused={focused}
                 onOpenFileByPath={handleOpenFileByPath}
+                onReady={() => handleTabReady(file?.id || '')}
               />
             ) : (
               <div className="no-active-file">
@@ -373,7 +425,7 @@ function Home() {
         </>
       );
     },
-    [dispatch, handleCloseTab, handleEditorChange, handleOpenQuickOpen, splitView, getPanelContent, rootPath, gitStatus]
+    [dispatch, handleCloseTab, handleEditorChange, handleOpenQuickOpen, splitView, getPanelContent, rootPath, gitStatus, handleTabReady, handleOpenFileByPath, loadingFiles]
   );
 
   return (
@@ -382,7 +434,9 @@ function Home() {
         <QuickOpen onClose={() => setQuickOpenVisible(false)} files={allFilePaths} />
       )}
 
-      {diffView ? (
+      {settingsVisible ? (
+        <SettingsPanel />
+      ) : diffView ? (
         <DiffEditorPanel />
       ) : showCloneForm ? (
         <GitSetupPanel />

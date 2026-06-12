@@ -53,3 +53,8 @@
 .monaco-editor .detected-link-active {
   background-color: transparent !important;
 }
+
+/* ─── JSX 属性名着色覆盖 ─── */
+.monaco-editor .jsx-attribute-name {
+  color: #9FCCE9 !important;
+}

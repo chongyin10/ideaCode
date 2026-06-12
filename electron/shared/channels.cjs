@@ -87,6 +87,7 @@ const Channels = {
   TSSERVER_CHANGE: 'tsserver:change',
   TSSERVER_COMPLETIONS: 'tsserver:completions',
   TSSERVER_DEFINITION: 'tsserver:definition',
+  TSSERVER_SEMANTIC_TOKENS: 'tsserver:semanticTokens',
   TSSERVER_QUICKINFO: 'tsserver:quickinfo',
   TSSERVER_DIAGNOSTICS: 'tsserver:diagnostics',
 };

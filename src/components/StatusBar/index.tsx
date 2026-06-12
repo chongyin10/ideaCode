@@ -16,7 +16,9 @@ const LANGUAGES = [
 
 const LANG_DISPLAY: Record<string, string> = {
   typescript: 'TypeScript',
+  typescriptreact: 'TypeScript',
   javascript: 'JavaScript',
+  javascriptreact: 'JavaScript',
   css: 'CSS',
   html: 'HTML',
   json: 'JSON',
@@ -28,6 +30,14 @@ const LANG_DISPLAY: Record<string, string> = {
   sql: 'SQL',
   shell: 'Shell',
   plaintext: 'Plain Text',
+};
+
+const isActiveLanguage = (lang: string, activeLanguage: string) => {
+  if (lang === activeLanguage) return true;
+  // 兼容旧版遗留的 typescriptreact / javascriptreact 语言 ID
+  if (lang === 'typescript' && activeLanguage === 'typescriptreact') return true;
+  if (lang === 'javascript' && activeLanguage === 'javascriptreact') return true;
+  return false;
 };
 
 const StatusBar = () => {
@@ -115,7 +125,7 @@ const StatusBar = () => {
                 {LANGUAGES.map((lang) => (
                     <button
                     key={lang}
-                    className={`status-bar__lang-opt ${lang === activeFile.language ? 'active' : ''}`}
+                    className={`status-bar__lang-opt ${isActiveLanguage(lang, activeFile.language) ? 'active' : ''}`}
                     onClick={() => {
                       dispatch(setFileLanguage({ id: activeFile.id, language: lang }));
                       setLangOpen(false);

@@ -12,6 +12,7 @@ export interface GitStatusResult {
   /** 未跟踪的新文件 */
   untracked: GitStatusMap;
 }
+export interface GitBranch {
   name: string;
   current: boolean;
 }
@@ -191,6 +192,7 @@ export interface ElectronAPI {
     change: (file: string, content: string) => Promise<void>;
     completions: (file: string, line: number, offset: number) => Promise<any[]>;
     definition: (file: string, line: number, offset: number) => Promise<any[]>;
+    semanticTokens: (file: string) => Promise<{ legend?: { tokenTypes: string[]; tokenModifiers: string[] }; resultId?: string; data: number[] } | null>;
     quickInfo: (file: string, line: number, offset: number) => Promise<any>;
     onDiagnostics: (cb: (data: any) => void) => () => void;
   };

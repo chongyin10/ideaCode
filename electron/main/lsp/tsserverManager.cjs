@@ -7,12 +7,15 @@
 const { spawn } = require('child_process');
 const { ipcMain } = require('electron');
 const { Channels } = require('../../shared/channels.cjs');
+const { SEMANTIC_TOKEN_TYPES, SEMANTIC_TOKEN_MODIFIERS } = require('../../shared/semanticTokensLegend.cjs');
 const path = require('path');
 
 let serverProcess = null;
 let rootUri = null;
 let buffer = '';
 let msgId = 0;
+let initRequestId = null;
+let semanticTokensLegend = null;
 const pendingRequests = new Map();
 
 /* ─── JSON-RPC 消息编解码 ─── */
@@ -62,6 +65,9 @@ function startServer(projectRoot, sender) {
   serverProcess.stdout.on('data', (data) => {
     try {
       for (const msg of parseMessages(data.toString())) {
+        if (msg.id === initRequestId && msg.result?.capabilities?.semanticTokensProvider?.legend) {
+          semanticTokensLegend = msg.result.capabilities.semanticTokensProvider.legend;
+        }
         if (msg.id && pendingRequests.has(msg.id)) {
           pendingRequests.get(msg.id)(msg);
           pendingRequests.delete(msg.id);
@@ -96,8 +102,9 @@ function startServer(projectRoot, sender) {
   });
 
   // LSP initialize
+  initRequestId = nextId();
   send({
-    jsonrpc: '2.0', id: nextId(), method: 'initialize',
+    jsonrpc: '2.0', id: initRequestId, method: 'initialize',
     params: {
       processId: process.pid,
       rootUri,
@@ -106,6 +113,15 @@ function startServer(projectRoot, sender) {
           completion: { completionItem: { snippetSupport: false } },
           hover: { contentFormat: ['plaintext', 'markdown'] },
           definition: { linkSupport: true },
+          semanticTokens: {
+            // 见 electron/shared/semanticTokensLegend.cjs，与 MonacoEditor 共享
+            tokenTypes: SEMANTIC_TOKEN_TYPES,
+            tokenModifiers: SEMANTIC_TOKEN_MODIFIERS,
+            formats: ['relative'],
+            requests: { range: true, full: { delta: true } },
+            multilineTokenSupport: true,
+            overlappingTokenSupport: false,
+          },
         },
       },
       initializationOptions: {
@@ -236,6 +252,24 @@ function registerTsServerHandlers() {
         }));
       });
       setTimeout(() => { pendingRequests.delete(id); resolve([]); }, 3000);
+    });
+  });
+
+  ipcMain.handle(Channels.TSSERVER_SEMANTIC_TOKENS, async (event, filePath) => {
+    if (!ensureServer(event.sender)) return null;
+    const id = nextId();
+    const uri = `file://${filePath.replace(/\\/g, '/')}`;
+    send({
+      jsonrpc: '2.0', id, method: 'textDocument/semanticTokens/full',
+      params: { textDocument: { uri } },
+    });
+    return new Promise((resolve) => {
+      pendingRequests.set(id, (msg) => {
+        const result = msg.result;
+        if (!result || !result.data) return resolve(null);
+        resolve({ legend: semanticTokensLegend, resultId: result.resultId, data: result.data });
+      });
+      setTimeout(() => { pendingRequests.delete(id); resolve(null); }, 3000);
     });
   });
 

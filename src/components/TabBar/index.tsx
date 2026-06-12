@@ -1,4 +1,4 @@
-import { X, Columns2 } from 'lucide-react';
+import { X, Columns2, Loader2 } from 'lucide-react';
 import './TabBar.css';
 
 interface TabBarProps {
@@ -10,9 +10,11 @@ interface TabBarProps {
   onSplitView?: () => void;
   splitActive?: boolean;
   focused?: boolean;
+  /** 正在加载中的文件 ID 集合 */
+  loadingFiles?: Set<string>;
 }
 
-const TabBar = ({ tabs, activeId, onActivate, onClose, onPin, onSplitView, splitActive, focused = true }: TabBarProps) => {
+const TabBar = ({ tabs, activeId, onActivate, onClose, onPin, onSplitView, splitActive, focused = true, loadingFiles }: TabBarProps) => {
   if (tabs.length === 0) return null;
 
   return (
@@ -31,6 +33,7 @@ const TabBar = ({ tabs, activeId, onActivate, onClose, onPin, onSplitView, split
           >
             <span className={`tab-bar__name ${tab.isDirty ? 'dirty' : ''} ${tab.gitStatus ? 'git-' + tab.gitStatus.toLowerCase() : ''}`}>{tab.name}</span>
             {tab.isDirty && <span className="tab-bar__dirty">●</span>}
+            {loadingFiles?.has(tab.id) && <Loader2 size={12} strokeWidth={1.5} className="tab-bar__loading tab-bar__spinner" />}
             <span
               className="tab-bar__close"
               onClick={(e) => {

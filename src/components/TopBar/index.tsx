@@ -6,7 +6,8 @@ import {
   Square,
   X,
 } from 'lucide-react';
-import { useAppSelector } from '../../store/hooks';
+import { useAppSelector, useAppDispatch } from '../../store/hooks';
+import { setSettingsVisible } from '../../store/slices/workspaceSlice';
 import QuickOpen from '../QuickOpen';
 import './TopBar.css';
 
@@ -22,6 +23,7 @@ import './TopBar.css';
  * - 标题栏主体为拖拽区域（-webkit-app-region: drag），按钮区域排除
  */
 const TopBar = () => {
+  const dispatch = useAppDispatch();
   const [quickOpenVisible, setQuickOpenVisible] = useState(false);
   const [, setIsMaximized] = useState(false);
   const rootName = useAppSelector((state) => state.workspace.rootName);
@@ -96,7 +98,11 @@ const TopBar = () => {
           >
             <Search size={14} strokeWidth={1.5} />
           </button>
-          <button className="topbar__btn" aria-label="设置">
+          <button
+            className="topbar__btn"
+            aria-label="设置"
+            onClick={() => dispatch(setSettingsVisible(true))}
+          >
             <Settings size={14} strokeWidth={1.5} />
           </button>
 

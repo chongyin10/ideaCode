@@ -81,6 +81,8 @@ interface WorkspaceState {
   nextGroupId: number;
   /** Git Diff 视图 */
   diffView: DiffView | null;
+  /** 设置面板是否显示在主区域 */
+  settingsVisible: boolean;
 }
 
 const initialState: WorkspaceState = {
@@ -105,6 +107,7 @@ const initialState: WorkspaceState = {
   splitPhase: 'closed',
   nextGroupId: 1,
   diffView: null,
+  settingsVisible: false,
 };
 
 /* ─── 工具函数 ─── */
@@ -197,7 +200,9 @@ export const openFile = createAsyncThunk(
       md: 'markdown', py: 'python',
     };
     const language = langMap[ext] || 'plaintext';
-    return { id: entry.name, name: entry.name, source: entry.source, content, language, isDirty: false };
+    // 用完整路径作为唯一 id，避免不同目录下的同名文件（如 index.tsx）冲突
+    const id = typeof entry.source === 'string' ? entry.source : entry.name;
+    return { id, name: entry.name, source: entry.source, content, language, isDirty: false };
   }
 );
 
@@ -291,6 +296,12 @@ const workspaceSlice = createSlice({
   name: 'workspace',
   initialState,
   reducers: {
+    setSettingsVisible: (state, action) => {
+      state.settingsVisible = action.payload as boolean;
+    },
+    closeSettings: (state) => {
+      state.settingsVisible = false;
+    },
     closeFile: (state, action) => {
       const payload = action.payload;
       const id = typeof payload === 'string' ? payload : (payload as { id: string; groupIndex?: number }).id;
@@ -662,6 +673,7 @@ export const {
   clearClipboard, setPendingSearchQuery, expandToFile, clearExpandPaths,
   toggleExpandDir, toggleSplitView, collapseAllGroups, setActiveGroup, saveEditorSnapshot, setGroupRatio, equalizeGroupRatios,
   openDiffView, closeDiffView, updateDiffView, setFileLanguage,
+  setSettingsVisible, closeSettings,
 } = workspaceSlice.actions;
 
 export default workspaceSlice.reducer;
