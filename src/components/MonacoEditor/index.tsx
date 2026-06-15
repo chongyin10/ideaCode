@@ -54,7 +54,7 @@ const TOKEN_COLOR_GROUP: Record<string, string> = {
   // 变量 / 属性 / 枚举成员 → 浅蓝色
   variable:   'sem-variable',
   enumMember: 'sem-variable',
-  property:   'sem-variable',
+  property:   'sem-property',
   // 参数 → 淡蓝色
   parameter:  'sem-parameter',
 };

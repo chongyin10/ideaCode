@@ -257,7 +257,7 @@ kbd {
   flex-direction: column;
   overflow: hidden;
   min-width: 0;
-  transition: opacity 0.2s ease;
+  transition: flex 0.2s ease, opacity 0.2s ease;
 }
 
 /* 注意力引导：非聚焦面板降低视觉权重 */

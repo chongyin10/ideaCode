@@ -64,6 +64,39 @@
   margin-right: 2px;
   transition: all 0.2s ease;
   position: relative;
+  transform-origin: left center;
+}
+
+/* Tab 进入/退出动画 */
+.tab-bar__item--entering {
+  animation: tabEnter 0.2s ease forwards;
+}
+
+.tab-bar__item--exiting {
+  animation: tabExit 0.2s ease forwards;
+  pointer-events: none;
+}
+
+@keyframes tabEnter {
+  from {
+    opacity: 0;
+    transform: translateX(16px) scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@keyframes tabExit {
+  from {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(16px) scale(0.92);
+  }
 }
 
 .tab-bar__item:hover {

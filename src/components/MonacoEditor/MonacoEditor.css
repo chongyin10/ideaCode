@@ -66,9 +66,14 @@
   color: #4EC9B0 !important;
 }
 
-/* 变量 / 属性 / 标签名 / 枚举成员 → 浅蓝色 #50C8FF */
+/* 变量 / 标签名 / 枚举成员 → 浅蓝色 #50C8FF */
 .sem-variable {
   color: #50C8FF !important;
+}
+
+/* 属性（对象成员访问如 obj.prop） → 浅天蓝 #89CFF0 */
+.sem-property {
+  color: #89CFF0 !important;
 }
 
 /* 参数 → 淡蓝色 #A6D6F5 */

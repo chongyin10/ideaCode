@@ -23,6 +23,7 @@ import {
 import { openDirectory } from '../services/fileService';
 import TabBar from '../components/TabBar';
 import MonacoEditor from '../components/MonacoEditor';
+import ConfirmDialog, { type ConfirmResult } from '../components/ConfirmDialog';
 import QuickOpen from '../components/QuickOpen';
 import GitSetupPanel from '../components/GitSetupPanel';
 import DiffEditorPanel from '../components/DiffEditorPanel';
@@ -94,6 +95,7 @@ function Home() {
   const gitStatus = useMemo(() => ({ ...gitStaged, ...gitChanges, ...gitMerge, ...gitUntracked }), [gitStaged, gitChanges, gitMerge, gitUntracked]);
 
   const [quickOpenVisible, setQuickOpenVisible] = useState(false);
+  const [closeConfirm, setCloseConfirm] = useState<{ id: string; groupIndex: number } | null>(null);
   const [loadingFiles, setLoadingFiles] = useState<Set<string>>(new Set());
   const loadingTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
@@ -284,11 +286,31 @@ function Home() {
     (id: string, groupIndex: number) => {
       const file = openedFilesRef.current.find((f) => f.id === id);
       if (file?.isDirty) {
-        if (!window.confirm('文件有未保存的更改，确定要关闭吗？')) return;
+        setCloseConfirm({ id, groupIndex });
+        return;
       }
       dispatch(closeFile({ id, groupIndex }));
     },
     [dispatch]
+  );
+
+  const handleCloseConfirm = useCallback(
+    async (result: ConfirmResult) => {
+      if (!closeConfirm) return;
+      const { id, groupIndex } = closeConfirm;
+      setCloseConfirm(null);
+      if (result === 'cancel') return;
+      if (result === 'save') {
+        try {
+          await dispatch(saveFile({ id, groupIndex })).unwrap();
+        } catch (err) {
+          console.error('保存失败', err);
+          return;
+        }
+      }
+      dispatch(closeFile({ id, groupIndex }));
+    },
+    [closeConfirm, dispatch]
   );
 
   /* ─── 拖拽调整列宽 ─── */
@@ -433,6 +455,14 @@ function Home() {
     <div className="home-page">
       {quickOpenVisible && (
         <QuickOpen onClose={() => setQuickOpenVisible(false)} files={allFilePaths} />
+      )}
+
+      {closeConfirm && (
+        <ConfirmDialog
+          title="文件有未保存的更改"
+          message="是否保存对当前文件的更改？"
+          onResult={handleCloseConfirm}
+        />
       )}
 
       {settingsVisible ? (
