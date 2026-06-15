@@ -401,11 +401,12 @@ function Home() {
           />
           <div className="editor-area">
             {file ? (
-              <MonacoEditor
-                key={`${file.id}-g${groupIndex}`}
+                <MonacoEditor
+                key={`${file.id}-${group.id}`}
                 value={panelContent ?? file.content}
                 language={file.language}
                 path={typeof file.source === 'string' ? file.source : file.name}
+                modelPath={`ideacode://${group.id}/${file.id}`}
                 onChange={handleEditorChange(group.activeFileId, groupIndex)}
                 snapshot={snapshot}
                 onSnapshot={saveSnapshot}

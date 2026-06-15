@@ -151,6 +151,8 @@ function removeEmptyGroups(state: WorkspaceState): void {
   // 记住被关闭前的焦点组 ID
   const focusedGroupId = state.editorGroups[state.activeGroupIndex]?.id;
 
+  // 构建旧索引 → 新索引的映射，用于后续修正 mirror / snapshot key 中的索引
+  const oldCount = state.editorGroups.length;
   const nonEmpty = state.editorGroups.filter((g) => g.fileIds.length > 0);
   if (nonEmpty.length === 0) {
     // 全部空了，回到初始状态
@@ -161,7 +163,60 @@ function removeEmptyGroups(state: WorkspaceState): void {
     state.splitPhase = 'closed';
     return;
   }
+
+  // 构建 oldIndex → newIndex 映射（被移除的组映射为 -1）
+  const indexMap = new Array<number>(oldCount).fill(-1);
+  {
+    let newIdx = 0;
+    for (let oldIdx = 0; oldIdx < oldCount; oldIdx++) {
+      if (state.editorGroups[oldIdx].fileIds.length > 0) {
+        indexMap[oldIdx] = newIdx;
+        newIdx++;
+      }
+    }
+  }
+
   state.editorGroups = nonEmpty;
+
+  // ── 修正 mirrorContent 和 editorSnapshots 中的组索引 ──
+  // 当中间组被移除时，后续组的索引会前移，需要同步更新 key 中的索引。
+  // 注意：不在 Immer draft 上边迭代边 delete/set，而是构建新对象后整体替换，
+  // 避免与 Immer 的 Proxy 写时复制机制产生冲突导致白屏崩溃。
+  if (nonEmpty.length < oldCount) {
+    // 重映射 mirrorContent
+    {
+      const next: Record<string, string> = {};
+      const entries = Object.entries(state.mirrorContent);
+      for (const [key, value] of entries) {
+        const match = key.match(/^(.+)::(\d+)$/);
+        if (!match) { next[key] = value as string; continue; }
+        const fileId = match[1];
+        const oldIdx = parseInt(match[2], 10);
+        if (oldIdx >= oldCount) { next[key] = value as string; continue; }
+        const newIdx = indexMap[oldIdx];
+        if (newIdx < 0) continue; // 组已移除，丢弃
+        next[`${fileId}::${newIdx}`] = value as string;
+      }
+      state.mirrorContent = next;
+    }
+    // 重映射 editorSnapshots
+    {
+      const next: Record<string, EditorSnapshot> = {};
+      const entries = Object.entries(state.editorSnapshots);
+      for (const [key, value] of entries) {
+        const match = key.match(/^(.+)::(\d+)$/);
+        if (!match) { next[key] = value as EditorSnapshot; continue; }
+        const fileId = match[1];
+        const oldIdx = parseInt(match[2], 10);
+        if (oldIdx >= oldCount) { next[key] = value as EditorSnapshot; continue; }
+        const newIdx = indexMap[oldIdx];
+        if (newIdx < 0) continue;
+        next[`${fileId}::${newIdx}`] = value as EditorSnapshot;
+      }
+      state.editorSnapshots = next;
+    }
+  }
+
   // 尝试恢复到之前的焦点组位置
   const newIdx = state.editorGroups.findIndex((g) => g.id === focusedGroupId);
   state.activeGroupIndex = newIdx >= 0 ? newIdx : 0;

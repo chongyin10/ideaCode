@@ -44,11 +44,11 @@ import 'monaco-editor/esm/vs/basic-languages/scss/scss.contribution.js'
 import 'monaco-editor/esm/vs/basic-languages/html/html.contribution.js'
 import 'monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution.js'
 
-// ─── 编辑器主题 ───
-// 直接使用 Monaco 内置的 vs-dark 主题，配合 semanticHighlighting.enabled
-// Monaco 会将语义 tokens（function/variable/property/type/class 等）
-// 自动映射到对应的 TextMate scope（entity.name.function / variable.other.readwrite 等），
-// vs-dark 内置了 VS Code Dark+ 标准的 scope 着色，无需手动定义 rules。
+// ─── 编辑器高亮 ───
+// 所有着色统一由 decoration 层接管：
+//   1. LSP semantic tokens → buildSemanticDecorations()（function/variable/type 等）
+//   2. TextMate grammar tokens → buildGrammarDecorations()（JSX tag 等）
+// 主题使用 Monaco 内置 vs-dark，不定义任何 rules。
 
 // ─── 初始化插件系统 ───
 const pluginManager = createPluginManager((pluginId, manifest) =>

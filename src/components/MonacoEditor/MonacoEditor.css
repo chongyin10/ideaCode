@@ -66,12 +66,27 @@
   color: #4EC9B0 !important;
 }
 
-/* 变量 / 参数 / 属性 / 枚举成员 → 浅蓝色 #9CDCFE */
+/* 变量 / 属性 / 标签名 / 枚举成员 → 浅蓝色 #50C8FF */
 .sem-variable {
-  color: #9CDCFE !important;
+  color: #50C8FF !important;
+}
+
+/* 参数 → 淡蓝色 #A6D6F5 */
+.sem-parameter {
+  color: #A6D6F5 !important;
 }
 
 /* 声明 → 斜体 */
 .sem-italic {
   font-style: italic !important;
+}
+
+/* JSX 片段标签 <> / </> → 灰色 #7D7D7D */
+.sem-fragment {
+  color: #7D7D7D !important;
+}
+
+/* JSX 尖括号 < > </ /> → 灰色 #7D7D7D */
+.sem-bracket {
+  color: #7D7D7D !important;
 }

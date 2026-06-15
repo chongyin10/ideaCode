@@ -6,6 +6,35 @@ import type { SearchHighlight, EditorSnapshot } from '../../store/slices/workspa
 import { tsService } from '../../services/tsLanguageService';
 import './MonacoEditor.css';
 
+// ─── HTML5 原生标签集 ───
+// 在 JSX 中，小写标签名被视为 HTML 原生元素，大写则为自定义组件。
+// 装饰着色层对此处列出的原生标签使用 sem-variable 色，其余自定义组件交由 semantic tokens 层处理。
+const NATIVE_HTML_TAGS = new Set([
+  'a', 'abbr', 'address', 'area', 'article', 'aside', 'audio',
+  'b', 'base', 'bdi', 'bdo', 'blockquote', 'body', 'br', 'button',
+  'canvas', 'caption', 'cite', 'code', 'col', 'colgroup',
+  'data', 'datalist', 'dd', 'del', 'details', 'dfn', 'dialog', 'div', 'dl', 'dt',
+  'em', 'embed',
+  'fieldset', 'figcaption', 'figure', 'footer', 'form',
+  'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'head', 'header', 'hgroup', 'hr', 'html',
+  'i', 'iframe', 'img', 'input', 'ins',
+  'kbd',
+  'label', 'legend', 'li', 'link',
+  'main', 'map', 'mark', 'menu', 'meta', 'meter',
+  'nav', 'noscript',
+  'object', 'ol', 'optgroup', 'option', 'output',
+  'p', 'picture', 'pre', 'progress',
+  'q',
+  'rp', 'rt', 'ruby',
+  's', 'samp', 'script', 'section', 'select', 'slot', 'small', 'source', 'span',
+  'strong', 'style', 'sub', 'summary', 'sup', 'svg',
+  'table', 'tbody', 'td', 'template', 'textarea', 'tfoot', 'th', 'thead',
+  'time', 'title', 'tr', 'track',
+  'u', 'ul',
+  'var', 'video',
+  'wbr',
+]);
+
 // ─── 语义 token 装饰着色层 ───
 // 绕过 Monaco 内部的 scope 转换（semantic token type → TextMate scope → theme rule 匹配），
 // 直接在编辑器文本上以 CSS class decoration 方式着色，复刻 VS Code Dark+ 语义着色标准。
@@ -22,11 +51,12 @@ const TOKEN_COLOR_GROUP: Record<string, string> = {
   namespace:     'sem-type',
   typeParameter: 'sem-type',
   type:          'sem-type',
-  // 变量 / 参数 / 属性 / 枚举成员 → 浅蓝色
-  parameter:  'sem-variable',
+  // 变量 / 属性 / 枚举成员 → 浅蓝色
   variable:   'sem-variable',
   enumMember: 'sem-variable',
   property:   'sem-variable',
+  // 参数 → 淡蓝色
+  parameter:  'sem-parameter',
 };
 
 /** 将 LSP semantic tokens 压缩数据还原为 Monaco decoration 数组 */
@@ -71,6 +101,99 @@ function buildSemanticDecorations(
   return decs;
 }
 
+/** 状态机逐行扫描：匹配 JSX/HTML 标签名 + 尖括号 <> </ /> + 片段 <> </>，生成 decoration 数组 */
+function buildGrammarDecorations(
+  model: { getLanguageId(): string; getLineContent(lineNumber: number): string; getLineCount(): number },
+  monaco: { Range: new (sl: number, sc: number, el: number, ec: number) => unknown },
+): Array<{ range: unknown; options: { inlineClassName: string } }> {
+  const langId = model.getLanguageId();
+  if (!/typescriptreact|javascriptreact|typescript|javascript|html|razor|handlebars/i.test(langId)) return [];
+
+  const decs: Array<{ range: unknown; options: { inlineClassName: string } }> = [];
+  const lineCount = model.getLineCount();
+
+  for (let line = 1; line <= lineCount; line++) {
+    const content = model.getLineContent(line);
+    const len = content.length;
+    let inTag = false;
+
+    for (let j = 0; j < len; j++) {
+      const ch = content[j];
+
+      if (!inTag) {
+        // ── 进入 JSX 标签 ──
+        if (ch === '<' && j + 1 < len && /[a-zA-Z_$\/]/.test(content[j + 1])) {
+          inTag = true;
+
+          // 片段标签：<> / </>
+          if (content[j + 1] === '>') {
+            decs.push({ range: new monaco.Range(line, j + 1, line, j + 3), options: { inlineClassName: 'sem-fragment' } });
+            j++; inTag = false; continue;
+          }
+          if (j + 2 < len && content[j + 1] === '/' && content[j + 2] === '>') {
+            decs.push({ range: new monaco.Range(line, j + 1, line, j + 4), options: { inlineClassName: 'sem-fragment' } });
+            j += 2; inTag = false; continue;
+          }
+
+          // 开尖括号 < → sem-bracket
+          decs.push({ range: new monaco.Range(line, j + 1, line, j + 2), options: { inlineClassName: 'sem-bracket' } });
+
+          // 闭标签斜杠 / → sem-bracket
+          if (content[j + 1] === '/') {
+            decs.push({ range: new monaco.Range(line, j + 2, line, j + 3), options: { inlineClassName: 'sem-bracket' } });
+            j++; // skip '/'
+          }
+        }
+      } else {
+        // ── 在标签内部 ──
+        if (ch === '>') {
+          decs.push({ range: new monaco.Range(line, j + 1, line, j + 2), options: { inlineClassName: 'sem-bracket' } });
+          inTag = false;
+        } else if (ch === '/' && j + 1 < len && content[j + 1] === '>') {
+          decs.push({ range: new monaco.Range(line, j + 1, line, j + 3), options: { inlineClassName: 'sem-bracket' } });
+          j++; inTag = false;
+        } else if (ch === '{') {
+          // 跳过 JSX 表达式
+          let depth = 1; j++;
+          while (j < len && depth > 0) { if (content[j] === '{') depth++; else if (content[j] === '}') depth--; j++; }
+          j--; // 回退到 }
+        } else if (ch === '"' || ch === "'" || ch === '`') {
+          // 跳过字符串字面量
+          const q = ch; j++;
+          while (j < len && content[j] !== q) { if (content[j] === '\\') j++; j++; }
+        }
+        // 标签名：由下方的 tagRegex 统一匹配，不在状态机中重复处理
+      }
+    }
+  }
+
+  // ── 标签名：仅原生 HTML 标签 → sem-variable，自定义组件交由 semantic tokens 层 ──
+  for (let line = 1; line <= lineCount; line++) {
+    const content = model.getLineContent(line);
+    const tagRegex = /<\/?([a-zA-Z_$][\w$]*)/g;
+    let match: RegExpExecArray | null;
+
+    while ((match = tagRegex.exec(content)) !== null) {
+      const raw = match[1]; // div for <div, /div for </div
+      const isClose = raw.startsWith('/');
+      const tagName = isClose ? raw.slice(1) : raw;
+      if (!tagName) continue;
+      // 仅对原生 HTML 标签着色
+      if (!NATIVE_HTML_TAGS.has(tagName)) continue;
+
+      const startCol = match.index + (isClose ? 3 : 2);
+      const endCol = startCol + tagName.length;
+
+      decs.push({
+        range: new monaco.Range(line, startCol, line, endCol),
+        options: { inlineClassName: 'sem-variable' },
+      });
+    }
+  }
+
+  return decs;
+}
+
 const Loading = () => (
   <div className="monaco-loading">
     <div className="monaco-loading__spinner" />
@@ -80,6 +203,9 @@ const Loading = () => (
 
 // 保存 Monaco 原始的 registerHoverProvider，用于在拦截后仍能注册自定义 hover provider
 let originalRegisterHoverProvider: ((languageSelector: unknown, provider: unknown) => { dispose(): void }) | null = null;
+
+/** tsserver 文件引用计数：同一文件在多个分屏中打开时，仅当最后一个编辑器卸载时才 close */
+const tsserverRefCounts = new Map<string, number>();
 const TSJS_LANGS = new Set(['typescript', 'javascript', 'typescriptreact', 'javascriptreact']);
 
 /** 在 model 创建前配置 Monaco TypeScript/JavaScript 默认选项 */
@@ -207,12 +333,14 @@ interface MonacoEditorProps {
   onSnapshot?: (snapshot: EditorSnapshot) => void;
   focused?: boolean;
   path?: string;
+  /** 独占的 Monaco model URI；同一文件在不同分屏中应使用不同 model，避免关闭一个分屏时 dispose 共享 model 导致其他分屏白屏 */
+  modelPath?: string;
   onOpenFileByPath?: (path: string) => void;
   /** 编辑器（含 tsserver）就绪时回调 */
   onReady?: () => void;
 }
 
-const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused = true, path, onOpenFileByPath, onReady }: MonacoEditorProps) => {
+const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused = true, path, modelPath, onOpenFileByPath, onReady }: MonacoEditorProps) => {
   const dispatch = useAppDispatch();
   const searchHighlight = useAppSelector((state) => state.workspace.searchHighlight);
   const { theme, fontSize, semanticHighlightingEnabled, wordWrap, minimapEnabled } = useAppSelector((state) => state.settings);
@@ -227,6 +355,8 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
   const lspDisposablesRef = useRef<Array<{ dispose(): void }>>([]);
   const semTokenGenRef = useRef(0);
   const semDecoRef = useRef<string[]>([]);
+  const tagDecoRef = useRef<string[]>([]);
+  const tagTimerRef = useRef<ReturnType<typeof setTimeout>>();
 
   const onSnapshotRef = useRef(onSnapshot);
   onSnapshotRef.current = onSnapshot;
@@ -251,8 +381,14 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
     }
   }, [theme]);
 
-  // 卸载时保存快照 + 关闭 tsserver 文件
+  // 卸载时保存快照 + 关闭 tsserver 文件 + 释放独占 model
   useEffect(() => {
+    const currentPath = path;
+    const currentModelPath = modelPath;
+    // 同一文件在多个分屏中打开时，tsserver 只需打开一次；通过引用计数管理 close 时机。
+    if (currentPath && !isBrowser) {
+      tsserverRefCounts.set(currentPath, (tsserverRefCounts.get(currentPath) || 0) + 1);
+    }
     return () => {
       const snap = onSnapshotRef.current;
       if (editorRef.current && snap) {
@@ -262,17 +398,36 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
           if (pos) snap({ cursor: { line: pos.lineNumber, column: pos.column }, scrollTop: scroll });
         } catch { /* 忽略 */ }
       }
-      // 关闭 tsserver 文件 + 清理 LSP providers
-      if (path && !isBrowser) {
-        tsService.close(path).catch(() => {});
+      // 关闭 tsserver 文件：引用计数归零时才真正 close，避免多开同一文件时
+      // 关闭一个分屏影响其他分屏的 LSP。
+      if (currentPath && !isBrowser) {
+        const count = (tsserverRefCounts.get(currentPath) || 1) - 1;
+        if (count <= 0) {
+          tsserverRefCounts.delete(currentPath);
+          tsService.close(currentPath).catch(() => {});
+        } else {
+          tsserverRefCounts.set(currentPath, count);
+        }
       }
       diagUnsubRef.current?.();
+      clearTimeout(tagTimerRef.current);
       // 清除语义 decorations
       if (editorRef.current && semDecoRef.current.length > 0) {
         try { editorRef.current.deltaDecorations(semDecoRef.current, []); } catch { /* 忽略 */ }
       }
+      if (editorRef.current && tagDecoRef.current.length > 0) {
+        try { editorRef.current.deltaDecorations(tagDecoRef.current, []); } catch { /* 忽略 */ }
+      }
       lspDisposablesRef.current.forEach((d) => d.dispose());
       lspDisposablesRef.current = [];
+      // 释放当前分屏独占的 Monaco model，避免泄漏
+      if (currentModelPath && monacoRef.current) {
+        try {
+          const uri = monacoRef.current.Uri.parse(currentModelPath);
+          const model = monacoRef.current.editor.getModel(uri);
+          model?.dispose();
+        } catch { /* 忽略 */ }
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -344,13 +499,30 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
     applyHighlight(editorRef.current, monacoRef.current, searchHighlight);
   }, [searchHighlight, applyHighlight]);
 
+  /** 将 JSX/HTML 标签名装饰着色为 sem-variable 蓝（同步正则扫描，无异步依赖） */
+  const applyTagDecorations = useCallback(
+    (editor: typeof editorRef.current, monaco: typeof monacoRef.current) => {
+      if (!editor || !monaco) return;
+      const model = editor.getModel();
+      if (!model) return;
+      clearTimeout(tagTimerRef.current);
+      tagTimerRef.current = setTimeout(() => {
+        try {
+          const decs = buildGrammarDecorations(model, monaco);
+          tagDecoRef.current = editor.deltaDecorations(tagDecoRef.current, decs);
+        } catch { /* 忽略 */ }
+      }, 200);
+    },
+    [],
+  );
+
   return (
     <Editor
       height="100%"
       width="100%"
       language={language}
       value={value}
-      path={path}
+      path={modelPath || path}
       beforeMount={beforeMount}
       onChange={(v) => {
         onChange?.(v || '');
@@ -628,10 +800,12 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
           }, 100);
         }
 
-        // ── JSX/TSX 语义高亮 ──
-        // Monaco 的 semanticHighlighting.enabled + tsserver semantic tokens
-        // 会自动区分 JSX 标签名、属性名、属性值等，无需额外的 decoration 覆盖。
-        // 参考：https://github.com/microsoft/TypeScript-TmLanguage/issues/756
+        // ── TextMate grammar tag 装饰着色（JSX/HTML 标签名 → sem-variable 蓝） ──
+        applyTagDecorations(editor, monaco);
+        const tagModelDisposable = editor.getModel()?.onDidChangeContent(() => {
+          applyTagDecorations(editorRef.current, monacoRef.current);
+        });
+        if (tagModelDisposable) lspDisposablesRef.current.push({ dispose: () => tagModelDisposable.dispose() });
 
         const pending = pendingRef.current;
         if (pending) { pendingRef.current = null; applyHighlight(editor, monaco, pending); }
