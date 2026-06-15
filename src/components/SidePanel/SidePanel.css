@@ -101,25 +101,36 @@
 
 .folder-tree {
   font-size: 13px;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* 项目树/时间线等可滚动区域，保证“打开的编辑器”固定在顶部 */
+.folder-tree__scrollable {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 /* 细滚动条 — Webkit (Chrome/Edge/Safari) + Firefox */
-.folder-tree::-webkit-scrollbar {
+.explorer-section__content::-webkit-scrollbar {
   width: 5px;
 }
 
-.folder-tree::-webkit-scrollbar-track {
+.explorer-section__content::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.folder-tree::-webkit-scrollbar-thumb {
+.explorer-section__content::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.12);
   border-radius: 3px;
 }
 
-.folder-tree::-webkit-scrollbar-thumb:hover {
+.explorer-section__content::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.22);
 }
 
@@ -176,6 +187,10 @@
 
 .explorer-section {
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .explorer-section__header {
@@ -192,6 +207,7 @@
   letter-spacing: 0.4px;
   transition: background 0.1s;
   position: relative;
+  flex-shrink: 0;
 }
 
 .explorer-section__header:hover {
@@ -220,6 +236,55 @@
 
 .explorer-section__content {
   padding-bottom: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+}
+
+/* 项目结构区域占满中间剩余空间，头部固定、树内容独立滚动 */
+.explorer-section--main {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.explorer-section--main .explorer-section__content {
+  flex: 1;
+  min-height: 0;
+}
+
+.explorer-section__resize-handle {
+  height: 10px;
+  cursor: ns-resize;
+  background: transparent;
+  transition: background-color 0.2s ease;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.explorer-section__resize-handle::after {
+  content: '';
+  width: 24px;
+  height: 2px;
+  border-radius: 1px;
+  background-color: rgba(255, 255, 255, 0.08);
+  transition: background-color 0.2s ease, width 0.2s ease;
+}
+
+.explorer-section__resize-handle:hover,
+.explorer-section__resize-handle.is-resizing {
+  background-color: rgba(0, 122, 204, 0.15);
+}
+
+.explorer-section__resize-handle:hover::after,
+.explorer-section__resize-handle.is-resizing::after {
+  background-color: rgba(0, 122, 204, 0.7);
+  width: 40px;
 }
 
 .explorer-rotated {

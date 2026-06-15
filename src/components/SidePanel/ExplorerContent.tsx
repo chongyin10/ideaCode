@@ -159,6 +159,57 @@ const ExplorerContent = () => {
   const [projectExpanded, setProjectExpanded] = useState(true);
   const [timelineExpanded, setTimelineExpanded] = useState(false);
 
+  // 时间线高度可拖动调整；打开的编辑器固定最大高度，不再提供拖拽
+  const SECTION_MIN_HEIGHT = 60;
+  const OPEN_EDITORS_MAX_HEIGHT = 120;
+  interface SectionHeights {
+    timeline: number;
+  }
+  const [heights, setHeights] = useState<SectionHeights>({
+    timeline: 120,
+  });
+  const [resizingSection, setResizingSection] = useState<keyof SectionHeights | null>(null);
+  const scrollableRef = useRef<HTMLDivElement>(null);
+  const RESIZE_HANDLE_HEIGHT = 10;
+
+  const startResize = useCallback(
+    (section: keyof SectionHeights, e: React.MouseEvent) => {
+      e.preventDefault();
+      setResizingSection(section);
+
+      // 记录鼠标点击点与手柄中心的偏移，保证拖拽时手柄中心紧跟鼠标
+      const handleRect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
+      const offsetY = e.clientY - (handleRect.top + handleRect.height / 2);
+
+      const handleMouseMove = (event: MouseEvent) => {
+        const container = scrollableRef.current;
+        if (!container) return;
+        const rect = container.getBoundingClientRect();
+        const newHandleCenterY = event.clientY - offsetY;
+        // 时间线高度 = 容器底部 - 手柄中心 - 半个手柄高度
+        const nextHeight = Math.min(
+          Math.max(SECTION_MIN_HEIGHT, rect.bottom - newHandleCenterY - RESIZE_HANDLE_HEIGHT / 2),
+          rect.height - SECTION_MIN_HEIGHT - RESIZE_HANDLE_HEIGHT
+        );
+        setHeights((prev) => ({ ...prev, [section]: nextHeight }));
+      };
+
+      const handleMouseUp = () => {
+        setResizingSection(null);
+        document.removeEventListener('mousemove', handleMouseMove);
+        document.removeEventListener('mouseup', handleMouseUp);
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      };
+
+      document.body.style.cursor = 'ns-resize';
+      document.body.style.userSelect = 'none';
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+    },
+    []
+  );
+
   // expandPaths 只在 QuickOpen 触发时设置一次，延迟清空避免影响后续手动折叠/展开
   const processedExpandPathsRef = useRef('');
   useEffect(() => {
@@ -673,7 +724,7 @@ const ExplorerContent = () => {
               <span className="explorer-section__title">打开的编辑器</span>
             </div>
             {openEditorsExpanded && (
-              <div className="explorer-section__content">
+              <div className="explorer-section__content" style={{ maxHeight: OPEN_EDITORS_MAX_HEIGHT }}>
                 {openedFiles.length === 0 && (
                   <div className="explorer-open-editor explorer-open-editor--empty">
                     没有打开的编辑器
@@ -699,102 +750,110 @@ const ExplorerContent = () => {
               </div>
             )}
           </div>
-
-          {/* ── IDEACODE 项目结构 ── */}
-          <div className="explorer-section">
-            <div
-              className="explorer-section__header"
-              onClick={() => setProjectExpanded(!projectExpanded)}
-            >
-              <ChevronRight
-                size={12}
-                strokeWidth={1.5}
-                className={projectExpanded ? 'explorer-rotated' : ''}
-              />
-              <span className="explorer-section__title">{rootName || 'IDEACODE'}</span>
-              <span className="explorer-section__tools">
-                <button
-                  className="explorer-header__icon"
-                  title="新建文件"
-                  onClick={(e) => { e.stopPropagation(); startCreate(rootSource, 'file'); }}
-                >
-                  <FilePlus size={14} strokeWidth={1.5} />
-                </button>
-                <button
-                  className="explorer-header__icon"
-                  title="新建文件夹"
-                  onClick={(e) => { e.stopPropagation(); startCreate(rootSource, 'folder'); }}
-                >
-                  <FolderPlus size={14} strokeWidth={1.5} />
-                </button>
-                <button
-                  className="explorer-header__icon"
-                  title="刷新"
-                  onClick={(e) => { e.stopPropagation(); dispatch(refreshDirectory(rootSource)); }}
-                >
-                  <RefreshCw size={14} strokeWidth={1.5} />
-                </button>
-                <button
-                  className="explorer-header__icon"
-                  title="折叠所有"
-                  onClick={(e) => { e.stopPropagation(); dispatch(clearExpandPaths()); }}
-                >
-                  <ChevronsDownUp size={14} strokeWidth={1.5} />
-                </button>
-              </span>
-            </div>
-            {projectExpanded && (
-              <div className="explorer-section__content">
-                {entries.map((entry) => (
-                  <FileTree
-                    key={`${entry.name}:${entry.kind}`}
-                    entry={entry}
-                    level={0}
-                    activeSource={activeFileSource}
-                    onOpenFile={stableOnOpenFile}
-                    parentSource={rootSource}
-                    rootSource={rootSource}
-                    onFindInFiles={handleFindInFiles}
-                    onContextMenu={stableOnContextMenu}
-                    pendingCreate={pendingCreate}
-                    onCreateConfirm={handleCreateConfirm}
-                    onCreateCancel={handleCreateCancel}
-                    pendingRename={pendingRename}
-                    onRenameConfirm={handleRenameConfirm}
-                    onRenameCancel={handleRenameCancel}
-                    lastOperation={lastOperation}
-                    clipboardItems={clipboardState?.items}
-                    selectedEntries={selectedEntries.map((s) => s.entry)}
-                    onItemSelect={handleItemSelect}
-                    gitStatus={gitStatus}
-                    expandPaths={expandPaths}
-                    expandedDirs={expandedDirs}
-                    onToggleExpand={stableOnToggleExpand}
-                  />
-                ))}
-                {renderRootInlineInput()}
+          {/* 项目树/时间线等区域统一在下方可滚动区域中滚动，
+              保证“打开的编辑器”始终固定在顶部不被遮罩 */}
+          <div className="folder-tree__scrollable" ref={scrollableRef}>
+            {/* ── IDEACODE 项目结构 ── */}
+            <div className="explorer-section explorer-section--main">
+              <div
+                className="explorer-section__header"
+                onClick={() => setProjectExpanded(!projectExpanded)}
+              >
+                <ChevronRight
+                  size={12}
+                  strokeWidth={1.5}
+                  className={projectExpanded ? 'explorer-rotated' : ''}
+                />
+                <span className="explorer-section__title">{rootName || 'IDEACODE'}</span>
+                <span className="explorer-section__tools">
+                  <button
+                    className="explorer-header__icon"
+                    title="新建文件"
+                    onClick={(e) => { e.stopPropagation(); startCreate(rootSource, 'file'); }}
+                  >
+                    <FilePlus size={14} strokeWidth={1.5} />
+                  </button>
+                  <button
+                    className="explorer-header__icon"
+                    title="新建文件夹"
+                    onClick={(e) => { e.stopPropagation(); startCreate(rootSource, 'folder'); }}
+                  >
+                    <FolderPlus size={14} strokeWidth={1.5} />
+                  </button>
+                  <button
+                    className="explorer-header__icon"
+                    title="刷新"
+                    onClick={(e) => { e.stopPropagation(); dispatch(refreshDirectory(rootSource)); }}
+                  >
+                    <RefreshCw size={14} strokeWidth={1.5} />
+                  </button>
+                  <button
+                    className="explorer-header__icon"
+                    title="折叠所有"
+                    onClick={(e) => { e.stopPropagation(); dispatch(clearExpandPaths()); }}
+                  >
+                    <ChevronsDownUp size={14} strokeWidth={1.5} />
+                  </button>
+                </span>
               </div>
-            )}
-          </div>
-
-          {/* ── 时间线 ── */}
-          <div className="explorer-section">
-            <div
-              className="explorer-section__header"
-              onClick={() => setTimelineExpanded(!timelineExpanded)}
-            >
-              <ChevronRight
-                size={12}
-                strokeWidth={1.5}
-                className={timelineExpanded ? 'explorer-rotated' : ''}
-              />
-              <span className="explorer-section__title">时间线</span>
+              {projectExpanded && (
+                <div className="explorer-section__content">
+                  {entries.map((entry) => (
+                    <FileTree
+                      key={`${entry.name}:${entry.kind}`}
+                      entry={entry}
+                      level={0}
+                      activeSource={activeFileSource}
+                      onOpenFile={stableOnOpenFile}
+                      parentSource={rootSource}
+                      rootSource={rootSource}
+                      onFindInFiles={handleFindInFiles}
+                      onContextMenu={stableOnContextMenu}
+                      pendingCreate={pendingCreate}
+                      onCreateConfirm={handleCreateConfirm}
+                      onCreateCancel={handleCreateCancel}
+                      pendingRename={pendingRename}
+                      onRenameConfirm={handleRenameConfirm}
+                      onRenameCancel={handleRenameCancel}
+                      lastOperation={lastOperation}
+                      clipboardItems={clipboardState?.items}
+                      selectedEntries={selectedEntries.map((s) => s.entry)}
+                      onItemSelect={handleItemSelect}
+                      gitStatus={gitStatus}
+                      expandPaths={expandPaths}
+                      expandedDirs={expandedDirs}
+                      onToggleExpand={stableOnToggleExpand}
+                    />
+                  ))}
+                  {renderRootInlineInput()}
+                </div>
+              )}
             </div>
-            {timelineExpanded && (
-              <div className="explorer-section__content">
-                <div className="explorer-timeline--empty">时间线功能即将推出</div>
-              </div>
+            {projectExpanded && timelineExpanded && (
+              <div
+                className={`explorer-section__resize-handle ${resizingSection === 'timeline' ? 'is-resizing' : ''}`}
+                onMouseDown={(e) => startResize('timeline', e)}
+              />
             )}
+            {/* ── 时间线 ── */}
+            <div className="explorer-section">
+              <div
+                className="explorer-section__header"
+                onClick={() => setTimelineExpanded(!timelineExpanded)}
+              >
+                <ChevronRight
+                  size={12}
+                  strokeWidth={1.5}
+                  className={timelineExpanded ? 'explorer-rotated' : ''}
+                />
+                <span className="explorer-section__title">时间线</span>
+              </div>
+              {timelineExpanded && (
+                <div className="explorer-section__content" style={{ height: heights.timeline }}>
+                  <div className="explorer-timeline--empty">时间线功能即将推出</div>
+                </div>
+              )}
+            </div>
           </div>
         </>
       )}
