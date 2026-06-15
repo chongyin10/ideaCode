@@ -100,6 +100,28 @@ const FileTree = memo(({
   // 展开状态由外部 expandedDirs 控制
   const expanded = expandedDirs?.includes(entryRelPath) ?? false;
 
+  // 享元模式：缓存展开/折叠状态下的图标 JSX 对象
+  // 避免每次渲染都创建新的 JSX 对象
+  const iconElement = useMemo(() => (
+    <FileIcon name={entry.name} kind={entry.kind} expanded={expanded} />
+  ), [entry.name, entry.kind, expanded]);
+
+  // 享元：缓存缩进引导线 JSX（大目录下节省大量对象分配）
+  const indentGuides = useMemo(() => {
+    if (level <= 0) return null;
+    return (
+      <div className="tree-indent-guides" style={{ left: 0, width: level * 12 + 6 }}>
+        {Array.from({ length: level }).map((_, i) => (
+          <span
+            key={i}
+            className="tree-indent-guide"
+            style={{ left: 12 + i * 12 + 5 }}
+          />
+        ))}
+      </div>
+    );
+  }, [level]);
+
   // 用 ref 存储最新 expanded 值，避免 useCallback 闭包捕获过期值
   const expandedRef = useRef(expanded);
   expandedRef.current = expanded;
@@ -263,18 +285,8 @@ const FileTree = memo(({
 
   return (
     <div className="tree-row" onContextMenu={handleContextMenu} data-name={entry.name}>
-      {/* 缩进引导线：为每个缩进级别绘制一条竖线 */}
-      {level > 0 && (
-        <div className="tree-indent-guides" style={{ left: 0, width: level * 12 + 6 }}>
-          {Array.from({ length: level }).map((_, i) => (
-            <span
-              key={i}
-              className="tree-indent-guide"
-              style={{ left: 12 + i * 12 + 5 }}
-            />
-          ))}
-        </div>
-      )}
+      {/* 享元缩进引导线 */}
+      {indentGuides}
       <div
         className={`tree-item ${isActive ? 'active' : ''} ${isSelected ? 'selected' : ''} ${isCut ? 'is-cut' : ''}`}
         style={{ paddingLeft: 12 + level * 12 }}
@@ -288,7 +300,7 @@ const FileTree = memo(({
           )}
         </span>
         <span className="tree-item__icon">
-          <FileIcon name={entry.name} kind={entry.kind} expanded={expanded} />
+          {iconElement}
         </span>
         {myIsRenaming ? (
           <InlineInput

@@ -334,3 +334,223 @@ function escapeHtml(text: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
 }
+
+/* ─── 语法感知差异比较 ─── */
+
+/**
+ * 基于词法分析的分词差异
+ *
+ * 将代码行拆分为 token（标识符、关键字、标点、空白等），
+ * 然后对 token 序列做 LCS/Meyers 差异比较。
+ * 相比逐字符比较，语法感知的差异能正确识别重命名/格式化等无心之变。
+ *
+ * 简化实现：将每行按 camelCase、标点、空白分词
+ */
+function tokenizeLine(line: string): string[] {
+  if (!line) return [''];
+  // 按标识符边界、标点、空白分词
+  const tokens: string[] = [];
+  let current = '';
+  for (const ch of line) {
+    if (/\s/.test(ch)) {
+      if (current) { tokens.push(current); current = ''; }
+      tokens.push(ch);
+    } else if (/[^a-zA-Z0-9_]/.test(ch)) {
+      if (current) { tokens.push(current); current = ''; }
+      tokens.push(ch);
+    } else {
+      current += ch;
+    }
+  }
+  if (current) tokens.push(current);
+  return tokens;
+}
+
+/**
+ * 语法感知的行级差异
+ *
+ * 对两行代码做 token 级别的差异比较，区分：
+ * - 标识符重命名（token 不同但语法角色相同）
+ * - 字面量变化（数字/字符串不同）
+ * - 格式变化（仅空白变化）
+ *
+ * @returns 带 token 差异信息的行对比结果
+ */
+export interface GrammarDiffLine {
+  oldLine: number | null;
+  newLine: number | null;
+  oldContent: string;
+  newContent: string;
+  type: 'equal' | 'modified' | 'inserted' | 'deleted';
+  /** token 级别的精细差异 */
+  tokenDiff?: Array<{
+    type: 'equal' | 'changed' | 'inserted' | 'deleted';
+    oldText: string;
+    newText: string;
+  }>;
+  /** 是否为仅格式变化（只有空白不同） */
+  isFormatOnly?: boolean;
+}
+
+function computeTokenDiff(oldLine: string, newLine: string): {
+  tokenDiff: GrammarDiffLine['tokenDiff'];
+  isFormatOnly: boolean;
+} {
+  const oldTokens = tokenizeLine(oldLine);
+  const newTokens = tokenizeLine(newLine);
+
+  // 简化的 LCS token diff
+  const m = oldTokens.length;
+  const n = newTokens.length;
+  const dp = new Int32Array((m + 1) * (n + 1));
+
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      if (oldTokens[i - 1] === newTokens[j - 1]) {
+        dp[i * (n + 1) + j] = dp[(i - 1) * (n + 1) + (j - 1)] + 1;
+      } else {
+        dp[i * (n + 1) + j] = Math.max(
+          dp[(i - 1) * (n + 1) + j],
+          dp[i * (n + 1) + (j - 1)]
+        );
+      }
+    }
+  }
+
+  // 回溯构建 token diff
+  type TokenDiffItem = NonNullable<GrammarDiffLine['tokenDiff']>[number];
+  const tokenDiff: TokenDiffItem[] = [];
+  let i = m, j = n;
+
+  const backtrack: TokenDiffItem[] = [];
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && oldTokens[i - 1] === newTokens[j - 1]) {
+      backtrack.unshift({ type: 'equal', oldText: oldTokens[i - 1], newText: newTokens[j - 1] });
+      i--; j--;
+    } else if (j > 0 && (i === 0 || dp[i * (n + 1) + (j - 1)] >= dp[(i - 1) * (n + 1) + j])) {
+      backtrack.unshift({ type: 'inserted', oldText: '', newText: newTokens[j - 1] });
+      j--;
+    } else if (i > 0) {
+      backtrack.unshift({ type: 'deleted', oldText: oldTokens[i - 1], newText: '' });
+      i--;
+    }
+  }
+
+  // 合并相邻相同类型项 + 检测纯格式变化
+  let isFormatOnly = true;
+  for (const item of backtrack) {
+    const last = tokenDiff[tokenDiff.length - 1];
+    if (last && last.type === item.type) {
+      last.oldText += item.oldText;
+      last.newText += item.newText;
+    } else {
+      tokenDiff.push({ ...item });
+    }
+
+    // 检查是否只有空白差异
+    if (item.type !== 'equal') {
+      const combinedOld = item.oldText.replace(/\s/g, '');
+      const combinedNew = item.newText.replace(/\s/g, '');
+      if (combinedOld !== combinedNew && item.oldText.trim() !== item.newText.trim()) {
+        isFormatOnly = false;
+      }
+    }
+  }
+
+  return { tokenDiff, isFormatOnly };
+}
+
+/**
+ * 语法感知差异比较（主函数）
+ *
+ * 先做行级 Myers Diff，对每对 modified 行再做 token 级精细 diff
+ */
+export function grammarAwareDiff(
+  oldText: string,
+  newText: string
+): GrammarDiffLine[] {
+  const oldLines = oldText.split('\n');
+  const newLines = newText.split('\n');
+
+  if (oldLines[oldLines.length - 1] === '') oldLines.pop();
+  if (newLines[newLines.length - 1] === '') newLines.pop();
+
+  const lineChunks = computeDiff(oldText, newText).chunks;
+  const result: GrammarDiffLine[] = [];
+
+  let oldLineIdx = 0;
+  let newLineIdx = 0;
+
+  for (const chunk of lineChunks) {
+    if (chunk.type === 'equal') {
+      for (const line of oldLines.slice(oldLineIdx, oldLineIdx + 1)) {
+        // 找到对应行的内容
+        const oldContent = line || '';
+        const newContent = newLines[newLineIdx] || '';
+        result.push({
+          oldLine: chunk.oldLine !== null ? oldLineIdx + 1 : null,
+          newLine: chunk.newLine !== null ? newLineIdx + 1 : null,
+          oldContent,
+          newContent,
+          type: 'equal',
+          tokenDiff: [{ type: 'equal', oldText: oldContent, newText: newContent }],
+          isFormatOnly: false,
+        });
+        oldLineIdx++;
+        newLineIdx++;
+        if (oldLineIdx >= oldLines.length || newLineIdx >= newLines.length) break;
+      }
+    } else if (chunk.type === 'delete') {
+      result.push({
+        oldLine: oldLineIdx + 1,
+        newLine: null,
+        oldContent: chunk.content,
+        newContent: '',
+        type: 'deleted',
+      });
+      oldLineIdx++;
+    } else if (chunk.type === 'insert') {
+      result.push({
+        oldLine: null,
+        newLine: newLineIdx + 1,
+        oldContent: '',
+        newContent: chunk.content,
+        type: 'inserted',
+      });
+      newLineIdx++;
+    }
+  }
+
+  // 第二遍：合并相邻的 delete + insert 为 modified，并做 token diff
+  const merged: GrammarDiffLine[] = [];
+  let i = 0;
+  while (i < result.length) {
+    if (
+      result[i]?.type === 'deleted' &&
+      i + 1 < result.length &&
+      result[i + 1]?.type === 'inserted'
+    ) {
+      const delLine = result[i];
+      const insLine = result[i + 1];
+      const { tokenDiff: td, isFormatOnly } = computeTokenDiff(
+        delLine.oldContent,
+        insLine.newContent
+      );
+      merged.push({
+        oldLine: delLine.oldLine,
+        newLine: insLine.newLine,
+        oldContent: delLine.oldContent,
+        newContent: insLine.newContent,
+        type: 'modified',
+        tokenDiff: td,
+        isFormatOnly,
+      });
+      i += 2;
+    } else {
+      merged.push(result[i]);
+      i++;
+    }
+  }
+
+  return merged;
+}

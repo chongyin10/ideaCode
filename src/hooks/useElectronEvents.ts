@@ -3,15 +3,13 @@ import { useAppDispatch } from '../store/hooks';
 import { loadDirectory, openFile } from '../store/slices/workspaceSlice';
 import { openDirectory } from '../services/fileService';
 import type { FileEntry } from '../services/fileService';
+import { eventBus } from '../utils/eventBus';
 
 /**
  * 监听 Electron 主进程推送的系统级事件
- * 
- * - 菜单事件：Cmd/Ctrl+O 打开文件夹、Cmd/Ctrl+P 打开文件、Shift+Cmd+N 新建窗口
- * - 窗口焦点：激活模式 / 后台模式状态切换
- * - 文件变更：后台文件监听推送的变更通知
- * - 应用退出：保存状态提示
- * - 扩展消息：扩展宿主进程推送的消息
+ *
+ * 同时接入 EventBus（Observer 模式），将原始 Electron 事件
+ * 转换为类型安全的应用级事件，供其他模块订阅。
  */
 export function useElectronEvents() {
   const dispatch = useAppDispatch();
@@ -27,6 +25,7 @@ export function useElectronEvents() {
       const dir = await openDirectory();
       if (dir) {
         dispatch(loadDirectory({ source: dir.source, name: dir.name }));
+        eventBus.emit('project:opened', { rootPath: String(dir.source), rootName: dir.name });
       }
     });
     cleanups.push(unsubMenuFolder);
@@ -41,6 +40,7 @@ export function useElectronEvents() {
           source: filePath,
         };
         dispatch(openFile(entry));
+        eventBus.emit('file:opened', { fileId: filePath, filePath, fileName: entry.name });
       }
     });
     cleanups.push(unsubMenuFile);
@@ -51,16 +51,16 @@ export function useElectronEvents() {
     });
     cleanups.push(unsubMenuNewWindow);
 
-    /* ── 窗口焦点变化（激活模式）── */
+    /* ── 窗口焦点变化 ── */
     const unsubFocus = api.window.onFocus((data) => {
+      eventBus.emit('app:focus', undefined);
       console.log('[Electron] 窗口激活', data);
-      // 窗口激活时可触发刷新逻辑（如 Git 状态、文件树同步）
     });
     cleanups.push(unsubFocus);
 
     const unsubBlur = api.window.onBlur((data) => {
+      eventBus.emit('app:blur', undefined);
       console.log('[Electron] 窗口失焦（后台模式）', data);
-      // 窗口失焦时进入后台模式，文件监听等后台任务继续运行
     });
     cleanups.push(unsubBlur);
 
@@ -70,17 +70,20 @@ export function useElectronEvents() {
     });
     cleanups.push(unsubState);
 
-    /* ── 文件变更通知（后台模式推送）── */
+    /* ── 文件变更通知 ── */
     const unsubFsChange = api.fs.onChange((event) => {
+      eventBus.emit('file:changed', {
+        filePath: event.path,
+        eventType: event.eventType,
+      });
       console.log('[Electron] 文件变更', event);
-      // 可在此触发 Redux action 刷新文件树或提示用户重新加载
     });
     cleanups.push(unsubFsChange);
 
     /* ── 应用退出 ── */
     const unsubQuit = api.app.onQuit(() => {
+      eventBus.emit('app:beforeQuit', undefined);
       console.log('[Electron] 应用即将退出');
-      // 可在此保存编辑器状态、未保存文件提示等
     });
     cleanups.push(unsubQuit);
 

@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { readFile } from '../services/fileService';
 import type { FileEntry, FileSource } from '../services/fileService';
-import { InvertedIndex } from '../utils/algorithms';
+import { InvertedIndex, PIDController, KalmanFilter } from '../utils/algorithms';
 import {
   hasNonWordChars,
   matchGlob,
@@ -11,13 +11,179 @@ import {
   type FileSearchResult,
 } from '../utils/searchUtils';
 
-interface WorkerResult {
-  type: 'progress' | 'done';
-  results: FileSearchResult[];
-  totalMatches: number;
-  isTruncated: boolean;
-  searchId: number;
+/* ─── 搜索策略接口（Strategy Pattern）─── */
+
+export interface SearchContext {
+  files: { path: string; source: FileSource }[];
+  searchQuery: string;
+  caseSensitive: boolean;
+  wholeWord: boolean;
+  useRegex: boolean;
+  fuzzyMode: boolean;
+  currentSearchId: number;
 }
+
+interface SearchStrategy {
+  /** 策略名称 */
+  name: string;
+  /** 是否匹配当前上下文 */
+  canHandle(ctx: SearchContext): boolean;
+  /** 执行搜索 */
+  execute(
+    ctx: SearchContext,
+    services: SearchStrategyServices
+  ): Promise<{ results: FileSearchResult[]; hits: number; truncated: boolean }>;
+}
+
+interface SearchStrategyServices {
+  readBatch: (files: { path: string; source: FileSource }[]) => Promise<{ path: string; content: string }[]>;
+  getWorker: () => Worker;
+  setResults: (r: FileSearchResult[]) => void;
+  setSearchedCount: (n: number) => void;
+  setTotalFileCount: (n: number) => void;
+  setIsTruncated: (b: boolean) => void;
+  setIsSearching: (b: boolean) => void;
+  setFuzzyMode: (b: boolean) => void;
+  buildIndex: (files: { path: string; source: FileSource }[]) => Promise<InvertedIndex>;
+  computeAdaptiveBatchSize: (prevSize: number, durationMs: number) => number;
+}
+
+/** 倒排索引搜索策略（简单词搜索） */
+class IndexedSearchStrategy implements SearchStrategy {
+  name = 'indexed';
+
+  canHandle(ctx: SearchContext): boolean {
+    return !ctx.useRegex && !ctx.caseSensitive && !ctx.wholeWord
+      && !hasNonWordChars(ctx.searchQuery);
+  }
+
+  async execute(ctx: SearchContext, svc: SearchStrategyServices) {
+    const index = await svc.buildIndex(ctx.files);
+    let hits = ctx.fuzzyMode ? index.fuzzySearch(ctx.searchQuery) : index.search(ctx.searchQuery);
+
+    if (hits.length === 0 && !ctx.fuzzyMode && ctx.searchQuery.length >= 2) {
+      hits = index.fuzzySearch(ctx.searchQuery);
+      if (hits.length > 0) svc.setFuzzyMode(true);
+    }
+
+    const fileResults = hitsToResults(hits, ctx.searchQuery);
+    const totalMatches = fileResults.reduce((s, r) => s + r.matches.length, 0);
+    const truncated = totalMatches >= MAX_TOTAL_MATCHES;
+
+    svc.setResults(fileResults.slice(0, MAX_TOTAL_MATCHES));
+    svc.setTotalFileCount(hits.length);
+    svc.setSearchedCount(hits.length);
+
+    return { results: fileResults, hits: hits.length, truncated };
+  }
+}
+
+/** Worker 搜索策略（正则/大小写/全词匹配等） */
+class WorkerSearchStrategy implements SearchStrategy {
+  name = 'worker';
+
+  canHandle(): boolean {
+    return true; // 兜底策略
+  }
+
+  async execute(ctx: SearchContext, svc: SearchStrategyServices) {
+    const worker = svc.getWorker();
+    const mergedResults = new Map<string, FileSearchResult>();
+    let processed = 0;
+    let totalMatchesSoFar = 0;
+
+    const workerPromise = new Promise<{ results: FileSearchResult[]; hits: number; truncated: boolean }>((resolve) => {
+      const onMessage = (event: MessageEvent<{
+        type: string;
+        results: FileSearchResult[];
+        totalMatches: number;
+        isTruncated: boolean;
+        searchId: number;
+      }>) => {
+        if (ctx.currentSearchId !== event.data.searchId) return;
+        const { type, results: batchResults, totalMatches, isTruncated } = event.data;
+        if (type === 'progress') {
+          for (const r of batchResults) {
+            const existing = mergedResults.get(r.filePath);
+            if (existing) existing.matches.push(...r.matches);
+            else mergedResults.set(r.filePath, { ...r });
+          }
+          totalMatchesSoFar = totalMatches;
+          svc.setResults(Array.from(mergedResults.values()));
+          svc.setSearchedCount(processed);
+          if (isTruncated) svc.setIsTruncated(true);
+        }
+      };
+
+      worker.addEventListener('message', onMessage);
+
+      // 发送文件批次
+      const sendBatches = async () => {
+        let batchSize = READ_BATCH_SIZE;
+        for (let i = 0; i < ctx.files.length; i += batchSize) {
+          if (totalMatchesSoFar >= MAX_TOTAL_MATCHES) { svc.setIsTruncated(true); break; }
+          const fileBatch = ctx.files.slice(i, i + batchSize);
+          const batchStart = performance.now();
+          const contents = await svc.readBatch(fileBatch);
+          const batchEnd = performance.now();
+
+          processed += fileBatch.length;
+          if (contents.length > 0) {
+            worker.postMessage({
+              type: 'search',
+              files: contents,
+              query: ctx.searchQuery,
+              options: { caseSensitive: ctx.caseSensitive, wholeWord: ctx.wholeWord, regex: ctx.useRegex },
+              totalMatchesSoFar,
+              maxTotalMatches: MAX_TOTAL_MATCHES,
+              searchId: ctx.currentSearchId,
+            });
+          }
+
+          batchSize = svc.computeAdaptiveBatchSize(batchSize, batchEnd - batchStart);
+          await new Promise<void>(r => requestAnimationFrame(() => r()));
+        }
+
+        worker.removeEventListener('message', onMessage);
+        const results = Array.from(mergedResults.values());
+        resolve({ results, hits: results.length, truncated: totalMatchesSoFar >= MAX_TOTAL_MATCHES });
+      };
+
+      sendBatches().catch((err) => {
+        worker.removeEventListener('message', onMessage);
+        console.error('[WorkerSearch] 发送批次失败:', err);
+        resolve({ results: [], hits: 0, truncated: false });
+      });
+    });
+
+    return workerPromise;
+  }
+}
+
+/** 搜索策略注册表 */
+class SearchStrategyRegistry {
+  private strategies: SearchStrategy[] = [];
+
+  constructor() {
+    this.register(new IndexedSearchStrategy());
+    this.register(new WorkerSearchStrategy());
+  }
+
+  register(strategy: SearchStrategy): void {
+    this.strategies.push(strategy);
+  }
+
+  select(ctx: SearchContext): SearchStrategy {
+    for (const s of this.strategies) {
+      if (s.canHandle(ctx)) return s;
+    }
+    return this.strategies[this.strategies.length - 1]; // 兜底
+  }
+}
+
+const strategyRegistry = new SearchStrategyRegistry();
+
+/* ─── Hook 接口 ─── */
 
 export interface UseSearchReturn {
   query: string;
@@ -49,24 +215,18 @@ export interface UseSearchReturn {
   toggleExpanded: (index: number) => void;
 }
 
-/** 自适应防抖：基于键间间隔的指数滑动平均 */
-function computeAdaptiveDebounce(keyGapHistory: number[]): number {
-  if (keyGapHistory.length === 0) return 300;
-  const avg = keyGapHistory.reduce((s, v) => s + v, 0) / keyGapHistory.length;
-  // 快打字 → 短延迟 (min 80ms)，慢打字 → 长延迟 (max 500ms)
-  const smoothed = 0.7 * 300 + 0.3 * (avg * 1.5);
-  return Math.max(80, Math.min(500, Math.round(smoothed)));
-}
-
-/** 自适应批量大小：基于文件平均读取耗时 */
-function computeAdaptiveBatchSize(
+/** 卡尔曼滤波器估计文件读取速度（用于自适应批量大小） */
+function computeAdaptiveBatchSizeKalman(
   prevBatchSize: number,
-  prevBatchDurationMs: number
+  prevBatchDurationMs: number,
+  kf: KalmanFilter
 ): number {
   const targetMs = 50;
   if (prevBatchDurationMs <= 0) return prevBatchSize;
   const ratio = targetMs / Math.max(prevBatchDurationMs, 1);
-  const newSize = prevBatchSize * (0.7 + 0.3 * ratio);
+  // 卡尔曼滤波平滑处理 ratio
+  const filteredRatio = kf.filter(ratio);
+  const newSize = prevBatchSize * (0.7 + 0.3 * filteredRatio);
   return Math.max(2, Math.min(50, Math.round(newSize)));
 }
 
@@ -88,17 +248,20 @@ export function useSearch(entries: FileEntry[], pendingQuery: string | null, onP
 
   const workerRef = useRef<Worker | null>(null);
   const searchIdRef = useRef(0);
-  const totalMatchesRef = useRef(0);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const fileCacheRef = useRef<{ entriesSrc: string; files: { path: string; source: FileSource }[] } | null>(null);
   const indexRef = useRef<{ entriesSrc: string; index: InvertedIndex } | null>(null);
 
-  // 自适应防抖的历史键间间隔
-  const lastKeyTimeRef = useRef<number>(0);
-  const keyGapHistoryRef = useRef<number[]>([]);
+  // PID 控制器：自适应防抖延迟
+  const pidRef = useRef(new PIDController({
+    Kp: 0.5, Ki: 0.05, Kd: 0.1,
+    outMin: 80, outMax: 500,
+    integralMax: 50,
+  }));
+  // 卡尔曼滤波器：文件读取速度估计
+  const kfRef = useRef(new KalmanFilter({ Q: 0.05, R: 0.3, initialX: 1.0, initialP: 0.5 }));
 
-  // 自适应批量大小状态
   const batchSizeRef = useRef(READ_BATCH_SIZE);
 
   useEffect(() => {
@@ -118,19 +281,12 @@ export function useSearch(entries: FileEntry[], pendingQuery: string | null, onP
       return;
     }
 
-    // 自适应防抖
-    const now = Date.now();
-    if (lastKeyTimeRef.current > 0) {
-      const gap = now - lastKeyTimeRef.current;
-      keyGapHistoryRef.current.push(gap);
-      if (keyGapHistoryRef.current.length > 10) {
-        keyGapHistoryRef.current.shift();
-      }
-    }
-    lastKeyTimeRef.current = now;
-    const delay = computeAdaptiveDebounce(keyGapHistoryRef.current);
+    // PID 控制器计算防抖延迟
+    const error = 0; // 目标误差为 0（即时响应）
+    const measurement = query.length > 3 ? 0.5 : 1.0; // 查询越长越应降低延迟
+    const delay = pidRef.current.update(error, measurement, 0.1);
 
-    debounceRef.current = setTimeout(() => { void handleSearchInternal(query); }, delay);
+    debounceRef.current = setTimeout(() => { void handleSearchInternal(query); }, Math.round(delay));
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, caseSensitive, wholeWord, useRegex, fuzzyMode]);
@@ -153,7 +309,6 @@ export function useSearch(entries: FileEntry[], pendingQuery: string | null, onP
     return workerRef.current;
   }, []);
 
-  /** 迭代式 DFS 收集文件路径（消除递归栈溢出风险） */
   const collectAllFilesIterative = useCallback(
     async (
       rootItems: FileEntry[],
@@ -164,7 +319,6 @@ export function useSearch(entries: FileEntry[], pendingQuery: string | null, onP
         'out', '.vscode', '.idea', '__pycache__', 'vendor', '.yarn',
       ]);
 
-      // 栈：{ items, prefix }
       const stack: { items: FileEntry[]; prefix: string }[] = [
         { items: rootItems, prefix: '' },
       ];
@@ -212,7 +366,7 @@ export function useSearch(entries: FileEntry[], pendingQuery: string | null, onP
   const buildIndex = useCallback(
     async (files: { path: string; source: FileSource }[]): Promise<InvertedIndex> => {
       const index = new InvertedIndex();
-      const currentBatchSize = batchSizeRef.current;
+      let currentBatchSize = batchSizeRef.current;
 
       for (let i = 0; i < files.length; i += currentBatchSize) {
         const batch = files.slice(i, i + currentBatchSize);
@@ -222,113 +376,18 @@ export function useSearch(entries: FileEntry[], pendingQuery: string | null, onP
 
         index.indexFiles(contents);
 
-        // 自适应批量大小：根据本批次的性能调整
-        batchSizeRef.current = computeAdaptiveBatchSize(
+        // 卡尔曼滤波自适应批量大小
+        batchSizeRef.current = computeAdaptiveBatchSizeKalman(
           currentBatchSize,
-          batchEnd - batchStart
+          batchEnd - batchStart,
+          kfRef.current
         );
+        currentBatchSize = batchSizeRef.current;
       }
       return index;
     },
     [readBatch]
   );
-
-  const doIndexedSearch = useCallback((searchQuery: string, index: InvertedIndex) => {
-    let hits = fuzzyMode ? index.fuzzySearch(searchQuery) : index.search(searchQuery);
-
-    if (hits.length === 0 && !fuzzyMode && searchQuery.length >= 2) {
-      hits = index.fuzzySearch(searchQuery);
-      if (hits.length > 0) {
-        setFuzzyMode(true);
-      }
-    }
-
-    const fileResults = hitsToResults(hits, searchQuery);
-    const totalMatches = fileResults.reduce((s, r) => s + r.matches.length, 0);
-    setIsTruncated(totalMatches >= MAX_TOTAL_MATCHES);
-
-    setResults(fileResults.slice(0, MAX_TOTAL_MATCHES));
-    setTotalFileCount(hits.length);
-    setSearchedCount(hits.length);
-    setIsSearching(false);
-  }, [fuzzyMode]);
-
-  const doWorkerSearch = useCallback(async (
-    searchQuery: string,
-    allFiles: { path: string; source: FileSource }[],
-    currentSearchId: number,
-  ) => {
-    const worker = getWorker();
-    const mergedResults = new Map<string, FileSearchResult>();
-    let processed = 0;
-
-    const onMessage = (event: MessageEvent<WorkerResult>) => {
-      if (searchIdRef.current !== currentSearchId) return;
-      const { type, results: batchResults, totalMatches, isTruncated: truncated } = event.data;
-      if (type === 'progress') {
-        for (const r of batchResults) {
-          const existing = mergedResults.get(r.filePath);
-          if (existing) { existing.matches.push(...r.matches); }
-          else { mergedResults.set(r.filePath, { ...r }); }
-        }
-        totalMatchesRef.current = totalMatches;
-        if (truncated) setIsTruncated(true);
-        setResults(Array.from(mergedResults.values()));
-        setSearchedCount(processed);
-      }
-    };
-
-    worker.addEventListener('message', onMessage);
-
-    try {
-      const currentBatchSize = batchSizeRef.current;
-
-      for (let i = 0; i < allFiles.length; i += currentBatchSize) {
-        if (searchIdRef.current !== currentSearchId) break;
-        if (totalMatchesRef.current >= MAX_TOTAL_MATCHES) { setIsTruncated(true); break; }
-
-        const fileBatch = allFiles.slice(i, i + currentBatchSize);
-        const batchStart = performance.now();
-        const contents = await readBatch(fileBatch);
-        const batchEnd = performance.now();
-
-        processed += fileBatch.length;
-        if (contents.length === 0) continue;
-        if (searchIdRef.current !== currentSearchId) break;
-
-        worker.postMessage({
-          type: 'search',
-          files: contents,
-          query: searchQuery,
-          options: { caseSensitive, wholeWord, regex: useRegex },
-          totalMatchesSoFar: totalMatchesRef.current,
-          maxTotalMatches: MAX_TOTAL_MATCHES,
-          searchId: currentSearchId,
-        });
-
-        // 自适应批量大小
-        batchSizeRef.current = computeAdaptiveBatchSize(
-          currentBatchSize,
-          batchEnd - batchStart
-        );
-
-        // 使用 requestAnimationFrame 替代 setTimeout(10) yield
-        await new Promise<void>((r) => {
-          requestAnimationFrame(() => r());
-        });
-      }
-
-      if (searchIdRef.current === currentSearchId) {
-        setResults(Array.from(mergedResults.values()));
-        setSearchedCount(processed);
-      }
-    } finally {
-      worker.removeEventListener('message', onMessage);
-      allFiles.length = 0;
-      mergedResults.clear();
-      if (searchIdRef.current === currentSearchId) setIsSearching(false);
-    }
-  }, [caseSensitive, wholeWord, useRegex, readBatch, getWorker]);
 
   const handleSearchInternal = useCallback(async (searchQuery: string) => {
     if (!searchQuery.trim() || !entries.length) return;
@@ -339,9 +398,7 @@ export function useSearch(entries: FileEntry[], pendingQuery: string | null, onP
     setSearchedCount(0);
     setTotalFileCount(0);
     setIsTruncated(false);
-    totalMatchesRef.current = 0;
 
-    const needsWorker = useRegex || caseSensitive || wholeWord || hasNonWordChars(searchQuery);
     const entriesKey = JSON.stringify(entries.map((e) => `${e.name}:${e.kind}`));
 
     const cached = fileCacheRef.current;
@@ -358,29 +415,45 @@ export function useSearch(entries: FileEntry[], pendingQuery: string | null, onP
     if (searchIdRef.current !== currentSearchId) { setIsSearching(false); return; }
     setTotalFileCount(allFiles.length);
 
-    if (!needsWorker) {
-      try {
-        const indexCached = indexRef.current;
-        let index: InvertedIndex;
-        if (indexCached && indexCached.entriesSrc === entriesKey) {
-          index = indexCached.index;
-        } else {
-          setIsSearching(true);
-          index = await buildIndex(allFiles);
-          indexRef.current = { entriesSrc: entriesKey, index };
-        }
-        if (searchIdRef.current !== currentSearchId) { setIsSearching(false); return; }
-        doIndexedSearch(searchQuery, index);
-        return;
-      } catch (err) {
-        console.warn('[SearchPanel] 倒排索引搜索失败，回退到 Worker 搜索:', err);
-        setIsSearching(true);
-        setResults([]);
-      }
-    }
+    const ctx: SearchContext = {
+      files: allFiles,
+      searchQuery,
+      caseSensitive,
+      wholeWord,
+      useRegex,
+      fuzzyMode,
+      currentSearchId,
+    };
 
-    await doWorkerSearch(searchQuery, allFiles, currentSearchId);
-  }, [entries, useRegex, caseSensitive, wholeWord, collectAllFilesIterative, buildIndex, doIndexedSearch, doWorkerSearch]);
+    const services: SearchStrategyServices = {
+      readBatch,
+      getWorker,
+      setResults,
+      setSearchedCount,
+      setTotalFileCount,
+      setIsTruncated,
+      setIsSearching,
+      setFuzzyMode,
+      buildIndex,
+      computeAdaptiveBatchSize: (prevSize, durationMs) =>
+        computeAdaptiveBatchSizeKalman(prevSize, durationMs, kfRef.current),
+    };
+
+    const strategy = strategyRegistry.select(ctx);
+
+    try {
+      await strategy.execute(ctx, services);
+    } catch (err) {
+      console.warn(`[SearchPanel] 搜索策略 ${strategy.name} 失败:`, err);
+      // 降级到 Worker 策略
+      const fallback = new WorkerSearchStrategy();
+      setIsSearching(true);
+      setResults([]);
+      await fallback.execute(ctx, services);
+    } finally {
+      if (searchIdRef.current === currentSearchId) setIsSearching(false);
+    }
+  }, [entries, caseSensitive, wholeWord, useRegex, fuzzyMode, collectAllFilesIterative, readBatch, getWorker, buildIndex]);
 
   const triggerSearch = useCallback((q: string) => {
     setQuery(q);

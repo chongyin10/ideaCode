@@ -1,5 +1,5 @@
 import { FileContentCache } from '../utils/algorithms';
-
+import { WTinyLFU } from '../utils/algorithms/wTinyLFU';
 
 export type FileSource = FileSystemHandle | string;
 
@@ -21,17 +21,42 @@ export function isElectron(): boolean {
   return typeof window !== 'undefined' && !!window.electronAPI?.isElectron;
 }
 
-/* ────────────────────────────────────────────── */
-/*  文件内容缓存（LRU 算法）                        */
-/* ────────────────────────────────────────────── */
+/* ─── 文件内容缓存（双模式：LRU + W-TinyLFU）─── */
 
 const fileCache = new FileContentCache(30);
+const wtinyCache = new WTinyLFU<string, { content: string; mtime: number }>({
+  maxSize: 50,
+});
 
-/* ────────────────────────────────────────────── */
-/*  文件系统抽象层：运行时自动检测浏览器或 Electron 环境  */
-/*  浏览器 → File System Access API                  */
-/*  Electron → IPC → Node.js 运行时 (fs)             */
-/* ────────────────────────────────────────────── */
+/** 使用哪个缓存（默认 W-TinyLFU） */
+let useWTinyLFU = true;
+
+export function setCacheStrategy(strategy: 'lru' | 'wtiny'): void {
+  useWTinyLFU = strategy === 'wtiny';
+}
+
+function getCached(path: string, mtime: number): { content: string; hit: boolean } | null {
+  if (useWTinyLFU) {
+    const entry = wtinyCache.get(path);
+    if (!entry) return null;
+    if (entry.mtime !== mtime) {
+      wtinyCache.delete(path);
+      return null;
+    }
+    return { content: entry.content, hit: true };
+  }
+  return fileCache.getValid(path, mtime);
+}
+
+function setCached(path: string, content: string, mtime: number): void {
+  if (useWTinyLFU) {
+    wtinyCache.set(path, { content, mtime });
+  } else {
+    fileCache.setContent(path, content, mtime);
+  }
+}
+
+/* ─── 文件系统抽象层 ─── */
 
 export async function openDirectory(): Promise<{ source: FileSource; name: string } | null> {
   if (isElectron()) {
@@ -85,20 +110,16 @@ export async function readDirectory(parentSource: FileSource): Promise<FileEntry
 
 export async function readFile(fileSource: FileSource): Promise<string> {
   if (isElectron() && isPath(fileSource)) {
-    // 先查缓存（带 mtime 验证）
     try {
       const stat = await window.electronAPI!.fs.stat(fileSource);
       if (!stat) throw new Error('文件不存在');
-      const cached = fileCache.getValid(fileSource, new Date(stat.mtime).getTime());
-      if (cached) {
-        return cached.content;
-      }
-      // 缓存未命中或已过期，读取并缓存
+      const mtime = new Date(stat.mtime).getTime();
+      const cached = getCached(fileSource, mtime);
+      if (cached) return cached.content;
       const content = await window.electronAPI!.fs.readFile(fileSource);
-      fileCache.setContent(fileSource, content, new Date(stat.mtime).getTime());
+      setCached(fileSource, content, mtime);
       return content;
     } catch {
-      // stat 失败时直接读取
       return window.electronAPI!.fs.readFile(fileSource);
     }
   }
@@ -109,34 +130,63 @@ export async function readFile(fileSource: FileSource): Promise<string> {
   throw new Error('无法读取文件：不支持的文件源');
 }
 
+/**
+ * 缓存预热：预加载最近项目中的关键文件
+ * 在项目打开后调用，使用 requestIdleCallback 在后台渐进加载
+ */
+export async function warmupFileCache(
+  rootPath: string,
+  recentFilePaths: string[]
+): Promise<void> {
+  if (!isElectron()) return;
+
+  const warmupBatch = async (paths: string[]) => {
+    for (const filePath of paths) {
+      try {
+        const fullPath = rootPath + '/' + filePath;
+        await readFile(fullPath);
+      } catch {
+        // 文件不可读，跳过
+      }
+    }
+  };
+
+  // 分批预加载，每批 3 个文件，避免阻塞主线程
+  const batchSize = 3;
+  for (let i = 0; i < recentFilePaths.length; i += batchSize) {
+    const batch = recentFilePaths.slice(i, i + batchSize);
+    await new Promise<void>((resolve) => {
+      if (typeof requestIdleCallback !== 'undefined') {
+        requestIdleCallback(() => {
+          warmupBatch(batch).then(resolve);
+        }, { timeout: 5000 });
+      } else {
+        setTimeout(() => {
+          warmupBatch(batch).then(resolve);
+        }, 50);
+      }
+    });
+  }
+}
+
 export function isSameSource(a: FileSource, b: FileSource): boolean {
   if (typeof a === 'string' && typeof b === 'string') return a === b;
   if (typeof a !== 'string' && typeof b !== 'string') return a.name === b.name;
   return false;
 }
 
-/**
- * 获取缓存统计信息（用于调试和状态栏展示）
- */
 export function getFileCacheStats() {
+  if (useWTinyLFU) return wtinyCache.getStats();
   return fileCache.getStats();
 }
 
-/**
- * 清除文件缓存
- */
 export function clearFileCache() {
-  fileCache.clear();
+  if (useWTinyLFU) wtinyCache.clear();
+  else fileCache.clear();
 }
 
-/* ────────────────────────────────────────────── */
-/*  Electron 独占能力：文件监听（后台模式）            */
-/* ────────────────────────────────────────────── */
+/* ─── 文件监听 ─── */
 
-/**
- * 启动文件监听（后台模式持续运行）
- * 即使窗口失焦，文件变更也会通过 IPC 推送过来
- */
 export async function watchDirectory(
   watchPath: string,
   onChange: (event: { eventType: string; filename: string | null; path: string }) => void
@@ -158,19 +208,18 @@ export async function watchDirectory(
   };
 }
 
-/* ────────────────────────────────────────────── */
-/*  Electron 独占能力：扩展宿主 RPC                  */
-/* ────────────────────────────────────────────── */
+/* ─── 文件写入 ─── */
 
-/**
- * 写入文件内容
- *
- * Electron 模式下通过 IPC 直接写入磁盘（无需弹窗授权）。
- * 浏览器模式下通过 File System Access API 的 WritableStream 写入。
- */
 export async function writeFile(fileSource: FileSource, content: string): Promise<void> {
   if (isElectron() && isPath(fileSource)) {
     await window.electronAPI!.fs.writeFile(fileSource, content);
+    // 写入后更新缓存（避免下次读取到旧内容）
+    try {
+      const stat = await window.electronAPI!.fs.stat(fileSource);
+      if (stat) {
+        setCached(fileSource, content, new Date(stat.mtime).getTime());
+      }
+    } catch { /* 忽略 */ }
     return;
   }
   if (isHandle(fileSource) && fileSource.kind === 'file') {
@@ -182,10 +231,8 @@ export async function writeFile(fileSource: FileSource, content: string): Promis
   throw new Error('无法写入文件：不支持的文件源');
 }
 
-/**
- * 调用扩展宿主进程的 JSON-RPC 方法
- * 扩展在独立的 Node.js 子进程中运行，通过主进程代理通信
- */
+/* ─── 扩展宿主 RPC ─── */
+
 export async function extensionRpc<T = unknown>(
   method: string,
   params: unknown

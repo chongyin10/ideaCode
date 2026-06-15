@@ -20,7 +20,7 @@ import {
   setGroupRatio,
   equalizeGroupRatios,
 } from '../store/slices/workspaceSlice';
-import { openDirectory } from '../services/fileService';
+import { openDirectory, warmupFileCache } from '../services/fileService';
 import TabBar from '../components/TabBar';
 import MonacoEditor from '../components/MonacoEditor';
 import ConfirmDialog, { type ConfirmResult } from '../components/ConfirmDialog';
@@ -28,6 +28,9 @@ import QuickOpen from '../components/QuickOpen';
 import GitSetupPanel from '../components/GitSetupPanel';
 import DiffEditorPanel from '../components/DiffEditorPanel';
 import SettingsPanel from '../components/SettingsPanel';
+import { BCMTabManager } from '../utils/algorithms/neuralTabManager';
+import { EntropyFilePrefetcher } from '../utils/algorithms/filePrediction';
+import { eventBus } from '../utils/eventBus';
 import './Home.css';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -93,6 +96,17 @@ function Home() {
   const gitMerge = useAppSelector((s) => s.git.merge);
   const gitUntracked = useAppSelector((s) => s.git.untracked);
   const gitStatus = useMemo(() => ({ ...gitStaged, ...gitChanges, ...gitMerge, ...gitUntracked }), [gitStaged, gitChanges, gitMerge, gitUntracked]);
+
+  /* ═══ BCM 神经启发 Tab 管理器 ═══ */
+  const bcmRef = useRef(new BCMTabManager({
+    learningRate: 0.05,
+    decayRate: 0.001,
+    evictionThreshold: 0.15,
+    softMaxTabs: 15,
+  }));
+
+  /* ═══ 条件熵文件预取器 ═══ */
+  const prefetcherRef = useRef(new EntropyFilePrefetcher());
 
   const [quickOpenVisible, setQuickOpenVisible] = useState(false);
   const [closeConfirm, setCloseConfirm] = useState<{ id: string; groupIndex: number } | null>(null);
@@ -167,6 +181,66 @@ function Home() {
   }, [editorGroups]);
 
   useEffect(() => { dispatch(fetchRecentProjects()); }, [dispatch]);
+
+  /* ═══ BCM Tab 生命周期管理 ═══ */
+  // 当 Tab 激活时：注册/更新 BCM 状态，记录条件熵转移
+  const activeFileIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const g = editorGroups[activeGroupIndex];
+    if (!g) return;
+    const newActiveId = g.activeFileId;
+    const oldActiveId = activeFileIdRef.current;
+
+    if (newActiveId && newActiveId !== oldActiveId) {
+      const tabInfo = openedFiles.find(f => f.id === newActiveId);
+
+      // 注册/切换 BCM Tab
+      if (oldActiveId) {
+        bcmRef.current.switchTab(oldActiveId, newActiveId, 1);
+      } else {
+        bcmRef.current.registerTab(newActiveId, true);
+        bcmRef.current.recordActivity(newActiveId, 1, false);
+      }
+
+      // 记录条件熵转移
+      if (oldActiveId && tabInfo) {
+        prefetcherRef.current.recordTransition(
+          openedFiles.find(f => f.id === oldActiveId)?.name || oldActiveId,
+          tabInfo.name
+        );
+      }
+
+      // EventBus 发布
+      eventBus.emit('tab:activated', { fileId: newActiveId, groupIndex: activeGroupIndex });
+
+      activeFileIdRef.current = newActiveId;
+    }
+  }, [editorGroups, activeGroupIndex, openedFiles]);
+
+  // Tab 关闭时：从 BCM 移除
+  const prevFileIdsRef2 = useRef<string[]>([]);
+  useEffect(() => {
+    // 用 file.id (完整路径) 作为标识，避免同名文件碰撞
+    const currentIds = editorGroups.flatMap(g => g.fileIds);
+    const prevIds = prevFileIdsRef2.current;
+
+    const closed = prevIds.filter(id => !currentIds.includes(id));
+    for (const closedId of closed) {
+      bcmRef.current.closeTab(closedId);
+      eventBus.emit('tab:closed', { fileId: closedId, groupIndex: activeGroupIndex });
+    }
+
+    prevFileIdsRef2.current = currentIds;
+  }, [editorGroups, activeGroupIndex]);
+
+  // 项目打开后预热文件缓存（仅执行一次）
+  const cacheWarmedRef = useRef(false);
+  useEffect(() => {
+    if (!cacheWarmedRef.current && rootPath && allFilePaths.length > 0) {
+      cacheWarmedRef.current = true;
+      warmupFileCache(rootPath, allFilePaths.slice(0, 10)).catch(() => {});
+    }
+  }, [rootPath, allFilePaths]);
 
   /* ─── Cmd+Click 跳转到定义 ─── */
   useEffect(() => {

@@ -1,29 +1,24 @@
 /**
- * 倒排索引 (Inverted Index) + BM25 相关性评分 + BK-Tree 模糊匹配 + 在线梯度调参
+ * 倒排索引 (Inverted Index) + BM25F 结构化评分 + BK-Tree 模糊匹配
+ * + SPSA 在线梯度调参 + Thompson Sampling Bandit 排序
  *
  * 应用场景：全文搜索的 O(1) 词项查找 + 智能排序 + 拼写纠错
  *
- * ## 倒排索引原理：
- * 将文档内容按词拆分，建立「词项 → 文档位置列表」的映射。
+ * ## BM25F 原理（多字段 BM25）：
+ * 将文档分为标题(fileName)、路径(filePath)、内容(content)三个字段，
+ * 每个字段独立计算词频和长度，加权组合：
+ *   score(D, Q) = Σ IDF(qi) · Σ_f w_f · BM25_saturation(tf_f, |D|_f, avgdl_f)
  *
- * ## BM25 公式（Okapi BM25）：
- *   score(D, Q) = Σ IDF(qi) · (f(qi, D) · (k1 + 1))
- *                       ÷ (f(qi, D) + k1 · (1 - b + b · |D|/avgdl))
- * 其中：
- *   IDF(qi) = ln((N - n(qi) + 0.5) / (n(qi) + 0.5) + 1)
- *   k1 = 1.5, b = 0.75
+ * 其中 BM25_saturation = tf · (k1 + 1) / (tf + k1 · (1 - b + b · |D|/avgdl))
  *
- * ## BK-Tree 原理：
- * 基于编辑距离的度量树，用于快速查找与查询词编辑距离 ≤ k 的所有词项。
- * 查询时间复杂度：O(log |V|)（与词汇量对数关系）
- *
- * ## 在线梯度调参 (SPSA - Simultaneous Perturbation Stochastic Approximation)：
- * 用户每次点击搜索结果即产生隐式反馈。
- * 对 k1 和 b 做对称随机扰动，比较两次排序质量，沿梯度方向更新参数。
- * 适合无解析梯度的离散搜索场景。
+ * ## Bandit 增强：
+ * 在静态 BM25F 排序基础上，混入 Thompson Sampling 采样，
+ * 使排序结果能根据用户点击反馈持续优化。
  */
 
 import { levenshteinDistance } from './levenshtein';
+import { SearchBanditRanker } from './searchBandit';
+import type { BanditConfig } from './searchBandit';
 
 /* ─── 类型定义 ─── */
 
@@ -33,7 +28,6 @@ export interface IndexEntry {
   line: number;
   column: number;
   context: string;
-  /** 匹配到的词项（用于 BM25 精确计算） */
   term: string;
 }
 
@@ -41,21 +35,49 @@ export interface SearchHit {
   filePath: string;
   fileName: string;
   entries: IndexEntry[];
+  /** BM25F 静态得分 */
   score: number;
+  /** 各字段分项得分（诊断用） */
+  scoreBreakdown?: {
+    fileName: number;
+    filePath: number;
+    content: number;
+    entryBonus: number;
+  };
 }
 
 interface DocStats {
   path: string;
   wordCount: number;
+  /** 文件名词数 */
+  fileNameWordCount: number;
+  /** 路径词数 */
+  pathWordCount: number;
   termFreqs: Map<string, number>;
+  /** 文件名中的词频 */
+  fileNameTermFreqs: Map<string, number>;
+  /** 路径中的词频 */
+  pathTermFreqs: Map<string, number>;
 }
-
-/* ─── BK-Tree 节点 ─── */
 
 interface BKNode {
   term: string;
   children: Map<number, BKNode>;
 }
+
+/* ─── BM25F 字段权重 ─── */
+
+interface BM25FFieldWeights {
+  fileName: number;
+  filePath: number;
+  content: number;
+}
+
+const DEFAULT_FIELD_WEIGHTS: BM25FFieldWeights = {
+  fileName: 3.0,
+  filePath: 1.5,
+  content: 1.0,
+};
 
 /* ─── 常量 ─── */
 
@@ -104,7 +126,7 @@ class BKTree {
 
   private _insert(node: BKNode, term: string): void {
     const dist = levenshteinDistance(term, node.term);
-    if (dist === 0) return; // 重复，跳过
+    if (dist === 0) return;
     if (node.children.has(dist)) {
       this._insert(node.children.get(dist)!, term);
     } else {
@@ -112,7 +134,6 @@ class BKTree {
     }
   }
 
-  /** 查找编辑距离 ≤ maxDist 的所有词项 */
   query(term: string, maxDist: number): string[] {
     if (!this.root) return [];
     const results: string[] = [];
@@ -122,35 +143,15 @@ class BKTree {
 
   private _query(node: BKNode, term: string, maxDist: number, results: string[]): void {
     if (results.length >= 15) return;
-
     const dist = levenshteinDistance(term, node.term, maxDist);
-    if (dist <= maxDist) {
-      results.push(node.term);
-    }
+    if (dist <= maxDist) results.push(node.term);
 
-    // 三角形不等式剪枝：只搜索 |d - maxDist| ≤ childDist ≤ d + maxDist 的子节点
     const minChild = Math.max(1, dist - maxDist);
     const maxChild = dist + maxDist;
-
     for (let d = minChild; d <= maxChild; d++) {
       const child = node.children.get(d);
-      if (child) {
-        this._query(child, term, maxDist, results);
-      }
+      if (child) this._query(child, term, maxDist, results);
     }
-  }
-
-  get size(): number {
-    return this._count(this.root);
-  }
-
-  private _count(node: BKNode | null): number {
-    if (!node) return 0;
-    let count = 1;
-    for (const child of node.children.values()) {
-      count += this._count(child);
-    }
-    return count;
   }
 }
 
@@ -162,11 +163,6 @@ interface FeedbackEntry {
   searchResults: SearchHit[];
 }
 
-/**
- * SPSA (Simultaneous Perturbation Stochastic Approximation) 调参器
- * 每次收到用户反馈时，对 k1 和 b 做微小双向扰动，比较排序质量，
- * 沿提升方向小幅更新参数。
- */
 class BM25Tuner {
   public k1 = BM25_K1;
   public b  = BM25_B;
@@ -180,27 +176,18 @@ class BM25Tuner {
     this.iteration++;
   }
 
-  /**
-   * 根据隐式反馈执行一次参数更新
-   * @returns 新的 k1 和 b
-   */
   update(): { k1: number; b: number } {
     const fb = this.pendingFeedback;
     if (!fb) return { k1: this.k1, b: this.b };
 
-    // 如果用户点了结果，测量点击位置（越靠前越好）
     if (fb.clickedFilePath) {
       const idx = fb.searchResults.findIndex((r) => r.filePath === fb.clickedFilePath);
       if (idx >= 0) {
-        // 损失：点击位置越靠后损失越大；未点击损失最大
         const loss = idx / Math.max(fb.searchResults.length, 1);
-
-        // 随机扰动方向
         const sign = this.iteration % 2 === 0 ? 1 : -1;
         const deltaK1 = this.perturbationScale * (this.iteration % 3 === 0 ? -1 : 1);
         const deltaB  = this.perturbationScale * (this.iteration % 4 === 0 ? -1 : 1);
 
-        // 简单的梯度方向估计：如果损失 > 0.5，反转方向
         if (loss > 0.3) {
           this.k1 = Math.max(0.5, Math.min(3.0, this.k1 + sign * deltaK1 * this.learningRate));
           this.b  = Math.max(0.1, Math.min(0.95, this.b + sign * deltaB * this.learningRate));
@@ -222,26 +209,35 @@ export class InvertedIndex {
   private index = new Map<string, IndexEntry[]>();
   private docs = new Map<string, DocStats>();
   private avgDocLength = 0;
+  private avgFileNameLen = 0;
+  private avgPathLen = 0;
 
-  /** 惰性删除标记（tombstone） */
   private tombstonePaths = new Set<string>();
   private tombstoneRatio = 0;
 
-  /** BK-Tree for fuzzy term matching */
   private bkTree = new BKTree();
   private bkTuned = false;
 
-  /** BM25 参数调优器 */
   private tuner = new BM25Tuner();
+
+  /** BM25F 字段权重 */
+  fieldWeights: BM25FFieldWeights = { ...DEFAULT_FIELD_WEIGHTS };
+
+  /** Thompson Sampling 排序器 */
+  bandit: SearchBanditRanker;
+
+  /** 是否启用 Bandit 混合排序 */
+  banditEnabled = false;
+
+  /** Bandit 混合比例（0=纯静态BM25F, 1=纯Bandit） */
+  banditMixRatio = 0.2;
+
+  constructor(banditConfig?: BanditConfig) {
+    this.bandit = new SearchBanditRanker(banditConfig);
+  }
 
   get docCount(): number { return this.docs.size; }
   get termCount(): number { return this.index.size; }
-
-  get totalEntries(): number {
-    let count = 0;
-    for (const entries of this.index.values()) count += entries.length;
-    return count;
-  }
 
   /* ─── 索引操作 ─── */
 
@@ -249,15 +245,28 @@ export class InvertedIndex {
     const lines = content.split('\n');
     const words: string[] = tokenize(content);
     const fileName = filePath.split('/').pop() || filePath;
+    const pathParts = filePath.replace(/\/+/g, '/').split('/').slice(0, -1).join(' ');
+    const fileNameWords = tokenize(fileName);
+    const pathWords = tokenize(pathParts);
 
     const termFreqs = new Map<string, number>();
-    for (const w of words) {
-      termFreqs.set(w, (termFreqs.get(w) || 0) + 1);
-    }
+    const fileNameTermFreqs = new Map<string, number>();
+    const pathTermFreqs = new Map<string, number>();
 
-    this.docs.set(filePath, { path: filePath, wordCount: words.length, termFreqs });
+    for (const w of words) termFreqs.set(w, (termFreqs.get(w) || 0) + 1);
+    for (const w of fileNameWords) fileNameTermFreqs.set(w, (fileNameTermFreqs.get(w) || 0) + 1);
+    for (const w of pathWords) pathTermFreqs.set(w, (pathTermFreqs.get(w) || 0) + 1);
 
-    // 按行建索引，直接存储匹配的 term
+    this.docs.set(filePath, {
+      path: filePath,
+      wordCount: words.length,
+      fileNameWordCount: fileNameWords.length,
+      pathWordCount: pathWords.length,
+      termFreqs,
+      fileNameTermFreqs,
+      pathTermFreqs,
+    });
+
     for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
       const lineTokens = tokenize(lines[lineIdx]);
       if (lineTokens.length === 0) continue;
@@ -271,10 +280,7 @@ export class InvertedIndex {
           context: lines[lineIdx],
           term: token,
         });
-        // 插入 BK-Tree
-        if (!this.bkTuned) {
-          this.bkTree.insert(token);
-        }
+        if (!this.bkTuned) this.bkTree.insert(token);
       }
     }
 
@@ -282,48 +288,30 @@ export class InvertedIndex {
   }
 
   private addEntry(token: string, entry: IndexEntry): void {
-    if (!this.index.has(token)) {
-      this.index.set(token, []);
-    }
+    if (!this.index.has(token)) this.index.set(token, []);
     this.index.get(token)!.push(entry);
   }
 
   indexFiles(files: { path: string; content: string }[]): void {
-    for (const file of files) {
-      this.indexFile(file.path, file.content);
-    }
+    for (const file of files) this.indexFile(file.path, file.content);
   }
 
-  /**
-   * 惰性删除：只打 tombstone 标记，不做物理删除
-   */
   removeFile(filePath: string): void {
     this.docs.delete(filePath);
     this.tombstonePaths.add(filePath);
     this.tombstoneRatio = this.tombstonePaths.size / Math.max(this.docCount + this.tombstonePaths.size, 1);
-
-    // 当 tombstone 比例超过 30% 时触发压缩
-    if (this.tombstoneRatio > 0.3) {
-      this.compact();
-    }
+    if (this.tombstoneRatio > 0.3) this.compact();
   }
 
-  /**
-   * 压缩：物理移除所有被 tombstone 标记的条目
-   */
   compact(): void {
     for (const entries of this.index.values()) {
       for (let i = entries.length - 1; i >= 0; i--) {
-        if (this.tombstonePaths.has(entries[i].filePath)) {
-          entries.splice(i, 1);
-        }
+        if (this.tombstonePaths.has(entries[i].filePath)) entries.splice(i, 1);
       }
     }
-
     for (const [word, entries] of this.index) {
       if (entries.length === 0) this.index.delete(word);
     }
-
     this.tombstonePaths.clear();
     this.tombstoneRatio = 0;
     this.updateAvgDocLength();
@@ -338,24 +326,38 @@ export class InvertedIndex {
     this.bkTree = new BKTree();
     this.bkTuned = false;
     this.tuner = new BM25Tuner();
+    this.bandit.reset();
   }
 
   /* ─── 搜索 ─── */
 
-  /**
-   * 精确词搜索（O(1) 查表 + BM25 排序）
-   */
   search(query: string): SearchHit[] {
     const words = tokenize(query);
     if (words.length === 0) return [];
 
     const fileHits = this.collectHits(words, words.length > 1);
-    return this.bm25Rank(fileHits);
+    let results = this.bm25FRank(fileHits, words);
+
+    // Bandit 混合排序
+    if (this.banditEnabled && results.length > 1) {
+      results = this.bandit.rerank(
+        results,
+        (hit) => hit.filePath,
+        (hit) => hit.score,
+        this.banditMixRatio
+      );
+    }
+
+    // 记录展示
+    if (this.banditEnabled) {
+      for (const r of results) {
+        this.bandit.recordImpression(r.filePath);
+      }
+    }
+
+    return results;
   }
 
-  /**
-   * 模糊搜索（BK-Tree + BM25 排序）
-   */
   fuzzySearch(query: string, similarityThreshold = 0.67): SearchHit[] {
     const queryWords = tokenize(query);
     if (queryWords.length === 0) return [];
@@ -363,22 +365,16 @@ export class InvertedIndex {
     const expandedQueryWords = new Set<string>();
 
     for (const qw of queryWords) {
-      // 精确匹配优先
       if (this.index.has(qw)) {
         expandedQueryWords.add(qw);
         continue;
       }
-
-      // BK-Tree 模糊匹配
       const maxDist = Math.max(1, Math.floor(qw.length * (1 - similarityThreshold)));
       const bkResults = this.bkTree.query(qw, maxDist);
-
       for (const term of bkResults) {
         if (expandedQueryWords.size >= 12) break;
         expandedQueryWords.add(term);
       }
-
-      // BK-Tree 无结果时回退到子串匹配
       if (bkResults.length === 0) {
         for (const term of this.index.keys()) {
           if (term.includes(qw)) {
@@ -390,30 +386,48 @@ export class InvertedIndex {
     }
 
     if (expandedQueryWords.size === 0) return [];
-
     const arrayWords = Array.from(expandedQueryWords);
-    return this.bm25Rank(this.collectHits(arrayWords));
+    let results = this.bm25FRank(this.collectHits(arrayWords), arrayWords);
+
+    // Bandit 混合排序
+    if (this.banditEnabled && results.length > 1) {
+      results = this.bandit.rerank(
+        results,
+        (hit) => hit.filePath,
+        (hit) => hit.score,
+        this.banditMixRatio
+      );
+    }
+
+    return results;
   }
 
   /* ─── BM25 参数控制 ─── */
 
-  /** 获取当前 BM25 参数 */
   getBM25Params(): { k1: number; b: number } {
     return { k1: this.tuner.k1, b: this.tuner.b };
   }
 
-  /** 设置 BM25 参数（用于调试/外部控制） */
   setBM25Params(k1: number, b: number): void {
     this.tuner.k1 = k1;
     this.tuner.b = b;
   }
 
-  /**
-   * 记录用户反馈并触发 SPSA 调参
-   * @param clickedFilePath 用户点击的文件路径，null 表示未点击任何结果
-   * @param queryWords 搜索词项
-   * @param searchResults 当前搜索结果
-   */
+  /** 设置 BM25F 字段权重 */
+  setFieldWeights(weights: Partial<BM25FFieldWeights>): void {
+    this.fieldWeights = { ...this.fieldWeights, ...weights };
+  }
+
+  /** 启用/禁用 Bandit 排序 */
+  setBanditEnabled(enabled: boolean): void {
+    this.banditEnabled = enabled;
+  }
+
+  /** 设置 Bandit 混合比例 */
+  setBanditMixRatio(ratio: number): void {
+    this.banditMixRatio = Math.max(0, Math.min(1, ratio));
+  }
+
   recordFeedback(
     clickedFilePath: string | null,
     queryWords: string[],
@@ -421,6 +435,16 @@ export class InvertedIndex {
   ): void {
     this.tuner.recordFeedback({ clickedFilePath, queryWords, searchResults });
     this.tuner.update();
+
+    // Bandit 反馈
+    if (this.banditEnabled && clickedFilePath) {
+      this.bandit.recordClick(clickedFilePath);
+    }
+  }
+
+  /** 设置字段权重 */
+  setBM25FWeights(weights: Partial<BM25FFieldWeights>): void {
+    this.fieldWeights = { ...this.fieldWeights, ...weights };
   }
 
   /* ─── 内部方法 ─── */
@@ -434,9 +458,7 @@ export class InvertedIndex {
       if (!entries) continue;
 
       for (const entry of entries) {
-        // 过滤 tombstone
         if (this.tombstonePaths.has(entry.filePath)) continue;
-
         if (!fileHits.has(entry.filePath)) {
           fileHits.set(entry.filePath, []);
           fileWords.set(entry.filePath, new Set());
@@ -448,78 +470,112 @@ export class InvertedIndex {
 
     if (requireAll && words.length > 1) {
       for (const [filePath, matched] of fileWords) {
-        const coversAll = words.every((w) => matched.has(w));
-        if (!coversAll) {
-          fileHits.delete(filePath);
-        }
+        if (!words.every((w) => matched.has(w))) fileHits.delete(filePath);
       }
     }
 
     return fileHits;
   }
 
-  /** BM25 排序（使用可调参数） */
-  private bm25Rank(fileHits: Map<string, IndexEntry[]>): SearchHit[] {
+  /** BM25F 三字段加权排序 */
+  private bm25FRank(fileHits: Map<string, IndexEntry[]>, queryWords: string[]): SearchHit[] {
     const N = this.docs.size;
     if (N === 0) return [];
 
     const avgdl = this.avgDocLength;
+    const avgFileNameLen = this.avgFileNameLen || Math.max(1, avgdl / 20);
+    const avgPathLen = this.avgPathLen || Math.max(1, avgdl / 10);
     const k1 = this.tuner.k1;
     const b  = this.tuner.b;
+    const fw = this.fieldWeights;
+
     const results: SearchHit[] = [];
 
     for (const [filePath, entries] of fileHits) {
       const doc = this.docs.get(filePath);
       if (!doc) continue;
 
-      // 使用 IndexEntry.term 直接获取词项（不再从 context 回推）
-      const uniqueWords = new Set<string>();
-      for (const e of entries) {
-        uniqueWords.add(e.term);
-      }
+      let scoreFileName = 0;
+      let scoreFilePath = 0;
+      let scoreContent = 0;
 
-      let score = 0;
       const docLen = doc.wordCount;
+      const fNameLen = doc.fileNameWordCount || 1;
+      const pathLen = doc.pathWordCount || 1;
 
-      for (const word of uniqueWords) {
-        const tf = doc.termFreqs.get(word) || 0;
-        if (tf === 0) continue;
-
-        // nDocsWithTerm: 包含该词项的文件数（用索引中该词项的条目来源去重统计）
+      for (const word of queryWords) {
         const wordEntries = this.index.get(word);
         if (!wordEntries || wordEntries.length === 0) continue;
-        const filesWithTerm = new Set<string>();
-        for (const we of wordEntries) {
-          filesWithTerm.add(we.filePath);
-        }
-        const nDocsWithTerm = filesWithTerm.size;
 
+        const filesWithTerm = new Set<string>();
+        for (const we of wordEntries) filesWithTerm.add(we.filePath);
+        const nDocsWithTerm = filesWithTerm.size;
         const idf = Math.log((N - nDocsWithTerm + 0.5) / (nDocsWithTerm + 0.5) + 1);
 
-        const numerator   = tf * (k1 + 1);
-        const denominator = tf + k1 * (1 - b + b * (docLen / avgdl));
-        score += idf * (numerator / denominator);
+        // 文件名字段
+        const tfName = doc.fileNameTermFreqs.get(word) || 0;
+        if (tfName > 0) {
+          scoreFileName += idf * fw.fileName * this.bm25Sat(tfName, fNameLen, avgFileNameLen, k1, b);
+        }
+
+        // 路径字段
+        const tfPath = doc.pathTermFreqs.get(word) || 0;
+        if (tfPath > 0) {
+          scoreFilePath += idf * fw.filePath * this.bm25Sat(tfPath, pathLen, avgPathLen, k1, b);
+        }
+
+        // 内容字段
+        const tfContent = doc.termFreqs.get(word) || 0;
+        if (tfContent > 0) {
+          scoreContent += idf * fw.content * this.bm25Sat(tfContent, docLen, avgdl, k1, b);
+        }
       }
 
-      const fileName = filePath.split('/').pop() || filePath;
-      score += 0.1 * entries.length;
+      const entryBonus = 0.1 * entries.length;
+      const score = scoreFileName + scoreFilePath + scoreContent + entryBonus;
 
-      results.push({ filePath, fileName, entries, score });
+      results.push({
+        filePath,
+        fileName: filePath.split('/').pop() || filePath,
+        entries,
+        score,
+        scoreBreakdown: {
+          fileName: scoreFileName,
+          filePath: scoreFilePath,
+          content: scoreContent,
+          entryBonus,
+        },
+      });
     }
 
     results.sort((a, b) => b.score - a.score);
     return results;
   }
 
+  /** BM25 饱和度函数 */
+  private bm25Sat(tf: number, docLen: number, avgdl: number, k1: number, b: number): number {
+    const num = tf * (k1 + 1);
+    const den = tf + k1 * (1 - b + b * (docLen / Math.max(1, avgdl)));
+    return num / den;
+  }
+
   private updateAvgDocLength(): void {
     if (this.docs.size === 0) {
       this.avgDocLength = 0;
+      this.avgFileNameLen = 0;
+      this.avgPathLen = 0;
       return;
     }
     let total = 0;
+    let totalFName = 0;
+    let totalPath = 0;
     for (const doc of this.docs.values()) {
       total += doc.wordCount;
+      totalFName += doc.fileNameWordCount;
+      totalPath += doc.pathWordCount;
     }
     this.avgDocLength = total / this.docs.size;
+    this.avgFileNameLen = totalFName / this.docs.size;
+    this.avgPathLen = totalPath / this.docs.size;
   }
 }

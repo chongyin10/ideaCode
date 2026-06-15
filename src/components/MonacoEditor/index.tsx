@@ -4,6 +4,8 @@ import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import { clearSearchHighlight } from '../../store/slices/workspaceSlice';
 import type { SearchHighlight, EditorSnapshot } from '../../store/slices/workspaceSlice';
 import { tsService } from '../../services/tsLanguageService';
+import { ensureLanguage } from '../../services/languageLoader';
+import { eventBus } from '../../utils/eventBus';
 import './MonacoEditor.css';
 
 // ─── HTML5 原生标签集 ───
@@ -122,7 +124,7 @@ function buildGrammarDecorations(
 
       if (!inTag) {
         // ── 进入 JSX 标签 ──
-        if (ch === '<' && j + 1 < len && /[a-zA-Z_$\/]/.test(content[j + 1])) {
+        if (ch === '<' && j + 1 < len && /[a-zA-Z_$/]/.test(content[j + 1])) {
           inTag = true;
 
           // 片段标签：<> / </>
@@ -526,6 +528,10 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
       beforeMount={beforeMount}
       onChange={(v) => {
         onChange?.(v || '');
+        // 发布编辑器变更事件
+        if (path) {
+          eventBus.emit('editor:changed', { fileId: path, groupIndex: 0 });
+        }
         // 去抖通知 tsserver 文件变更
         if (!isBrowser && path) {
           if (changeTimerRef.current) clearTimeout(changeTimerRef.current);
@@ -539,6 +545,11 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
       onMount={async (editor, monaco) => {
         editorRef.current = editor;
         monacoRef.current = monaco;
+
+        // ── 按需加载语言语法（减少首屏体积）──
+        if (language) {
+          ensureLanguage(language).catch(() => {});
+        }
 
         // ── 快照恢复（layout 先行，消除抖动 + 保证位置正确）──
         // 1. 先同步执行 layout，确保 Monaco 已完成内容测量（scrollHeight 已知），
@@ -763,7 +774,7 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
 
           lspDisposablesRef.current.push(monaco.languages.registerDocumentSemanticTokensProvider(language, {
             getLegend: () => semanticTokensLegend ?? defaultSemanticTokensLegend,
-            provideDocumentSemanticTokens: async (_model) => {
+            provideDocumentSemanticTokens: async () => {
               const currentPath = pathRef.current;
               if (!currentPath) return null;
               const gen = ++semTokenGenRef.current;

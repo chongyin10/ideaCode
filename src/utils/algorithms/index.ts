@@ -5,11 +5,19 @@
  * - 模糊搜索：文件快速定位（注意力加权 + 归一化评分 + LRU 缓存）
  * - Trie 树：命令补全、前缀搜索
  * - LRU 缓存：文件内容缓存
+ * - W-TinyLFU：高级缓存替换策略（Count-Min Sketch）
  * - Aho-Corasick：多模式文本搜索（代码高亮、批量搜索）
  * - Boyer-Moore-Horspool：单模式文本查找
  * - Myers Diff：O(ND) 文件版本对比
  * - Damerau-Levenshtein + Jaro-Winkler：拼写纠错
  * - Inverted Index + BM25 + BK-Tree + SPSA 调参：全文搜索
+ * - PID Controller：自适应防抖/参数调优
+ * - Kalman Filter：信号滤波/速度估计
+ * - BCM Neural Tab Manager：神经启发 Tab 管理
+ * - Node2Vec：图嵌入文件推荐
+ * - Personalized PageRank：文件重要性排序
+ * - Entropy File Prefetch：条件熵文件预取
+ * - Thompson Sampling Bandit：多臂老虎机搜索排序
  */
 
 export { fuzzySearch, fuzzyScore, FuzzySearchEngine } from './fuzzySearch';
@@ -19,6 +27,9 @@ export { Trie, PathTrie } from './trie';
 
 export { LRUCache, FileContentCache } from './lruCache';
 export type { CacheEntry } from './lruCache';
+
+export { WTinyLFU } from './wTinyLFU';
+export type { WTinyLFUConfig } from './wTinyLFU';
 
 export {
   horspoolSearch,
@@ -36,8 +47,9 @@ export {
   formatUnifiedDiff,
   inlineDiff,
   diffToHtml,
+  grammarAwareDiff,
 } from './diff';
-export type { DiffType, DiffChunk, DiffResult } from './diff';
+export type { DiffType, DiffChunk, DiffResult, GrammarDiffLine } from './diff';
 
 export { InvertedIndex } from './invertedIndex';
 export type { IndexEntry, SearchHit } from './invertedIndex';
@@ -49,3 +61,24 @@ export {
   fuzzyMatch,
 } from './levenshtein';
 export type { FuzzyMatchResult } from './levenshtein';
+
+export { PIDController } from './pidController';
+export type { PIDConfig } from './pidController';
+
+export { KalmanFilter, VectorKalmanFilter } from './kalmanFilter';
+export type { KalmanConfig } from './kalmanFilter';
+
+export { BCMTabManager } from './neuralTabManager';
+export type { BCMTabState, BCMConfig } from './neuralTabManager';
+
+export { Node2VecRecommender } from './node2vec';
+export type { FileGraph, Node2VecConfig } from './node2vec';
+
+export {
+  personalizedPageRank,
+  EntropyFilePrefetcher,
+} from './filePrediction';
+export type { FileTransitionStats } from './filePrediction';
+
+export { SearchBanditRanker } from './searchBandit';
+export type { BanditArm, BanditConfig, BanditStrategy } from './searchBandit';
