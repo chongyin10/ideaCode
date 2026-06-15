@@ -1,12 +1,14 @@
 import { createSlice } from '@reduxjs/toolkit';
 
 export type PanelId = 'explorer' | 'search' | 'git' | 'debug' | 'extensions';
+export type BottomTabId = 'terminal' | 'problems' | 'output' | 'debug-console' | 'ports' | 'gitlens';
 
 interface LayoutState {
   sidePanelVisible: boolean;
   activePanel: PanelId;
   rightPanelVisible: boolean;
   bottomPanelVisible: boolean;
+  activeBottomTab: BottomTabId;
 }
 
 const initialState: LayoutState = {
@@ -14,6 +16,7 @@ const initialState: LayoutState = {
   activePanel: 'explorer',
   rightPanelVisible: false,
   bottomPanelVisible: false,
+  activeBottomTab: 'terminal',
 };
 
 const layoutSlice = createSlice({
@@ -38,8 +41,16 @@ const layoutSlice = createSlice({
     toggleBottomPanel: (state) => {
       state.bottomPanelVisible = !state.bottomPanelVisible;
     },
+    switchBottomTab: (state, action) => {
+      state.activeBottomTab = action.payload as BottomTabId;
+      state.bottomPanelVisible = true;
+    },
+    openBottomTab: (state, action) => {
+      state.activeBottomTab = action.payload as BottomTabId;
+      state.bottomPanelVisible = true;
+    },
   },
 });
 
-export const { toggleSidePanel, switchPanel, toggleRightPanel, toggleBottomPanel } = layoutSlice.actions;
+export const { toggleSidePanel, switchPanel, toggleRightPanel, toggleBottomPanel, switchBottomTab, openBottomTab } = layoutSlice.actions;
 export default layoutSlice.reducer;

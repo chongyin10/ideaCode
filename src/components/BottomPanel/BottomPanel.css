@@ -53,6 +53,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   background-color: #252526;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   opacity: 0;
@@ -67,13 +68,49 @@
   transform: translateY(0);
 }
 
-.bottom-panel__title {
+.bottom-panel__tab-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.bottom-panel__tab-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.bottom-panel__tab {
+  height: 22px;
+  padding: 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  border-radius: 4px;
+  color: #858585;
   font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
-  color: #bbbbbb;
-  font-weight: 600;
   user-select: none;
+  white-space: nowrap;
+  transition:
+    background-color 0.12s ease,
+    color 0.12s ease;
+}
+
+.bottom-panel__tab:hover {
+  background-color: rgba(255, 255, 255, 0.06);
+  color: #cccccc;
+}
+
+.bottom-panel__tab.active {
+  background-color: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+}
+
+.bottom-panel__tab-icon {
+  flex-shrink: 0;
 }
 
 .bottom-panel__actions {
@@ -112,6 +149,13 @@
     opacity 0.2s ease 0.08s,
     transform 0.2s cubic-bezier(0.4, 0, 0.2, 1) 0.08s;
   position: relative;
+}
+
+.bottom-panel__content > .panel-placeholder {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .bottom-panel.is-visible .bottom-panel__content {

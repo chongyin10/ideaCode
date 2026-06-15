@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import { GitBranch, AlertCircle, XCircle, FileText, ChevronDown, Check, Plus, Search } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import { setFileLanguage } from '../../store/slices/workspaceSlice';
+import { openBottomTab } from '../../store/slices/layoutSlice';
 import { checkoutBranch, createBranch, refreshBranches } from '../../store/slices/gitSlice';
 import { isPath } from '../../services/fileService';
 import './StatusBar.css';
@@ -267,11 +268,19 @@ const StatusBar = () => {
           )}
         </div>
 
-        <span className="status-bar__item">
+        <span
+          className="status-bar__item status-bar__item--clickable"
+          onClick={() => dispatch(openBottomTab('problems'))}
+          title="打开问题面板"
+        >
           <AlertCircle size={12} strokeWidth={1.5} />
           0
         </span>
-        <span className="status-bar__item">
+        <span
+          className="status-bar__item status-bar__item--clickable"
+          onClick={() => dispatch(openBottomTab('problems'))}
+          title="打开问题面板"
+        >
           <XCircle size={12} strokeWidth={1.5} />
           0
         </span>
