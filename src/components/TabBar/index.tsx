@@ -13,6 +13,8 @@ interface TabBarProps {
   focused?: boolean;
   /** 正在加载中的文件 ID 集合 */
   loadingFiles?: Set<string>;
+  /** 已不存在/被删除的打开文件 ID 集合 */
+  missingFileIds?: Set<string>;
 }
 
 type TabPhase = 'entering' | 'stable' | 'exiting';
@@ -21,7 +23,7 @@ type DisplayTab = TabBarProps['tabs'][number] & { phase: TabPhase };
 
 const TRANSITION_MS = 200;
 
-const TabBar = ({ tabs, activeId, onActivate, onClose, onPin, onSplitView, splitActive, focused = true, loadingFiles }: TabBarProps) => {
+const TabBar = ({ tabs, activeId, onActivate, onClose, onPin, onSplitView, splitActive, focused = true, loadingFiles, missingFileIds }: TabBarProps) => {
   const [displayTabs, setDisplayTabs] = useState<DisplayTab[]>([]);
   const prevTabsRef = useRef(tabs);
 
@@ -73,7 +75,7 @@ const TabBar = ({ tabs, activeId, onActivate, onClose, onPin, onSplitView, split
         {displayTabs.map((tab) => (
           <div
             key={tab.id}
-            className={`tab-bar__item tab-bar__item--${tab.phase} ${focused && activeId === tab.id ? 'active' : ''} ${tab.isPreview ? 'preview' : ''}`}
+            className={`tab-bar__item tab-bar__item--${tab.phase} ${focused && activeId === tab.id ? 'active' : ''} ${tab.isPreview ? 'preview' : ''} ${missingFileIds?.has(tab.id) ? 'deleted' : ''}`}
             onClick={() => onActivate(tab.id)}
             onDoubleClick={() => {
               if (tab.isPreview) {

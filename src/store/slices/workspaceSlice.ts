@@ -83,6 +83,8 @@ interface WorkspaceState {
   diffView: DiffView | null;
   /** 设置面板是否显示在主区域 */
   settingsVisible: boolean;
+  /** 当前已不存在的打开文件 ID 集合（如切换分支后文件被删除） */
+  missingFileIds: string[];
 }
 
 const initialState: WorkspaceState = {
@@ -108,6 +110,7 @@ const initialState: WorkspaceState = {
   nextGroupId: 1,
   diffView: null,
   settingsVisible: false,
+  missingFileIds: [],
 };
 
 /* ─── 工具函数 ─── */
@@ -350,6 +353,54 @@ export const refreshAllFilePaths = createAsyncThunk(
   }
 );
 
+/** 检查所有已打开文件是否仍然存在，返回缺失的文件 ID 列表 */
+export const checkMissingFiles = createAsyncThunk(
+  'workspace/checkMissingFiles',
+  async (_: void, { getState }) => {
+    const state = (getState() as { workspace: WorkspaceState }).workspace;
+    const fs = window.electronAPI?.fs;
+    if (!fs) return [];
+    const results = await Promise.all(
+      state.openedFiles.map(async (f) => {
+        if (typeof f.source !== 'string') return null;
+        try {
+          const stat = await fs.stat(f.source);
+          return stat ? null : f.id;
+        } catch {
+          return f.id;
+        }
+      })
+    );
+    return results.filter((id): id is string => !!id);
+  }
+);
+
+/** 重新读取磁盘上已打开文件的内容（仅当文件存在且无未保存修改时） */
+export const refreshOpenedFiles = createAsyncThunk(
+  'workspace/refreshOpenedFiles',
+  async (_: void, { getState }) => {
+    const state = (getState() as { workspace: WorkspaceState }).workspace;
+    const fs = window.electronAPI?.fs;
+    if (!fs) return [];
+    const updates: { id: string; content: string }[] = [];
+    for (const file of state.openedFiles) {
+      if (typeof file.source !== 'string') continue;
+      if (file.isDirty) continue;
+      try {
+        const stat = await fs.stat(file.source);
+        if (!stat) continue;
+        const content = await fs.readFile(file.source);
+        if (content !== file.content) {
+          updates.push({ id: file.id, content });
+        }
+      } catch {
+        // 文件不可读，忽略
+      }
+    }
+    return updates;
+  }
+);
+
 /* ─── Slice ─── */
 
 const workspaceSlice = createSlice({
@@ -361,6 +412,9 @@ const workspaceSlice = createSlice({
     },
     closeSettings: (state) => {
       state.settingsVisible = false;
+    },
+    setMissingFileIds: (state, action) => {
+      state.missingFileIds = action.payload as string[];
     },
     closeFile: (state, action) => {
       const payload = action.payload;
@@ -723,6 +777,22 @@ const workspaceSlice = createSlice({
       })
       .addCase(refreshAllFilePaths.fulfilled, (state, action) => {
         state.allFilePaths = action.payload;
+      })
+      .addCase(checkMissingFiles.fulfilled, (state, action) => {
+        state.missingFileIds = action.payload;
+      })
+      .addCase(refreshOpenedFiles.fulfilled, (state, action) => {
+        for (const { id, content } of action.payload) {
+          const file = state.openedFiles.find((f) => f.id === id);
+          if (file) {
+            file.content = content;
+            file.isPreview = false;
+            // 清除该文件在所有组中的镜像内容，避免显示旧分支内容
+            state.editorGroups.forEach((_, idx) => {
+              delete state.mirrorContent[`${id}::${idx}`];
+            });
+          }
+        }
       });
   },
 });
@@ -733,7 +803,7 @@ export const {
   clearClipboard, setPendingSearchQuery, expandToFile, clearExpandPaths,
   toggleExpandDir, toggleSplitView, collapseAllGroups, setActiveGroup, saveEditorSnapshot, setGroupRatio, equalizeGroupRatios,
   openDiffView, closeDiffView, updateDiffView, setFileLanguage,
-  setSettingsVisible, closeSettings,
+  setSettingsVisible, closeSettings, setMissingFileIds,
 } = workspaceSlice.actions;
 
 export default workspaceSlice.reducer;

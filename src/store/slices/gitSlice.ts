@@ -150,6 +150,25 @@ export const checkoutBranch = createAsyncThunk(
       dispatch(refreshBranch()),
       dispatch(refreshBranches()),
     ]);
+    // 切换分支后刷新资源管理器、检查已打开文件是否存在并刷新未修改文件内容
+    const { refreshDirectory, checkMissingFiles, refreshOpenedFiles } = await import('./workspaceSlice');
+    await dispatch(refreshDirectory(root));
+    await dispatch(checkMissingFiles());
+    await dispatch(refreshOpenedFiles());
+  }
+);
+
+export const createBranch = createAsyncThunk(
+  'git/createBranch',
+  async ({ branch, startPoint }: { branch: string; startPoint?: string }, { getState, dispatch }) => {
+    const root = getRootPath(getState() as { workspace: { rootSource: unknown } });
+    if (!root) throw new Error('no project');
+    await gitService.createBranch(root, branch, startPoint);
+    await Promise.all([
+      dispatch(refreshGitStatus()),
+      dispatch(refreshBranch()),
+      dispatch(refreshBranches()),
+    ]);
   }
 );
 

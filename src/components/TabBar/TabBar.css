@@ -187,6 +187,16 @@
   color: #bbbbbb;
 }
 
+/* 文件在当前分支已不存在/被删除 */
+.tab-bar__item.deleted .tab-bar__name {
+  color: #f85149;
+  text-decoration: line-through;
+}
+
+.tab-bar__item.deleted.active .tab-bar__name {
+  color: #ff6b6b;
+}
+
 .tab-bar__dirty {
   flex-shrink: 0;
   color: #4a9eff;

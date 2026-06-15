@@ -34,9 +34,9 @@ export const gitService = {
     await gitApi()?.checkout(dirPath, branch);
   },
 
-  /** 创建并切换到新分支 */
-  async createBranch(dirPath: string, branch: string): Promise<void> {
-    await gitApi()?.createBranch(dirPath, branch);
+  /** 创建并切换到新分支，可指定起始点（如远程分支） */
+  async createBranch(dirPath: string, branch: string, startPoint?: string): Promise<void> {
+    await gitApi()?.createBranch(dirPath, branch, startPoint);
   },
 
   /** 暂存文件 */

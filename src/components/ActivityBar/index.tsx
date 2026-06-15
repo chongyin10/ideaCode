@@ -21,6 +21,11 @@ const bottomItems: { icon: React.ReactNode; title: string }[] = [
 const ActivityBar = () => {
   const dispatch = useAppDispatch();
   const activePanel = useAppSelector((state) => state.layout.activePanel);
+  const gitStagedCount = Object.keys(useAppSelector((s) => s.git.staged)).length;
+  const gitChangesCount = Object.keys(useAppSelector((s) => s.git.changes)).length;
+  const gitMergeCount = Object.keys(useAppSelector((s) => s.git.merge)).length;
+  const gitUntrackedCount = Object.keys(useAppSelector((s) => s.git.untracked)).length;
+  const gitBadgeCount = gitStagedCount + gitChangesCount + gitMergeCount + gitUntrackedCount;
 
   return (
     <div className="activity-bar">
@@ -33,6 +38,9 @@ const ActivityBar = () => {
             onClick={() => dispatch(switchPanel(p.id))}
           >
             {p.icon}
+            {p.id === 'git' && gitBadgeCount > 0 && (
+              <span className="activity-bar__badge">{gitBadgeCount}</span>
+            )}
           </div>
         ))}
       </div>

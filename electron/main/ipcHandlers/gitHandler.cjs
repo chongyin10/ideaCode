@@ -103,9 +103,12 @@ function registerGitHandlers() {
     return true;
   });
 
-  ipcMain.handle(Channels.GIT_CREATE_BRANCH, async (_event, dirPath, branch) => {
-    const safe = branch.replace(/['"\\;|&`$]/g, '');
-    await execGit(`git checkout -b ${safe}`, dirPath);
+  ipcMain.handle(Channels.GIT_CREATE_BRANCH, async (_event, dirPath, branch, startPoint) => {
+    const safeBranch = branch.replace(/['"\\;|&`$]/g, '');
+    const command = startPoint
+      ? `git checkout -b ${safeBranch} ${startPoint.replace(/['"\\;|&`$]/g, '')}`
+      : `git checkout -b ${safeBranch}`;
+    await execGit(command, dirPath);
     return true;
   });
 

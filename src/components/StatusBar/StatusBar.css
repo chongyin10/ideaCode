@@ -54,6 +54,10 @@
   margin: 0 4px;
 }
 
+.status-bar__branch-wrapper {
+  position: relative;
+}
+
 .status-bar__branch {
   cursor: pointer;
   color: #cccccc;
@@ -76,6 +80,191 @@
 .status-bar span {
   cursor: default;
   transition: opacity 0.15s ease;
+}
+
+/* 分支选择器 */
+.status-bar__branch-dropdown {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  margin-bottom: 4px;
+  background: #252526;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  max-height: 320px;
+  overflow-y: auto;
+  z-index: 1000;
+  min-width: 220px;
+  padding: 4px 0;
+  transform-origin: bottom left;
+}
+
+.status-bar__branch-dropdown--entering {
+  animation: branchDropdownEnter 0.15s ease forwards;
+}
+
+.status-bar__branch-dropdown--exiting {
+  animation: branchDropdownExit 0.15s ease forwards;
+  pointer-events: none;
+}
+
+@keyframes branchDropdownEnter {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes branchDropdownExit {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+}
+
+.status-bar__branch-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  margin: 0 6px 4px;
+  background: #3c3c3c;
+  border-radius: 4px;
+  color: #858585;
+}
+
+.status-bar__branch-search input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #cccccc;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.status-bar__branch-create {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: calc(100% - 12px);
+  margin: 0 6px 4px;
+  padding: 6px 10px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: #cccccc;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.status-bar__branch-create:hover {
+  background: #094771;
+}
+
+.status-bar__branch-create-input {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  margin: 0 6px 4px;
+}
+
+.status-bar__branch-create-input input {
+  flex: 1;
+  background: #3c3c3c;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  padding: 5px 8px;
+  color: #cccccc;
+  font-size: 12px;
+  outline: none;
+}
+
+.status-bar__branch-create-input input:focus {
+  border-color: #0e639c;
+}
+
+.status-bar__branch-create-input button {
+  background: #0e639c;
+  border: none;
+  border-radius: 4px;
+  padding: 5px 10px;
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.status-bar__branch-create-input button:hover {
+  background: #1177bb;
+}
+
+.status-bar__branch-section {
+  padding: 5px 12px 3px;
+  font-size: 11px;
+  color: #858585;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.status-bar__branch-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 10px;
+  background: none;
+  border: none;
+  color: #cccccc;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.status-bar__branch-item:hover {
+  background: #094771;
+}
+
+.status-bar__branch-item.current {
+  color: #fff;
+}
+
+.status-bar__branch-check {
+  width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: #4a9eff;
+}
+
+.status-bar__branch-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-bar__branch-empty {
+  padding: 10px 12px;
+  font-size: 12px;
+  color: #858585;
+  text-align: center;
 }
 
 /* 语言选择器 */

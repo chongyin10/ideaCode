@@ -84,7 +84,7 @@ function recordCooccurrence(fileA: string, fileB: string) {
 function Home() {
   const dispatch = useAppDispatch();
   const workspace = useAppSelector((state) => state.workspace);
-  const { openedFiles, recentProjects, editorGroups, activeGroupIndex, allFilePaths, mirrorContent, splitPhase, editorSnapshots: snapshots } = workspace;
+  const { openedFiles, recentProjects, editorGroups, activeGroupIndex, allFilePaths, mirrorContent, splitPhase, editorSnapshots: snapshots, missingFileIds } = workspace;
   const splitView = editorGroups.length > 1;
   const showCloneForm = useAppSelector((state) => state.git.showCloneForm);
   const diffView = useAppSelector((state) => state.workspace.diffView);
@@ -163,6 +163,12 @@ function Home() {
   const openedFileMap = useMemo(
     () => new Map(openedFiles.map((f) => [f.id, f])),
     [openedFiles]
+  );
+
+  // 预构建缺失文件 ID 集合
+  const missingFileIdsSet = useMemo(
+    () => new Set(missingFileIds),
+    [missingFileIds]
   );
 
   // 计算各组 tabs
@@ -494,6 +500,7 @@ function Home() {
             splitActive={splitView}
             focused={focused}
             loadingFiles={loadingFiles}
+            missingFileIds={missingFileIdsSet}
           />
           <div className="editor-area">
             {file ? (
@@ -522,7 +529,7 @@ function Home() {
         </>
       );
     },
-    [dispatch, handleCloseTab, handleEditorChange, handleOpenQuickOpen, splitView, getPanelContent, rootPath, gitStatus, handleTabReady, handleOpenFileByPath, loadingFiles]
+    [dispatch, handleCloseTab, handleEditorChange, handleOpenQuickOpen, splitView, getPanelContent, rootPath, gitStatus, handleTabReady, handleOpenFileByPath, loadingFiles, missingFileIdsSet]
   );
 
   return (

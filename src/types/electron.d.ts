@@ -161,7 +161,7 @@ export interface ElectronAPI {
     getBranch: (dirPath: string) => Promise<string>;
     listBranches: (dirPath: string) => Promise<GitBranch[]>;
     checkout: (dirPath: string, branch: string) => Promise<boolean>;
-    createBranch: (dirPath: string, branch: string) => Promise<boolean>;
+    createBranch: (dirPath: string, branch: string, startPoint?: string) => Promise<boolean>;
     stage: (dirPath: string, files: string | string[]) => Promise<boolean>;
     unstage: (dirPath: string, files: string | string[]) => Promise<boolean>;
     commit: (dirPath: string, message: string) => Promise<string>;
