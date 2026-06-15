@@ -3,6 +3,8 @@ import { useElectronEvents } from './hooks';
 import TopBar from './components/TopBar';
 import ActivityBar from './components/ActivityBar';
 import SidePanel from './components/SidePanel';
+import RightPanel from './components/RightPanel';
+import BottomPanel from './components/BottomPanel';
 import StatusBar from './components/StatusBar';
 import './App.css';
 
@@ -16,9 +18,13 @@ function App() {
       <div className="app-layout__body">
         <ActivityBar />
         <SidePanel />
-        <div className="app-layout__content">
-          <Outlet />
+        <div className="app-layout__main">
+          <div className="app-layout__content">
+            <Outlet />
+          </div>
+          <BottomPanel />
         </div>
+        <RightPanel />
       </div>
       <StatusBar />
     </div>

@@ -15,6 +15,14 @@
   overflow: hidden;
 }
 
+.app-layout__main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
 .app-layout__content {
   flex: 1;
   display: flex;

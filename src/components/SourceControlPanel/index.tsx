@@ -190,6 +190,29 @@ const SourceControlPanel = () => {
       dispatch(discardFile(file)).then(() => resetPolling());
     }
   }, [dispatch, resetPolling]);
+  const handleDiscardAllChanges = useCallback(() => {
+    const files = changesEntries.map((e) => e.path);
+    if (!files.length) return;
+    if (window.confirm(`确定要丢弃 ${files.length} 个文件的更改吗？`)) {
+      Promise.all(files.map((f) => dispatch(discardFile(f)))).then(() => resetPolling());
+    }
+  }, [dispatch, changesEntries, resetPolling]);
+  const handleDiscardAllMerge = useCallback(() => {
+    const files = mergeEntries.map((e) => e.path);
+    if (!files.length) return;
+    if (window.confirm(`确定要丢弃 ${files.length} 个合并冲突文件的更改吗？`)) {
+      Promise.all(files.map((f) => dispatch(discardFile(f)))).then(() => resetPolling());
+    }
+  }, [dispatch, mergeEntries, resetPolling]);
+  const handleDeleteAllUntracked = useCallback(async () => {
+    const files = untrackedEntries.map((e) => e.path);
+    if (!files.length || !rootPath) return;
+    if (window.confirm(`确定要删除 ${files.length} 个未跟踪的文件/文件夹吗？`)) {
+      const base = rootPath.replace(/\/$/, '');
+      await Promise.all(files.map((f) => window.electronAPI?.fs?.delete(`${base}/${f}`)));
+      resetPolling();
+    }
+  }, [rootPath, untrackedEntries, resetPolling]);
   const handleOpenFileNormal = useCallback((filePath: string) => {
     if (!rootPath) return;
     const base = rootPath.replace(/\/$/, '');
@@ -302,18 +325,22 @@ const SourceControlPanel = () => {
 
       {renderSection('暂存的更改', stagedEntries, stagedOpen, setStagedOpen, 'undo', [
         { label: '全部取消暂存', icon: Minus, handler: handleUnstageAll },
+        { label: '全部撤回暂存', icon: Undo2, handler: handleUnstageAll },
       ], [
         { icon: Minus, handler: handleUnstage, title: '取消暂存' },
         { icon: FileText, handler: handleOpenFileNormal, title: '打开文件' },
       ])}
       {renderSection('更改', changesEntries, changesOpen, setChangesOpen, 'plus', [
         { label: '全部暂存', icon: Plus, handler: handleStageAllChanges },
+        { label: '全部撤回更改', icon: Undo2, handler: handleDiscardAllChanges },
       ], [
         { icon: Plus, handler: handleStage, title: '暂存' },
         { icon: Undo2, handler: handleDiscard, title: '丢弃更改' },
         { icon: FileText, handler: handleOpenFileNormal, title: '打开文件' },
       ])}
-      {renderSection('合并更改', mergeEntries, mergeOpen, setMergeOpen, 'alert', [], [
+      {renderSection('合并更改', mergeEntries, mergeOpen, setMergeOpen, 'alert', [
+        { label: '全部撤回合并更改', icon: Undo2, handler: handleDiscardAllMerge },
+      ], [
         { icon: FileText, handler: handleOpenFileNormal, title: '打开文件' },
       ])}
       {renderSection('未跟踪的文件', untrackedEntries, untrackedOpen, setUntrackedOpen, 'plus', [
@@ -321,6 +348,7 @@ const SourceControlPanel = () => {
           const files = untrackedEntries.map(e => e.path);
           if (files.length) dispatch(stageFiles(files));
         }},
+        { label: '全部删除未跟踪文件', icon: Undo2, handler: handleDeleteAllUntracked },
       ], [
         { icon: Plus, handler: handleStage, title: '暂存' },
         { icon: FileText, handler: handleOpenFileNormal, title: '打开文件' },

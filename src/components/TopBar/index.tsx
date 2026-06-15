@@ -5,9 +5,12 @@ import {
   Minus,
   Square,
   X,
+  PanelRight,
+  PanelBottom,
 } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import { setSettingsVisible } from '../../store/slices/workspaceSlice';
+import { toggleRightPanel, toggleBottomPanel } from '../../store/slices/layoutSlice';
 import QuickOpen from '../QuickOpen';
 import './TopBar.css';
 
@@ -27,6 +30,7 @@ const TopBar = () => {
   const [quickOpenVisible, setQuickOpenVisible] = useState(false);
   const [, setIsMaximized] = useState(false);
   const rootName = useAppSelector((state) => state.workspace.rootName);
+  const { rightPanelVisible, bottomPanelVisible } = useAppSelector((state) => state.layout);
 
   const platform = window.electronAPI?.platform || 'browser';
   const isMac = platform === 'darwin';
@@ -104,6 +108,22 @@ const TopBar = () => {
             onClick={() => dispatch(setSettingsVisible(true))}
           >
             <Settings size={14} strokeWidth={1.5} />
+          </button>
+          <button
+            className={`topbar__btn ${rightPanelVisible ? 'active' : ''}`}
+            aria-label="切换右侧面板"
+            onClick={() => dispatch(toggleRightPanel())}
+            title="切换右侧面板"
+          >
+            <PanelRight size={14} strokeWidth={1.5} />
+          </button>
+          <button
+            className={`topbar__btn ${bottomPanelVisible ? 'active' : ''}`}
+            aria-label="切换底部面板"
+            onClick={() => dispatch(toggleBottomPanel())}
+            title="切换底部面板"
+          >
+            <PanelBottom size={14} strokeWidth={1.5} />
           </button>
 
           {/* Windows/Linux 自定义窗口控制按钮 */}
