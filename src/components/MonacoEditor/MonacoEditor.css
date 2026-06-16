@@ -54,50 +54,5 @@
   background-color: transparent !important;
 }
 
-/* ─── 语义 token 装饰着色（绕过 Monaco scope 转换，直接按 VS Code Dark+ 标准着色） ─── */
-
-/* 函数 / 方法 → 黄色 #DCDCAA */
-.sem-func {
-  color: #DCDCAA !important;
-}
-
-/* 类型 / 类 / 接口 / 枚举 / 命名空间 → 绿色 #4EC9B0 */
-.sem-type {
-  color: #4EC9B0 !important;
-}
-
-/* 变量 / 枚举成员 → 浅蓝色 #50C8FF */
-.sem-variable {
-  color: #50C8FF !important;
-}
-
-/* 属性（对象成员访问如 obj.prop） → 浅天蓝 #89CFF0 */
-.sem-property {
-  color: #89CFF0 !important;
-}
-
-/* 参数 → 淡蓝色 #A6D6F5 */
-.sem-parameter {
-  color: #A6D6F5 !important;
-}
-
-/* 声明 → 斜体 */
-.sem-italic {
-  font-style: italic !important;
-}
-
-/* JSX 片段标签 <> / </> → 灰色 #7D7D7D */
-.sem-fragment {
-  color: #7D7D7D !important;
-}
-
-/* JSX 尖括号 < > </ /> → 灰色 #7D7D7D */
-.sem-bracket {
-  color: #7D7D7D !important;
-}
-
-/* HTML 原生标签名（div / span / button ...）→ 浅蓝色 #50C8FF
-   放在最后，确保覆盖可能与之重叠的语义 token 颜色 */
-.sem-html-tag {
-  color: #50C8FF !important;
-}
+/* 所有语法/语义着色统一由 Monaco 内置 tokenizer / semantic tokens + ideacode-dark
+   主题规则处理，不再使用自定义 inlineClassName CSS 覆盖。*/

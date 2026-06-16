@@ -12,7 +12,7 @@ const path = require('path');
 
 let serverProcess = null;
 let rootUri = null;
-let buffer = '';
+let buffer = Buffer.alloc(0);
 let msgId = 0;
 let initRequestId = null;
 let semanticTokensLegend = null;
@@ -28,18 +28,18 @@ function send(msg) {
 }
 
 function parseMessages(chunk) {
-  buffer += chunk;
+  buffer = Buffer.concat([buffer, chunk]);
   const messages = [];
   while (true) {
     const headerEnd = buffer.indexOf('\r\n\r\n');
     if (headerEnd === -1) break;
-    const header = buffer.slice(0, headerEnd);
+    const header = buffer.slice(0, headerEnd).toString('utf8');
     const lenMatch = header.match(/Content-Length: (\d+)/);
-    if (!lenMatch) { buffer = ''; break; }
+    if (!lenMatch) { buffer = Buffer.alloc(0); break; }
     const contentLen = parseInt(lenMatch[1], 10);
     const bodyStart = headerEnd + 4;
     if (buffer.length < bodyStart + contentLen) break;
-    const body = buffer.slice(bodyStart, bodyStart + contentLen);
+    const body = buffer.slice(bodyStart, bodyStart + contentLen).toString('utf8');
     buffer = buffer.slice(bodyStart + contentLen);
     try { messages.push(JSON.parse(body)); } catch {}
   }
@@ -64,9 +64,12 @@ function startServer(projectRoot, sender) {
 
   serverProcess.stdout.on('data', (data) => {
     try {
-      for (const msg of parseMessages(data.toString())) {
-        if (msg.id === initRequestId && msg.result?.capabilities?.semanticTokensProvider?.legend) {
-          semanticTokensLegend = msg.result.capabilities.semanticTokensProvider.legend;
+      for (const msg of parseMessages(data)) {
+        if (msg.id === initRequestId && msg.result) {
+          if (msg.result.capabilities?.semanticTokensProvider?.legend) {
+            semanticTokensLegend = msg.result.capabilities.semanticTokensProvider.legend;
+          }
+          send({ jsonrpc: '2.0', method: 'initialized', params: {} });
         }
         if (msg.id && pendingRequests.has(msg.id)) {
           pendingRequests.get(msg.id)(msg);
@@ -133,10 +136,6 @@ function startServer(projectRoot, sender) {
     },
   });
 
-  // initialized notification
-  setTimeout(() => {
-    send({ jsonrpc: '2.0', method: 'initialized', params: {} });
-  }, 200);
 }
 
 function stopServer() {
@@ -144,7 +143,7 @@ function stopServer() {
     try { serverProcess.kill(); } catch {}
     serverProcess = null;
   }
-  buffer = '';
+  buffer = Buffer.alloc(0);
   pendingRequests.clear();
   msgId = 0;
 }

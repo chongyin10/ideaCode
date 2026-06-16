@@ -9,193 +9,8 @@ import { ensureLanguage } from '../../services/languageLoader';
 import { eventBus } from '../../utils/eventBus';
 import './MonacoEditor.css';
 
-// ─── HTML5 原生标签集 ───
-// 在 JSX 中，小写标签名被视为 HTML 原生元素，大写则为自定义组件。
-// 装饰着色层对此处列出的原生标签使用 sem-variable 色，其余自定义组件交由 semantic tokens 层处理。
-const NATIVE_HTML_TAGS = new Set([
-  'a', 'abbr', 'address', 'area', 'article', 'aside', 'audio',
-  'b', 'base', 'bdi', 'bdo', 'blockquote', 'body', 'br', 'button',
-  'canvas', 'caption', 'cite', 'code', 'col', 'colgroup',
-  'data', 'datalist', 'dd', 'del', 'details', 'dfn', 'dialog', 'div', 'dl', 'dt',
-  'em', 'embed',
-  'fieldset', 'figcaption', 'figure', 'footer', 'form',
-  'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'head', 'header', 'hgroup', 'hr', 'html',
-  'i', 'iframe', 'img', 'input', 'ins',
-  'kbd',
-  'label', 'legend', 'li', 'link',
-  'main', 'map', 'mark', 'menu', 'meta', 'meter',
-  'nav', 'noscript',
-  'object', 'ol', 'optgroup', 'option', 'output',
-  'p', 'picture', 'pre', 'progress',
-  'q',
-  'rp', 'rt', 'ruby',
-  's', 'samp', 'script', 'section', 'select', 'slot', 'small', 'source', 'span',
-  'strong', 'style', 'sub', 'summary', 'sup', 'svg',
-  'table', 'tbody', 'td', 'template', 'textarea', 'tfoot', 'th', 'thead',
-  'time', 'title', 'tr', 'track',
-  'u', 'ul',
-  'var', 'video',
-  'wbr',
-]);
-
-// ─── 语义 token 装饰着色层 ───
-// 绕过 Monaco 内部的 scope 转换（semantic token type → TextMate scope → theme rule 匹配），
-// 直接在编辑器文本上以 CSS class decoration 方式着色，复刻 VS Code Dark+ 语义着色标准。
-
-/** VS Code Dark+ 语义 token 类型 → CSS 颜色组 */
-const TOKEN_COLOR_GROUP: Record<string, string> = {
-  // 函数 / 方法 → 黄色
-  function: 'sem-func',
-  member:   'sem-func',
-  // 类型 / 类 / 接口 / 枚举 → 绿色
-  class:         'sem-type',
-  enum:          'sem-type',
-  interface:     'sem-type',
-  namespace:     'sem-type',
-  typeParameter: 'sem-type',
-  type:          'sem-type',
-  // 变量 / 属性 / 枚举成员 → 浅蓝色
-  variable:   'sem-variable',
-  enumMember: 'sem-variable',
-  property:   'sem-property',
-  // 参数 → 淡蓝色
-  parameter:  'sem-parameter',
-};
-
-/** 将 LSP semantic tokens 压缩数据还原为 Monaco decoration 数组 */
-function buildSemanticDecorations(
-  data: Uint32Array,
-  legend: { tokenTypes: string[]; tokenModifiers: string[] },
-  monacoInstance: typeof monaco,
-): Array<{ range: monaco.Range; options: { inlineClassName: string } }> {
-  const decs: Array<{ range: monaco.Range; options: { inlineClassName: string } }> = [];
-  let line = 0;
-  let col = 0;
-
-  for (let i = 0; i < data.length; i += 5) {
-    const dLine = data[i];
-    const dCol = data[i + 1];
-    const len = data[i + 2];
-    const typeIdx = data[i + 3];
-    const mods = data[i + 4];
-
-    // 相对坐标解码
-    if (dLine > 0) {
-      line += dLine;
-      col = dCol;
-    } else {
-      col += dCol;
-    }
-
-    const typeName = legend.tokenTypes[typeIdx];
-    const baseClass = TOKEN_COLOR_GROUP[typeName];
-    if (!baseClass) continue; // 跳过未知/未映射类型
-
-    // 修饰符检测：declaration → 附加 italic 类
-    const isDeclaration = !!(mods & 1); // legend.modifiers[0] === 'declaration'
-    const className = isDeclaration ? `${baseClass} sem-italic` : baseClass;
-
-    decs.push({
-      range: new monacoInstance.Range(line + 1, col + 1, line + 1, col + 1 + len),
-      options: { inlineClassName: className },
-    });
-  }
-
-  return decs;
-}
-
-/** 状态机逐行扫描：匹配 JSX/HTML 标签名 + 尖括号 <> </ /> + 片段 <> </>，生成 decoration 数组 */
-function buildGrammarDecorations(
-  model: monaco.editor.ITextModel,
-  monacoInstance: typeof monaco,
-): Array<{ range: monaco.Range; options: { inlineClassName: string } }> {
-  const langId = model.getLanguageId();
-  if (!/typescriptreact|javascriptreact|typescript|javascript|html|razor|handlebars/i.test(langId)) return [];
-
-  const decs: Array<{ range: monaco.Range; options: { inlineClassName: string } }> = [];
-  const lineCount = model.getLineCount();
-
-  for (let line = 1; line <= lineCount; line++) {
-    const content = model.getLineContent(line);
-    const len = content.length;
-    let inTag = false;
-
-    for (let j = 0; j < len; j++) {
-      const ch = content[j];
-
-      if (!inTag) {
-        // ── 进入 JSX 标签 ──
-        if (ch === '<' && j + 1 < len && /[a-zA-Z_$/]/.test(content[j + 1])) {
-          inTag = true;
-
-          // 片段标签：<> / </>
-          if (content[j + 1] === '>') {
-            decs.push({ range: new monacoInstance.Range(line, j + 1, line, j + 3), options: { inlineClassName: 'sem-fragment' } });
-            j++; inTag = false; continue;
-          }
-          if (j + 2 < len && content[j + 1] === '/' && content[j + 2] === '>') {
-            decs.push({ range: new monacoInstance.Range(line, j + 1, line, j + 4), options: { inlineClassName: 'sem-fragment' } });
-            j += 2; inTag = false; continue;
-          }
-
-          // 开尖括号 < → sem-bracket
-          decs.push({ range: new monacoInstance.Range(line, j + 1, line, j + 2), options: { inlineClassName: 'sem-bracket' } });
-
-          // 闭标签斜杠 / → sem-bracket
-          if (content[j + 1] === '/') {
-            decs.push({ range: new monacoInstance.Range(line, j + 2, line, j + 3), options: { inlineClassName: 'sem-bracket' } });
-            j++; // skip '/'
-          }
-        }
-      } else {
-        // ── 在标签内部 ──
-        if (ch === '>') {
-          decs.push({ range: new monacoInstance.Range(line, j + 1, line, j + 2), options: { inlineClassName: 'sem-bracket' } });
-          inTag = false;
-        } else if (ch === '/' && j + 1 < len && content[j + 1] === '>') {
-          decs.push({ range: new monacoInstance.Range(line, j + 1, line, j + 3), options: { inlineClassName: 'sem-bracket' } });
-          j++; inTag = false;
-        } else if (ch === '{') {
-          // 跳过 JSX 表达式
-          let depth = 1; j++;
-          while (j < len && depth > 0) { if (content[j] === '{') depth++; else if (content[j] === '}') depth--; j++; }
-          j--; // 回退到 }
-        } else if (ch === '"' || ch === "'" || ch === '`') {
-          // 跳过字符串字面量
-          const q = ch; j++;
-          while (j < len && content[j] !== q) { if (content[j] === '\\') j++; j++; }
-        }
-        // 标签名：由下方的 tagRegex 统一匹配，不在状态机中重复处理
-      }
-    }
-  }
-
-  // ── 标签名：仅原生 HTML 标签 → sem-variable，自定义组件交由 semantic tokens 层 ──
-  for (let line = 1; line <= lineCount; line++) {
-    const content = model.getLineContent(line);
-    const tagRegex = /<\/?([a-zA-Z_$][\w$]*)/g;
-    let match: RegExpExecArray | null;
-
-    while ((match = tagRegex.exec(content)) !== null) {
-      const raw = match[1]; // div for <div, /div for </div
-      const isClose = raw.startsWith('/');
-      const tagName = isClose ? raw.slice(1) : raw;
-      if (!tagName) continue;
-      // 仅对原生 HTML 标签着色
-      if (!NATIVE_HTML_TAGS.has(tagName)) continue;
-
-      const startCol = match.index + (isClose ? 3 : 2);
-      const endCol = startCol + tagName.length;
-
-      decs.push({
-        range: new monacoInstance.Range(line, startCol, line, endCol),
-        options: { inlineClassName: 'sem-html-tag' },
-      });
-    }
-  }
-
-  return decs;
-}
+// JSX/HTML/TS 语法高亮 + tsserver 语义高亮统一由 Monaco 内置 tokenizer / semantic tokens
+// 配合 ideacode-dark 主题规则着色，不再使用自定义正则扫描和 inlineClassName CSS 覆盖。
 
 const Loading = () => (
   <div className="monaco-loading">
@@ -313,7 +128,68 @@ const beforeMount: Parameters<typeof Editor>[0]['beforeMount'] = (monaco) => {
       return originalRegisterHoverProvider!(languageSelector, provider);
     }) as typeof monaco.languages.registerHoverProvider;
   }
+
+  // 注册 ideacode-dark 主题：继承 vs-dark，用 Monaco 标准 token 规则
+  // 统一 JSX/HTML/TS 语法高亮，避免自定义正则/inlineClassName 与内置样式冲突。
+  monaco.editor.defineTheme('ideacode-dark', {
+    base: 'vs-dark',
+    inherit: true,
+    rules: [
+      // JSX / HTML 标签与属性
+      { token: 'tag', foreground: '50C8FF' },
+      { token: 'tag.css', foreground: '50C8FF' },
+      { token: 'attribute.name', foreground: '9CDCFE' },
+      { token: 'attribute.value', foreground: 'CE9178' },
+      { token: 'attribute.value.number', foreground: 'B5CEA8' },
+      // 通用 TS/JS token
+      { token: 'string', foreground: 'CE9178' },
+      { token: 'string.key', foreground: 'CE9178' },
+      { token: 'keyword', foreground: '569CD6' },
+      { token: 'keyword.flow', foreground: 'C586C0' },
+      { token: 'identifier', foreground: 'D4D4D4' },
+      { token: 'number', foreground: 'B5CEA8' },
+      { token: 'comment', foreground: '6A9955' },
+      { token: 'operator', foreground: 'D4D4D4' },
+      // tsserver semantic tokens（标准 token 类型，与 legend 顺序无关）
+      { token: 'function', foreground: 'DCDCAA' },
+      { token: 'function.declaration', foreground: 'DCDCAA', fontStyle: 'italic' },
+      { token: 'member', foreground: 'DCDCAA' },
+      { token: 'member.declaration', foreground: 'DCDCAA', fontStyle: 'italic' },
+      { token: 'class', foreground: '4EC9B0' },
+      { token: 'class.declaration', foreground: '4EC9B0', fontStyle: 'italic' },
+      { token: 'interface', foreground: '4EC9B0' },
+      { token: 'interface.declaration', foreground: '4EC9B0', fontStyle: 'italic' },
+      { token: 'enum', foreground: '4EC9B0' },
+      { token: 'enum.declaration', foreground: '4EC9B0', fontStyle: 'italic' },
+      { token: 'namespace', foreground: '4EC9B0' },
+      { token: 'namespace.declaration', foreground: '4EC9B0', fontStyle: 'italic' },
+      { token: 'type', foreground: '4EC9B0' },
+      { token: 'type.declaration', foreground: '4EC9B0', fontStyle: 'italic' },
+      { token: 'typeParameter', foreground: '4EC9B0' },
+      { token: 'typeParameter.declaration', foreground: '4EC9B0', fontStyle: 'italic' },
+      { token: 'variable', foreground: '50C8FF' },
+      { token: 'variable.declaration', foreground: '50C8FF', fontStyle: 'italic' },
+      { token: 'enumMember', foreground: '50C8FF' },
+      { token: 'enumMember.declaration', foreground: '50C8FF', fontStyle: 'italic' },
+      { token: 'property', foreground: '89CFF0' },
+      { token: 'property.declaration', foreground: '89CFF0', fontStyle: 'italic' },
+      { token: 'parameter', foreground: 'A6D6F5' },
+      { token: 'parameter.declaration', foreground: 'A6D6F5', fontStyle: 'italic' },
+    ],
+    colors: {
+      'editor.background': '#1e1e1e',
+      'editor.foreground': '#d4d4d4',
+      'editorLineNumber.foreground': '#858585',
+      'editor.selectionBackground': '#264f78',
+      'editor.inactiveSelectionBackground': '#3a3d41',
+    },
+  });
 };
+
+/** 将 settings 主题名映射到 Monaco 主题 id */
+function toMonacoTheme(theme: string): string {
+  return theme === 'vs-dark' ? 'ideacode-dark' : theme;
+}
 
 /** 计算光标所在字符串字面量的范围（不含引号），用于让下划线覆盖整个 import 路径 */
 function getStringLiteralRange(
@@ -418,9 +294,6 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
   const changeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lspDisposablesRef = useRef<Array<{ dispose(): void }>>([]);
   const semTokenGenRef = useRef(0);
-  const semDecoRef = useRef<string[]>([]);
-  const tagDecoRef = useRef<string[]>([]);
-  const tagTimerRef = useRef<ReturnType<typeof setTimeout>>();
 
   const onSnapshotRef = useRef(onSnapshot);
   onSnapshotRef.current = onSnapshot;
@@ -441,7 +314,7 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
   // settings 中 theme 变化时同步 Monaco 主题
   useEffect(() => {
     if (monacoRef.current) {
-      monacoRef.current.editor.setTheme(theme);
+      monacoRef.current.editor.setTheme(toMonacoTheme(theme));
     }
   }, [theme]);
 
@@ -474,14 +347,6 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
         }
       }
       diagUnsubRef.current?.();
-      clearTimeout(tagTimerRef.current);
-      // 清除语义 decorations
-      if (editorRef.current && semDecoRef.current.length > 0) {
-        try { editorRef.current.deltaDecorations(semDecoRef.current, []); } catch { /* 忽略 */ }
-      }
-      if (editorRef.current && tagDecoRef.current.length > 0) {
-        try { editorRef.current.deltaDecorations(tagDecoRef.current, []); } catch { /* 忽略 */ }
-      }
       lspDisposablesRef.current.forEach((d) => d.dispose());
       lspDisposablesRef.current = [];
       // 释放当前分屏独占的 Monaco model，避免泄漏
@@ -563,23 +428,6 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
     applyHighlight(editorRef.current, monacoRef.current, searchHighlight);
   }, [searchHighlight, applyHighlight]);
 
-  /** 将 JSX/HTML 标签名装饰着色为 sem-variable 蓝（同步正则扫描，无异步依赖） */
-  const applyTagDecorations = useCallback(
-    (editor: typeof editorRef.current, monaco: typeof monacoRef.current) => {
-      if (!editor || !monaco) return;
-      const model = editor.getModel();
-      if (!model) return;
-      clearTimeout(tagTimerRef.current);
-      tagTimerRef.current = setTimeout(() => {
-        try {
-          const decs = buildGrammarDecorations(model, monaco);
-          tagDecoRef.current = editor.deltaDecorations(tagDecoRef.current, decs);
-        } catch { /* 忽略 */ }
-      }, 200);
-    },
-    [],
-  );
-
   return (
     <Editor
       height="100%"
@@ -602,7 +450,7 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
           }, 500);
         }
       }}
-      theme={theme}
+      theme={toMonacoTheme(theme)}
       loading={<Loading />}
       onMount={async (editor, monaco) => {
         editorRef.current = editor;
@@ -650,9 +498,15 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
           if (model.getLanguageId() !== language) {
             monaco.editor.setModelLanguage(model, language);
           }
-          try {
-            (model as unknown as { tokenization: { resetTokenization(): void } }).tokenization.resetTokenization();
-          } catch { /* Monaco 内部 API 可能变化，忽略 */ }
+          // 立即尝试 + 推迟重试：resetTokenization 是内部 API，初次调用可能因 worker 未就绪而失效
+          const forceTokenization = () => {
+            try {
+              (model as unknown as { tokenization: { resetTokenization(): void } }).tokenization.resetTokenization();
+            } catch { /* 忽略 */ }
+          };
+          forceTokenization();
+          // 200ms 后重试，确保 worker 已就绪
+          setTimeout(forceTokenization, 200);
         }
 
         // ── 拦截 definition / link 跳转，转到应用内文件打开 ──
@@ -863,20 +717,6 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
               if (gen !== semTokenGenRef.current) return null;
               if (!tokens) return null;
 
-              // ── 语义 decoration 着色：用 CSS 直接覆盖颜色，绕过 Monaco 的 scope 转换 ──
-              const editor = editorRef.current;
-              const legend = semanticTokensLegend ?? defaultSemanticTokensLegend;
-              if (editor && tokens.data.length > 0) {
-                try {
-                  const decs = buildSemanticDecorations(
-                    new Uint32Array(tokens.data),
-                    legend,
-                    monaco,
-                  );
-                  semDecoRef.current = editor.deltaDecorations(semDecoRef.current, decs);
-                } catch { /* decoration 更新失败不阻塞语义 tokens 返回 */ }
-              }
-
               return { resultId: tokens.resultId, data: new Uint32Array(tokens.data) };
             },
             releaseDocumentSemanticTokens: () => {},
@@ -890,13 +730,6 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
             onReadyRef.current?.();
           }, 100);
         }
-
-        // ── TextMate grammar tag 装饰着色（JSX/HTML 标签名 → sem-variable 蓝） ──
-        applyTagDecorations(editor, monaco);
-        const tagModelDisposable = editor.getModel()?.onDidChangeContent(() => {
-          applyTagDecorations(editorRef.current, monacoRef.current);
-        });
-        if (tagModelDisposable) lspDisposablesRef.current.push({ dispose: () => tagModelDisposable.dispose() });
 
         const pending = pendingRef.current;
         if (pending) { pendingRef.current = null; applyHighlight(editor, monaco, pending); }

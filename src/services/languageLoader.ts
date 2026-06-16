@@ -6,7 +6,7 @@
  */
 
 // 已加载的语言集合
-const loadedLanguages = new Set<string>(['typescript', 'javascript']);
+const loadedLanguages = new Set<string>(['typescript', 'javascript', 'typescriptreact', 'javascriptreact']);
 
 /**
  * 按需加载语言贡献（语法高亮）
