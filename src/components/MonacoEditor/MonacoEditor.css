@@ -54,5 +54,10 @@
   background-color: transparent !important;
 }
 
-/* 所有语法/语义着色统一由 Monaco 内置 tokenizer / semantic tokens + ideacode-dark
-   主题规则处理，不再使用自定义 inlineClassName CSS 覆盖。*/
+/* JSX 标签名：Monaco 的 TS worker 不会把 JSX tag name 识别为 tag token，
+   需要额外给标签名着色，以匹配 VS Code Dark+ 的蓝色 #569CD6。 */
+.jsx-tag-name {
+  color: #569CD6 !important;
+}
+
+/* 其他语法/语义着色由 Monaco 内置 tokenizer / semantic tokens + ideacode-dark 主题规则处理。 */

@@ -10,7 +10,45 @@ import { eventBus } from '../../utils/eventBus';
 import './MonacoEditor.css';
 
 // JSX/HTML/TS 语法高亮 + tsserver 语义高亮统一由 Monaco 内置 tokenizer / semantic tokens
-// 配合 ideacode-dark 主题规则着色，不再使用自定义正则扫描和 inlineClassName CSS 覆盖。
+// 配合 ideacode-dark 主题规则着色。
+// 例外：Monaco 的 TS worker 不会把 JSX tag name 识别为 tag token，因此用轻量正则补一个 CSS 类。
+
+/** 为 TSX/JSX 标签名生成 decoration（仅标签名，不含尖括号/片段） */
+function buildJsxTagDecorations(
+  model: monaco.editor.ITextModel,
+  monacoInstance: typeof monaco,
+): Array<{ range: monaco.Range; options: { inlineClassName: string } }> {
+  const langId = model.getLanguageId();
+  if (!/typescriptreact|javascriptreact|typescript|javascript/i.test(langId)) return [];
+
+  const decs: Array<{ range: monaco.Range; options: { inlineClassName: string } }> = [];
+  const lineCount = model.getLineCount();
+  const tagRegex = /<\/?([a-zA-Z_$][\w$]*)/g;
+
+  for (let line = 1; line <= lineCount; line++) {
+    const content = model.getLineContent(line);
+    let match: RegExpExecArray | null;
+
+    while ((match = tagRegex.exec(content)) !== null) {
+      const raw = match[0];
+      const tagName = match[1];
+      // 过滤 TypeScript 泛型（Array<T>）和比较表达式（a<b）：
+      // JSX 的 < 前面通常是空白、(、{、=、>、;、:、?、,、) 或行首
+      const prevChar = content[match.index - 1];
+      if (prevChar && !/[\s=({>;,?:)\]]/.test(prevChar)) continue;
+
+      const startCol = match.index + raw.indexOf(tagName) + 1;
+      const endCol = startCol + tagName.length;
+
+      decs.push({
+        range: new monacoInstance.Range(line, startCol, line, endCol),
+        options: { inlineClassName: 'jsx-tag-name' },
+      });
+    }
+  }
+
+  return decs;
+}
 
 const Loading = () => (
   <div className="monaco-loading">
@@ -136,8 +174,8 @@ const beforeMount: Parameters<typeof Editor>[0]['beforeMount'] = (monaco) => {
     inherit: true,
     rules: [
       // JSX / HTML 标签与属性
-      { token: 'tag', foreground: '50C8FF' },
-      { token: 'tag.css', foreground: '50C8FF' },
+      { token: 'tag', foreground: '569CD6' },
+      { token: 'tag.css', foreground: '569CD6' },
       { token: 'attribute.name', foreground: '9CDCFE' },
       { token: 'attribute.value', foreground: 'CE9178' },
       { token: 'attribute.value.number', foreground: 'B5CEA8' },
@@ -294,6 +332,8 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
   const changeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lspDisposablesRef = useRef<Array<{ dispose(): void }>>([]);
   const semTokenGenRef = useRef(0);
+  const jsxTagDecoRef = useRef<string[]>([]);
+  const jsxTagTimerRef = useRef<ReturnType<typeof setTimeout>>();
 
   const onSnapshotRef = useRef(onSnapshot);
   onSnapshotRef.current = onSnapshot;
@@ -347,6 +387,10 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
         }
       }
       diagUnsubRef.current?.();
+      clearTimeout(jsxTagTimerRef.current);
+      if (editorRef.current && jsxTagDecoRef.current.length > 0) {
+        try { editorRef.current.deltaDecorations(jsxTagDecoRef.current, []); } catch { /* 忽略 */ }
+      }
       lspDisposablesRef.current.forEach((d) => d.dispose());
       lspDisposablesRef.current = [];
       // 释放当前分屏独占的 Monaco model，避免泄漏
@@ -428,6 +472,30 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
     applyHighlight(editorRef.current, monacoRef.current, searchHighlight);
   }, [searchHighlight, applyHighlight]);
 
+  /** JSX 标签名着色：同步生成 decoration */
+  const applyJsxTagDecorationsNow = useCallback(
+    (editor: typeof editorRef.current, monaco: typeof monacoRef.current) => {
+      if (!editor || !monaco) return;
+      const model = editor.getModel();
+      if (!model) return;
+      try {
+        const decs = buildJsxTagDecorations(model, monaco);
+        jsxTagDecoRef.current = editor.deltaDecorations(jsxTagDecoRef.current, decs);
+      } catch { /* 忽略 */ }
+    },
+    [],
+  );
+
+  /** JSX 标签名着色：debounced，输入时降低频率 */
+  const applyJsxTagDecorations = useCallback(
+    (editor: typeof editorRef.current, monaco: typeof monacoRef.current) => {
+      if (!editor || !monaco) return;
+      clearTimeout(jsxTagTimerRef.current);
+      jsxTagTimerRef.current = setTimeout(() => applyJsxTagDecorationsNow(editor, monaco), 200);
+    },
+    [applyJsxTagDecorationsNow],
+  );
+
   return (
     <Editor
       height="100%"
@@ -507,6 +575,15 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
           forceTokenization();
           // 200ms 后重试，确保 worker 已就绪
           setTimeout(forceTokenization, 200);
+        }
+
+        // ── JSX 标签名着色兜底（Monaco TS worker 不把 JSX tag name 识别为 tag token） ──
+        applyJsxTagDecorations(editor, monaco);
+        const jsxTagContentDisposable = editor.getModel()?.onDidChangeContent(() => {
+          applyJsxTagDecorations(editorRef.current, monacoRef.current);
+        });
+        if (jsxTagContentDisposable) {
+          lspDisposablesRef.current.push({ dispose: () => jsxTagContentDisposable.dispose() });
         }
 
         // ── 拦截 definition / link 跳转，转到应用内文件打开 ──
