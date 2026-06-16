@@ -7,6 +7,7 @@
   display: flex;
   flex-direction: column;
   border-right: none;
+  position: relative;
   transition:
     width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
     opacity 0.25s ease;
@@ -16,6 +17,30 @@
   width: 260px;
   opacity: 1;
   border-right: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* 拖拽时禁用过渡，避免宽度跟随鼠标卡顿 */
+.side-panel.is-resizing,
+.side-panel.is-resizing .side-panel__header,
+.side-panel.is-resizing .side-panel__content {
+  transition: none !important;
+}
+
+.side-panel__resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 4px;
+  cursor: ew-resize;
+  z-index: 10;
+  background: transparent;
+  transition: background-color 0.15s ease;
+}
+
+.side-panel__resize-handle:hover,
+.side-panel.is-resizing .side-panel__resize-handle {
+  background-color: rgba(0, 122, 204, 0.4);
 }
 
 .side-panel__header {

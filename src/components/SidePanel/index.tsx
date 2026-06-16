@@ -1,5 +1,12 @@
-import { useAppSelector } from '../../store/hooks';
+import { useRef, useState, useCallback } from 'react';
+import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import type { PanelId } from '../../store/slices/layoutSlice';
+import {
+  setSidePanelWidth,
+  setSidePanelVisible,
+  MIN_SIDEBAR_WIDTH,
+  MAX_SIDEBAR_WIDTH,
+} from '../../store/slices/layoutSlice';
 import ExplorerContent from './ExplorerContent';
 import SearchPanel from '../SearchPanel';
 import ExtensionsPanel from '../ExtensionsPanel';
@@ -15,10 +22,56 @@ const panelTitles: Record<PanelId, string> = {
 };
 
 const SidePanel = () => {
-  const { sidePanelVisible, activePanel } = useAppSelector((state) => state.layout);
+  const { sidePanelVisible, activePanel, sidePanelWidth } = useAppSelector((state) => state.layout);
+  const dispatch = useAppDispatch();
+  const [isResizing, setIsResizing] = useState(false);
+  const isDraggingRef = useRef(false);
+
+  const startResize = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      if (!sidePanelVisible) return;
+      isDraggingRef.current = true;
+      setIsResizing(true);
+      const startX = e.clientX;
+      const startWidth = sidePanelWidth;
+
+      const handleMouseMove = (event: MouseEvent) => {
+        if (!isDraggingRef.current) return;
+        const newWidth = startWidth + (event.clientX - startX);
+        if (newWidth < MIN_SIDEBAR_WIDTH) {
+          // 拖到最小宽度以下时自动折叠，只保留 ActivityBar
+          isDraggingRef.current = false;
+          dispatch(setSidePanelVisible(false));
+          setIsResizing(false);
+          cleanup();
+        } else {
+          dispatch(setSidePanelWidth(Math.min(MAX_SIDEBAR_WIDTH, newWidth)));
+        }
+      };
+
+      const handleMouseUp = () => {
+        isDraggingRef.current = false;
+        setIsResizing(false);
+        cleanup();
+      };
+
+      const cleanup = () => {
+        window.removeEventListener('mousemove', handleMouseMove);
+        window.removeEventListener('mouseup', handleMouseUp);
+      };
+
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+    },
+    [dispatch, sidePanelVisible, sidePanelWidth],
+  );
 
   return (
-    <div className={`side-panel ${sidePanelVisible ? 'is-visible' : ''}`}>
+    <div
+      className={`side-panel ${sidePanelVisible ? 'is-visible' : ''} ${isResizing ? 'is-resizing' : ''}`}
+      style={{ width: sidePanelVisible ? sidePanelWidth : 0 }}
+    >
       <div className="side-panel__header">
         {activePanel ? panelTitles[activePanel] : '面板'}
       </div>
@@ -45,6 +98,7 @@ const SidePanel = () => {
           <div className="panel-placeholder">选择一个视图</div>
         </div>
       </div>
+      <div className="side-panel__resize-handle" onMouseDown={startResize} />
     </div>
   );
 };
