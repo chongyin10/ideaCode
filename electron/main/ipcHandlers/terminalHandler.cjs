@@ -137,11 +137,21 @@ function getDefaultShell() {
   if (platform === 'win32') {
     return { name: 'powershell', path: path.join(process.env.WINDIR || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), args: ['-NoLogo'] };
   }
-  // Unix: 优先使用 $SHELL 环境变量
-  const shellEnv = process.env.SHELL;
-  if (shellEnv && fs.existsSync(shellEnv)) {
-    const basename = path.basename(shellEnv);
-    return { name: basename, path: shellEnv, args: basename === 'zsh' || basename === 'bash' ? ['-l'] : undefined };
+  // Unix: 默认优先 zsh，zsh 不存在时回退 bash，最后使用 $SHELL
+  const candidates = [];
+  if (process.env.SHELL && path.basename(process.env.SHELL) === 'zsh') candidates.push(process.env.SHELL);
+  if (fs.existsSync('/bin/zsh')) candidates.push('/bin/zsh');
+  if (fs.existsSync('/usr/local/bin/zsh')) candidates.push('/usr/local/bin/zsh');
+  if (process.env.SHELL && path.basename(process.env.SHELL) === 'bash') candidates.push(process.env.SHELL);
+  if (fs.existsSync('/bin/bash')) candidates.push('/bin/bash');
+  if (fs.existsSync('/usr/local/bin/bash')) candidates.push('/usr/local/bin/bash');
+  if (process.env.SHELL && fs.existsSync(process.env.SHELL)) candidates.push(process.env.SHELL);
+
+  for (const shellPath of candidates) {
+    if (fs.existsSync(shellPath)) {
+      const basename = path.basename(shellPath);
+      return { name: basename, path: shellPath, args: basename === 'zsh' || basename === 'bash' ? ['-l'] : undefined };
+    }
   }
   return { name: 'zsh', path: '/bin/zsh', args: ['-l'] };
 }

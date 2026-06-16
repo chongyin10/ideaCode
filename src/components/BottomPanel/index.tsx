@@ -148,9 +148,13 @@ const BottomPanel = () => {
   useEffect(() => {
     listProfiles().then((result) => {
       if (result.success && result.profiles) {
+        // 默认优先 zsh，其次使用主进程返回的 defaultShell，最后取第一个可用 shell
+        const zshProfile = result.profiles.find(p => p.name === 'zsh');
+        const bashProfile = result.profiles.find(p => p.name === 'bash');
+        const defaultProfile = zshProfile || bashProfile || result.defaultShell || result.profiles[0];
         dispatch(setProfiles({
           profiles: result.profiles,
-          defaultProfile: result.defaultShell || result.profiles[0],
+          defaultProfile,
         }));
       }
     });
@@ -372,6 +376,19 @@ const BottomPanel = () => {
     });
 
     xterm.open(container);
+
+    // 等待字体就绪后再 fit，避免 fallback 字体宽度导致列数计算偏小
+    if (typeof document !== 'undefined' && document.fonts) {
+      try {
+        await Promise.race([
+          document.fonts.load(`${settings.fontSize}px ${settings.fontFamily}`),
+          new Promise((resolve) => setTimeout(resolve, 500)),
+        ]);
+      } catch {
+        // 字体加载失败继续执行
+      }
+    }
+
     xterm.fit();
     if (autoFocus) xterm.focus();
 
@@ -434,6 +451,25 @@ const BottomPanel = () => {
     if (processId > 0) {
       resizeTerminal(processId, xterm.raw.cols, xterm.raw.rows);
       console.log(`[Terminal] ${tabId} PTY ${processId} resize 到 ${xterm.raw.cols}x${xterm.raw.rows}`);
+    }
+
+    // 字体加载完成后再 fit 一次，防止首次字符宽度测量使用 fallback 字体导致列数偏小
+    if (typeof document !== 'undefined' && document.fonts) {
+      document.fonts.ready.then(() => {
+        const inst = xtermInstances.current.get(tabId);
+        if (!inst?.xterm || inst.processId !== processId) return;
+        // 触发 xterm 重新测量字符宽度
+        const currentFont = inst.xterm.raw.options.fontFamily;
+        inst.xterm.raw.options.fontFamily = `${currentFont}, __remeasure__`;
+        inst.xterm.raw.options.fontFamily = currentFont;
+        inst.xterm.fit();
+        const cols = inst.xterm.raw.cols;
+        const rows = inst.xterm.raw.rows;
+        console.log(`[Terminal] ${tabId} 字体加载后 fit: ${cols}x${rows}`);
+        if (processId > 0) {
+          resizeTerminal(processId, cols, rows);
+        }
+      }).catch(() => {});
     }
   }, [dispatch]);
 
