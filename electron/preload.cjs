@@ -72,6 +72,7 @@ const Channels = {
   GIT_CLONE: 'git:clone',
   GIT_CLONE_PROGRESS: 'git:cloneProgress',
   GIT_IS_REPO: 'git:isRepo',
+  GIT_STATUS_CHANGED: 'git:statusChanged',
 
   /* ─── tsserver LSP ─── */
   TSSERVER_START: 'tsserver:start',
@@ -209,6 +210,7 @@ const electronAPI = {
     init: (dirPath) => ipcRenderer.invoke(Channels.GIT_INIT, dirPath),
     clone: (repoUrl, targetPath) => ipcRenderer.invoke(Channels.GIT_CLONE, repoUrl, targetPath),
     onCloneProgress: (callback) => onChannel(Channels.GIT_CLONE_PROGRESS, callback),
+    onStatusChanged: (callback) => onChannel(Channels.GIT_STATUS_CHANGED, callback),
     isRepo: (dirPath) => ipcRenderer.invoke(Channels.GIT_IS_REPO, dirPath),
   },
 

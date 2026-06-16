@@ -41,6 +41,9 @@ const layoutSlice = createSlice({
     toggleBottomPanel: (state) => {
       state.bottomPanelVisible = !state.bottomPanelVisible;
     },
+    setBottomPanelVisible: (state, action) => {
+      state.bottomPanelVisible = action.payload;
+    },
     switchBottomTab: (state, action) => {
       state.activeBottomTab = action.payload as BottomTabId;
       state.bottomPanelVisible = true;
@@ -52,5 +55,5 @@ const layoutSlice = createSlice({
   },
 });
 
-export const { toggleSidePanel, switchPanel, toggleRightPanel, toggleBottomPanel, switchBottomTab, openBottomTab } = layoutSlice.actions;
+export const { toggleSidePanel, switchPanel, toggleRightPanel, toggleBottomPanel, setBottomPanelVisible, switchBottomTab, openBottomTab } = layoutSlice.actions;
 export default layoutSlice.reducer;

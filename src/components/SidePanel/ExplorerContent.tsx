@@ -160,8 +160,7 @@ const ExplorerContent = () => {
   const [projectExpanded, setProjectExpanded] = useState(true);
   const [timelineExpanded, setTimelineExpanded] = useState(false);
 
-  // 时间线高度可拖动调整；打开的编辑器固定最大高度，不再提供拖拽
-  const SECTION_MIN_HEIGHT = 60;
+  // 打开的编辑器固定最大高度
   const OPEN_EDITORS_MAX_HEIGHT = 120;
   interface SectionHeights {
     timeline: number;
@@ -171,6 +170,7 @@ const ExplorerContent = () => {
   });
   const [resizingSection, setResizingSection] = useState<keyof SectionHeights | null>(null);
   const scrollableRef = useRef<HTMLDivElement>(null);
+  const SECTION_MIN_HEIGHT = 60;
   const RESIZE_HANDLE_HEIGHT = 10;
 
   const startResize = useCallback(
@@ -178,7 +178,6 @@ const ExplorerContent = () => {
       e.preventDefault();
       setResizingSection(section);
 
-      // 记录鼠标点击点与手柄中心的偏移，保证拖拽时手柄中心紧跟鼠标
       const handleRect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
       const offsetY = e.clientY - (handleRect.top + handleRect.height / 2);
 
@@ -187,7 +186,6 @@ const ExplorerContent = () => {
         if (!container) return;
         const rect = container.getBoundingClientRect();
         const newHandleCenterY = event.clientY - offsetY;
-        // 时间线高度 = 容器底部 - 手柄中心 - 半个手柄高度
         const nextHeight = Math.min(
           Math.max(SECTION_MIN_HEIGHT, rect.bottom - newHandleCenterY - RESIZE_HANDLE_HEIGHT / 2),
           rect.height - SECTION_MIN_HEIGHT - RESIZE_HANDLE_HEIGHT
@@ -755,7 +753,7 @@ const ExplorerContent = () => {
               保证“打开的编辑器”始终固定在顶部不被遮罩 */}
           <div className="folder-tree__scrollable" ref={scrollableRef}>
             {/* ── IDEACODE 项目结构 ── */}
-            <div className="explorer-section explorer-section--main">
+            <div className={`explorer-section explorer-section--main ${!projectExpanded || entries.length === 0 ? 'explorer-section--collapsed' : ''}`}>
               <div
                 className="explorer-section__header"
                 onClick={() => setProjectExpanded(!projectExpanded)}
@@ -799,34 +797,40 @@ const ExplorerContent = () => {
               </div>
               {projectExpanded && (
                 <div className="explorer-section__content">
-                  {entries.map((entry) => (
-                    <FileTree
-                      key={`${entry.name}:${entry.kind}`}
-                      entry={entry}
-                      level={0}
-                      activeSource={activeFileSource}
-                      onOpenFile={stableOnOpenFile}
-                      parentSource={rootSource}
-                      rootSource={rootSource}
-                      onFindInFiles={handleFindInFiles}
-                      onContextMenu={stableOnContextMenu}
-                      pendingCreate={pendingCreate}
-                      onCreateConfirm={handleCreateConfirm}
-                      onCreateCancel={handleCreateCancel}
-                      pendingRename={pendingRename}
-                      onRenameConfirm={handleRenameConfirm}
-                      onRenameCancel={handleRenameCancel}
-                      lastOperation={lastOperation}
-                      clipboardItems={clipboardState?.items}
-                      selectedEntries={selectedEntries.map((s) => s.entry)}
-                      onItemSelect={handleItemSelect}
-                      gitStatus={gitStatus}
-                      expandPaths={expandPaths}
-                      expandedDirs={expandedDirs}
-                      onToggleExpand={stableOnToggleExpand}
-                    />
-                  ))}
-                  {renderRootInlineInput()}
+                  {entries.length === 0 ? (
+                    <div className="explorer-open-editor--empty">暂无文件</div>
+                  ) : (
+                    <>
+                      {entries.map((entry) => (
+                        <FileTree
+                          key={`${entry.name}:${entry.kind}`}
+                          entry={entry}
+                          level={0}
+                          activeSource={activeFileSource}
+                          onOpenFile={stableOnOpenFile}
+                          parentSource={rootSource}
+                          rootSource={rootSource}
+                          onFindInFiles={handleFindInFiles}
+                          onContextMenu={stableOnContextMenu}
+                          pendingCreate={pendingCreate}
+                          onCreateConfirm={handleCreateConfirm}
+                          onCreateCancel={handleCreateCancel}
+                          pendingRename={pendingRename}
+                          onRenameConfirm={handleRenameConfirm}
+                          onRenameCancel={handleRenameCancel}
+                          lastOperation={lastOperation}
+                          clipboardItems={clipboardState?.items}
+                          selectedEntries={selectedEntries.map((s) => s.entry)}
+                          onItemSelect={handleItemSelect}
+                          gitStatus={gitStatus}
+                          expandPaths={expandPaths}
+                          expandedDirs={expandedDirs}
+                          onToggleExpand={stableOnToggleExpand}
+                        />
+                      ))}
+                      {renderRootInlineInput()}
+                    </>
+                  )}
                 </div>
               )}
             </div>

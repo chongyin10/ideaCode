@@ -35,10 +35,11 @@ const terminals = new Map();
 let nextTerminalId = 1;
 
 class TerminalProcess {
-  constructor(id, ptyProcess, shellLaunchConfig) {
+  constructor(id, ptyProcess, shellLaunchConfig, webContents) {
     this.id = id;
     this.pty = ptyProcess;
     this.config = shellLaunchConfig;
+    this.webContents = webContents;
     this.paused = false;
     /** 未确认的字符数（已发送到渲染但未被 ACK） */
     this.unackedChars = 0;
@@ -50,6 +51,37 @@ class TerminalProcess {
     this.isBroadcastReceiver = false;
     /** 持久化 ID */
     this.persistentId = null;
+    /** 当前行输入缓冲，用于识别 git 命令 */
+    this.inputBuffer = '';
+  }
+
+  /**
+   * 写入输入并识别可能改变 Git 状态的命令
+   * @param {string} data
+   */
+  writeInput(data) {
+    if (!this.pty || this.exited) return;
+    this.pty.write(data);
+
+    // 累积输入行，识别 git 命令后通知渲染进程刷新状态
+    this.inputBuffer += data;
+    const lines = this.inputBuffer.split(/\r?\n/);
+    // 保留最后一段未结束的行
+    this.inputBuffer = lines.pop() || '';
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      // 匹配常见会修改 git index/working tree 的命令
+      if (/^git\b/.test(trimmed)) {
+        try {
+          if (this.webContents && !this.webContents.isDestroyed()) {
+            this.webContents.send(Channels.GIT_STATUS_CHANGED, { cwd: this.config.cwd });
+          }
+        } catch (e) {
+          console.warn('[TerminalHandler] 发送 GIT_STATUS_CHANGED 失败:', e.message);
+        }
+      }
+    }
   }
 }
 
@@ -170,7 +202,7 @@ async function createTerminalProcess(config, cwd, cols, rows, webContents) {
   if (!ptyModule) {
     // 无 node-pty 时的降级处理：返回模拟终端
     const id = nextTerminalId++;
-    const mockProcess = new TerminalProcess(id, null, config);
+    const mockProcess = new TerminalProcess(id, null, config, webContents);
     terminals.set(id, mockProcess);
     // 发送模拟就绪事件
     webContents.send(Channels.TERMINAL_OUTPUT, {
@@ -233,7 +265,7 @@ async function createTerminalProcess(config, cwd, cols, rows, webContents) {
         env: env,
       });
 
-      const termProcess = new TerminalProcess(id, ptyProcess, config);
+      const termProcess = new TerminalProcess(id, ptyProcess, config, webContents);
       terminals.set(id, termProcess);
 
       // --- PTY 数据事件 → 流控转发到渲染进程 ---
@@ -313,9 +345,7 @@ function sendInput(id, data) {
   const term = terminals.get(id);
   if (!term || term.exited) return;
   try {
-    if (term.pty) {
-      term.pty.write(data);
-    }
+    term.writeInput(data);
   } catch (e) {
     console.error(`[TerminalHandler] 写入输入失败 (id=${id}):`, e.message);
   }

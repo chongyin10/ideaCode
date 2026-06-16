@@ -234,6 +234,7 @@ export interface ElectronAPI {
     init: (dirPath: string) => Promise<boolean>;
     clone: (repoUrl: string, targetPath: string) => Promise<string>;
     onCloneProgress: (callback: (data: string) => void) => () => void;
+    onStatusChanged: (callback: (data: { cwd: string }) => void) => () => void;
     isRepo: (dirPath: string) => Promise<boolean>;
   };
 

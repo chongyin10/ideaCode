@@ -25,14 +25,14 @@ import { useState, useCallback, useMemo, useRef, useEffect, type ElementType } f
 import { Plus, X, Trash2, Search, Bookmark, SplitSquareVertical,
          Maximize2, Minimize2, Terminal, ChevronDown, Zap,
          Wifi, WifiOff, Copy, ClipboardPaste, Sparkles,
-         Columns2, AlertCircle, PanelTopOpen, Bug, Plug, GitBranch } from 'lucide-react';
+         AlertCircle, PanelTopOpen, Bug, Plug, GitBranch } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
-import { toggleBottomPanel, switchBottomTab, type BottomTabId } from '../../store/slices/layoutSlice';
+import { toggleBottomPanel, setBottomPanelVisible, switchBottomTab, type BottomTabId } from '../../store/slices/layoutSlice';
 import {
   addTab, removeTab, setTabProcessId, setTabReady, setTabExited,
   setPanelVisible, setPanelHeight, toggleMaximize as toggleMaximizeAction,
   setSidebarWidth, splitPane, setActivePane, setActiveGroup,
-  moveToEditor, addBookmark, removeBookmark,
+  addBookmark, removeBookmark,
   setBroadcastMode, setProfiles,
   TerminalTab,
 } from '../../store/slices/terminalSlice';
@@ -656,10 +656,6 @@ const BottomPanel = () => {
   }, []);
 
   const handleToggleMaximize = useCallback(() => dispatch(toggleMaximizeAction()), [dispatch]);
-  const handleMoveToEditor = useCallback(() => {
-    if (activeTabIdRef.current) dispatch(moveToEditor(activeTabIdRef.current));
-  }, [dispatch]);
-
   /* ─── 渲染 ─── */
   if (!bottomPanelVisible && !terminal.panelVisible) return null;
 
@@ -723,14 +719,14 @@ const BottomPanel = () => {
               </button>
               <button className="bottom-panel__btn" onClick={handleCopy} title="复制"><Copy size={14} /></button>
               <button className="bottom-panel__btn" onClick={handlePaste} title="粘贴"><ClipboardPaste size={14} /></button>
-              <button className="bottom-panel__btn" onClick={handleMoveToEditor} title="移动到编辑器"><Columns2 size={14} /></button>
+              {/* <button className="bottom-panel__btn" onClick={handleMoveToEditor} title="移动到编辑器"><Columns2 size={14} /></button> */}
               <button className="bottom-panel__btn" onClick={handleClear} title="清屏"><Trash2 size={14} /></button>
             </>
           )}
           <button className="bottom-panel__btn" onClick={handleToggleMaximize} title="最大化">
             {terminal.isMaximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
           </button>
-          <button className="bottom-panel__btn" onClick={() => dispatch(setPanelVisible(false))} title="关闭面板"><X size={14} /></button>
+          <button className="bottom-panel__btn" onClick={() => dispatch(setBottomPanelVisible(false))} title="关闭面板"><X size={14} /></button>
         </div>
       </div>
 
@@ -798,6 +794,7 @@ const BottomPanel = () => {
 
           {/* 侧边栏 */}
           <div className="terminal-sidebar" style={{ width: terminal.sidebarWidth }}>
+            <div className="terminal-sidebar__resize-handle" onMouseDown={startResizeSidebar} />
             <div className="terminal-sidebar__tabs">
               <div className="terminal-sidebar__section-title">终端</div>
               {allTabs.map(tab => (
@@ -836,7 +833,6 @@ const BottomPanel = () => {
               </div>
             )}
           </div>
-          <div className="terminal-sidebar__resize-handle" onMouseDown={startResizeSidebar} />
         </div>
 
         {allTabs.length > 5 && (

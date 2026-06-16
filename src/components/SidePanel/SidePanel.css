@@ -191,6 +191,7 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
+  position: relative;
 }
 
 .explorer-section__header {
@@ -206,7 +207,6 @@
   text-transform: uppercase;
   letter-spacing: 0.4px;
   transition: background 0.1s;
-  position: relative;
   flex-shrink: 0;
 }
 
@@ -242,11 +242,15 @@
   scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
 }
 
-/* 项目结构区域占满中间剩余空间，头部固定、树内容独立滚动 */
+/* 项目结构区域占满中间剩余空间；折叠或空数据时不强制撑满 */
 .explorer-section--main {
   flex: 1;
   min-height: 0;
   overflow: hidden;
+}
+
+.explorer-section--main.explorer-section--collapsed {
+  flex: 0 0 auto;
 }
 
 .explorer-section--main .explorer-section__content {

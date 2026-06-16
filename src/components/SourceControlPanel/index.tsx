@@ -130,6 +130,23 @@ const SourceControlPanel = () => {
     dispatch(refreshBranch());
   }, [dispatch]);
 
+  // 监听终端 git 命令，自动刷新状态
+  const gitChangeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    const api = window.electronAPI;
+    if (!api?.git?.onStatusChanged) return;
+    return api.git.onStatusChanged(() => {
+      if (!rootPath) return;
+      // 立即刷新一次，同时延迟再刷新一次，确保 git 命令已执行完成
+      resetPolling();
+      if (gitChangeTimerRef.current) clearTimeout(gitChangeTimerRef.current);
+      gitChangeTimerRef.current = setTimeout(() => {
+        gitChangeTimerRef.current = null;
+        resetPolling();
+      }, 500);
+    });
+  }, [dispatch, rootPath, resetPolling]);
+
   // #9 赫布排序应用于条目
   const stagedEntries = useMemo(() => sortByHebbian(
     Object.entries(staged).map(([p, c]) => ({ path: p, code: c }))
@@ -323,47 +340,49 @@ const SourceControlPanel = () => {
         </div>
       </div>
 
-      {renderSection('暂存的更改', stagedEntries, stagedOpen, setStagedOpen, 'undo', [
-        { label: '全部取消暂存', icon: Minus, handler: handleUnstageAll },
-        { label: '全部撤回暂存', icon: Undo2, handler: handleUnstageAll },
-      ], [
-        { icon: Minus, handler: handleUnstage, title: '取消暂存' },
-        { icon: FileText, handler: handleOpenFileNormal, title: '打开文件' },
-      ])}
-      {renderSection('更改', changesEntries, changesOpen, setChangesOpen, 'plus', [
-        { label: '全部暂存', icon: Plus, handler: handleStageAllChanges },
-        { label: '全部撤回更改', icon: Undo2, handler: handleDiscardAllChanges },
-      ], [
-        { icon: Plus, handler: handleStage, title: '暂存' },
-        { icon: Undo2, handler: handleDiscard, title: '丢弃更改' },
-        { icon: FileText, handler: handleOpenFileNormal, title: '打开文件' },
-      ])}
-      {renderSection('合并更改', mergeEntries, mergeOpen, setMergeOpen, 'alert', [
-        { label: '全部撤回合并更改', icon: Undo2, handler: handleDiscardAllMerge },
-      ], [
-        { icon: FileText, handler: handleOpenFileNormal, title: '打开文件' },
-      ])}
-      {renderSection('未跟踪的文件', untrackedEntries, untrackedOpen, setUntrackedOpen, 'plus', [
-        { label: '全部暂存', icon: Plus, handler: () => {
-          const files = untrackedEntries.map(e => e.path);
-          if (files.length) dispatch(stageFiles(files));
-        }},
-        { label: '全部删除未跟踪文件', icon: Undo2, handler: handleDeleteAllUntracked },
-      ], [
-        { icon: Plus, handler: handleStage, title: '暂存' },
-        { icon: FileText, handler: handleOpenFileNormal, title: '打开文件' },
-      ])}
+      <div className="scm-content">
+        {renderSection('暂存的更改', stagedEntries, stagedOpen, setStagedOpen, 'undo', [
+          { label: '全部取消暂存', icon: Minus, handler: handleUnstageAll },
+          { label: '全部撤回暂存', icon: Undo2, handler: handleUnstageAll },
+        ], [
+          { icon: Minus, handler: handleUnstage, title: '取消暂存' },
+          { icon: FileText, handler: handleOpenFileNormal, title: '打开文件' },
+        ])}
+        {renderSection('更改', changesEntries, changesOpen, setChangesOpen, 'plus', [
+          { label: '全部暂存', icon: Plus, handler: handleStageAllChanges },
+          { label: '全部撤回更改', icon: Undo2, handler: handleDiscardAllChanges },
+        ], [
+          { icon: Plus, handler: handleStage, title: '暂存' },
+          { icon: Undo2, handler: handleDiscard, title: '丢弃更改' },
+          { icon: FileText, handler: handleOpenFileNormal, title: '打开文件' },
+        ])}
+        {renderSection('合并更改', mergeEntries, mergeOpen, setMergeOpen, 'alert', [
+          { label: '全部撤回合并更改', icon: Undo2, handler: handleDiscardAllMerge },
+        ], [
+          { icon: FileText, handler: handleOpenFileNormal, title: '打开文件' },
+        ])}
+        {renderSection('未跟踪的文件', untrackedEntries, untrackedOpen, setUntrackedOpen, 'plus', [
+          { label: '全部暂存', icon: Plus, handler: () => {
+            const files = untrackedEntries.map(e => e.path);
+            if (files.length) dispatch(stageFiles(files));
+          }},
+          { label: '全部删除未跟踪文件', icon: Undo2, handler: handleDeleteAllUntracked },
+        ], [
+          { icon: Plus, handler: handleStage, title: '暂存' },
+          { icon: FileText, handler: handleOpenFileNormal, title: '打开文件' },
+        ])}
 
-      {stashes.length > 0 && (
-        <div className="scm-section">
-          <div className="scm-section__header" onClick={() => setStashOpen(!stashOpen)}>
-            <ChevronRight size={12} strokeWidth={1.5} className={stashOpen ? 'scm-rotated' : ''} />
-            <span className="scm-section__title">储藏</span>
-            <span className="scm-section__badge">{stashes.length}</span>
+        {stashes.length > 0 && (
+          <div className="scm-section">
+            <div className="scm-section__header" onClick={() => setStashOpen(!stashOpen)}>
+              <ChevronRight size={12} strokeWidth={1.5} className={stashOpen ? 'scm-rotated' : ''} />
+              <span className="scm-section__title">储藏</span>
+              <span className="scm-section__badge">{stashes.length}</span>
+            </div>
+            {stashOpen && stashes.map((s, i) => <div key={i} className="scm-item scm-item--stash">{s}</div>)}
           </div>
-          {stashOpen && stashes.map((s, i) => <div key={i} className="scm-item scm-item--stash">{s}</div>)}
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 };

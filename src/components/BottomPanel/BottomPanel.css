@@ -330,6 +330,7 @@
   border-left: 1px solid rgba(255, 255, 255, 0.06);
   flex-shrink: 0;
   overflow-y: auto;
+  position: relative;
 }
 
 .terminal-sidebar__tabs {
@@ -490,10 +491,10 @@
 
 .terminal-sidebar__resize-handle {
   position: absolute;
-  top: 32px;
+  top: 0;
   bottom: 0;
-  right: 0;
-  width: 3px;
+  left: 0;
+  width: 4px;
   cursor: ew-resize;
   z-index: 5;
   background: transparent;
