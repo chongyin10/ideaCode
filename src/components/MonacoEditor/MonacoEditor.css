@@ -54,10 +54,22 @@
   background-color: transparent !important;
 }
 
-/* JSX 标签名：Monaco 的 TS worker 不会把 JSX tag name 识别为 tag token，
-   需要额外给标签名着色，以匹配 VS Code Dark+ 的蓝色 #569CD6。 */
-.jsx-tag-name {
+/* JSX/TSX 标签与尖括号：Monaco 的 TS worker 不会识别 JSX tag/bracket token，
+   需要额外着色以匹配 VS Code Dark+。 */
+
+/* HTML 原生标签（小写）→ VS Code 标签蓝 */
+.jsx-tag-name-native {
   color: #569CD6 !important;
+}
+
+/* 自定义组件（大写开头）→ 函数/方法黄，与原生标签区分 */
+.jsx-tag-name-component {
+  color: #c2c264f6 !important;
+}
+
+/* JSX 尖括号 < > </ > /> 以及片段 <> </> → 灰色 */
+.jsx-bracket {
+  color: #808080 !important;
 }
 
 /* 其他语法/语义着色由 Monaco 内置 tokenizer / semantic tokens + ideacode-dark 主题规则处理。 */

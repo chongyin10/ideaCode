@@ -11,10 +11,28 @@ import './MonacoEditor.css';
 
 // JSX/HTML/TS 语法高亮 + tsserver 语义高亮统一由 Monaco 内置 tokenizer / semantic tokens
 // 配合 ideacode-dark 主题规则着色。
-// 例外：Monaco 的 TS worker 不会把 JSX tag name 识别为 tag token，因此用轻量正则补一个 CSS 类。
+// 例外：Monaco 的 TS worker 不会把 JSX tag/bracket 识别为 token，因此用状态机补 CSS 类。
 
-/** 为 TSX/JSX 标签名生成 decoration（仅标签名，不含尖括号/片段） */
-function buildJsxTagDecorations(
+/** 判断 JSX 标签名类型：小写开头为 HTML 原生标签，大写开头为自定义组件 */
+function getJsxTagClass(tagName: string): string {
+  if (!tagName) return 'jsx-tag-name-native';
+  return /^[a-z]/.test(tagName) ? 'jsx-tag-name-native' : 'jsx-tag-name-component';
+}
+
+/** 解析当前位置的 JSX 标签名（支持 Foo.Bar），返回标签名和长度 */
+function readJsxTagName(content: string, start: number): { name: string; length: number } {
+  const match = content.slice(start).match(/^[a-zA-Z_$][\w$]*(?:\.[a-zA-Z_$][\w$]*)*/);
+  return match ? { name: match[0], length: match[0].length } : { name: '', length: 0 };
+}
+
+/** < 前面允许出现 JSX 的字符：空白、(、{、=、>、;、:、?、,、) 或行首 */
+function isJsxBracketContext(prevChar: string | undefined): boolean {
+  if (!prevChar) return true;
+  return /[\s=({>;,?:)\]]/.test(prevChar);
+}
+
+/** 为 TSX/JSX 生成 decoration：标签名（原生/组件区分）+ 尖括号 <> </ > /> */
+function buildJsxDecorations(
   model: monaco.editor.ITextModel,
   monacoInstance: typeof monaco,
 ): Array<{ range: monaco.Range; options: { inlineClassName: string } }> {
@@ -23,27 +41,132 @@ function buildJsxTagDecorations(
 
   const decs: Array<{ range: monaco.Range; options: { inlineClassName: string } }> = [];
   const lineCount = model.getLineCount();
-  const tagRegex = /<\/?([a-zA-Z_$][\w$]*)/g;
 
   for (let line = 1; line <= lineCount; line++) {
     const content = model.getLineContent(line);
-    let match: RegExpExecArray | null;
+    const len = content.length;
+    // 上下文栈：'tag' 表示在 <...> 或 </...> 内，'expression' 表示在 {...} 内
+    const stack: Array<'tag' | 'expression'> = [];
+    let j = 0;
 
-    while ((match = tagRegex.exec(content)) !== null) {
-      const raw = match[0];
-      const tagName = match[1];
-      // 过滤 TypeScript 泛型（Array<T>）和比较表达式（a<b）：
-      // JSX 的 < 前面通常是空白、(、{、=、>、;、:、?、,、) 或行首
-      const prevChar = content[match.index - 1];
-      if (prevChar && !/[\s=({>;,?:)\]]/.test(prevChar)) continue;
+    while (j < len) {
+      const ch = content[j];
+      const inTag = stack.length > 0 && stack[stack.length - 1] === 'tag';
 
-      const startCol = match.index + raw.indexOf(tagName) + 1;
-      const endCol = startCol + tagName.length;
+      // ── 字符串字面量：在任何上下文中都直接跳过 ──
+      if (ch === '"' || ch === "'" || ch === '`') {
+        const q = ch;
+        j++;
+        while (j < len && content[j] !== q) {
+          if (content[j] === '\\') j++;
+          j++;
+        }
+        j++;
+        continue;
+      }
 
-      decs.push({
-        range: new monacoInstance.Range(line, startCol, line, endCol),
-        options: { inlineClassName: 'jsx-tag-name' },
-      });
+      if (inTag) {
+        // 标签结束
+        if (ch === '>') {
+          decs.push({
+            range: new monacoInstance.Range(line, j + 1, line, j + 2),
+            options: { inlineClassName: 'jsx-bracket' },
+          });
+          stack.pop();
+          j++; continue;
+        }
+        // 自闭合
+        if (ch === '/' && j + 1 < len && content[j + 1] === '>') {
+          decs.push({
+            range: new monacoInstance.Range(line, j + 1, line, j + 3),
+            options: { inlineClassName: 'jsx-bracket' },
+          });
+          stack.pop();
+          j += 2; continue;
+        }
+        // JSX 表达式属性
+        if (ch === '{') {
+          stack.push('expression');
+          j++; continue;
+        }
+        j++; continue;
+      }
+
+      // 不在 tag 内：处理表达式结束 / 嵌套表达式 / JSX 标签开始
+      if (ch === '}') {
+        if (stack.length > 0 && stack[stack.length - 1] === 'expression') {
+          stack.pop();
+        }
+        j++; continue;
+      }
+
+      if (ch === '{') {
+        stack.push('expression');
+        j++; continue;
+      }
+
+      if (ch === '<') {
+        // 过滤 TypeScript 泛型 / 比较表达式
+        if (!isJsxBracketContext(content[j - 1])) {
+          j++; continue;
+        }
+
+        // 片段：<> / </>
+        if (j + 1 < len && content[j + 1] === '>') {
+          decs.push({
+            range: new monacoInstance.Range(line, j + 1, line, j + 3),
+            options: { inlineClassName: 'jsx-bracket' },
+          });
+          j += 2; continue;
+        }
+        if (j + 2 < len && content[j + 1] === '/' && content[j + 2] === '>') {
+          decs.push({
+            range: new monacoInstance.Range(line, j + 1, line, j + 4),
+            options: { inlineClassName: 'jsx-bracket' },
+          });
+          j += 3; continue;
+        }
+
+        // 闭标签 </name
+        if (j + 1 < len && content[j + 1] === '/') {
+          decs.push({
+            range: new monacoInstance.Range(line, j + 1, line, j + 3),
+            options: { inlineClassName: 'jsx-bracket' },
+          });
+          j += 2; // 指向标签名第一个字符
+          const { name, length } = readJsxTagName(content, j);
+          if (length > 0) {
+            decs.push({
+              range: new monacoInstance.Range(line, j + 1, line, j + 1 + length),
+              options: { inlineClassName: getJsxTagClass(name) },
+            });
+            j += length;
+          }
+          stack.push('tag');
+          continue;
+        }
+
+        // 开标签 <name
+        if (j + 1 < len && /[a-zA-Z_$]/.test(content[j + 1])) {
+          decs.push({
+            range: new monacoInstance.Range(line, j + 1, line, j + 2),
+            options: { inlineClassName: 'jsx-bracket' },
+          });
+          j++; // 指向标签名第一个字符
+          const { name, length } = readJsxTagName(content, j);
+          if (length > 0) {
+            decs.push({
+              range: new monacoInstance.Range(line, j + 1, line, j + 1 + length),
+              options: { inlineClassName: getJsxTagClass(name) },
+            });
+            j += length;
+          }
+          stack.push('tag');
+          continue;
+        }
+      }
+
+      j++;
     }
   }
 
@@ -472,28 +595,28 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
     applyHighlight(editorRef.current, monacoRef.current, searchHighlight);
   }, [searchHighlight, applyHighlight]);
 
-  /** JSX 标签名着色：同步生成 decoration */
-  const applyJsxTagDecorationsNow = useCallback(
+  /** JSX 标签名 + 尖括号着色：同步生成 decoration */
+  const applyJsxDecorationsNow = useCallback(
     (editor: typeof editorRef.current, monaco: typeof monacoRef.current) => {
       if (!editor || !monaco) return;
       const model = editor.getModel();
       if (!model) return;
       try {
-        const decs = buildJsxTagDecorations(model, monaco);
+        const decs = buildJsxDecorations(model, monaco);
         jsxTagDecoRef.current = editor.deltaDecorations(jsxTagDecoRef.current, decs);
       } catch { /* 忽略 */ }
     },
     [],
   );
 
-  /** JSX 标签名着色：debounced，输入时降低频率 */
-  const applyJsxTagDecorations = useCallback(
+  /** JSX 标签名 + 尖括号着色：debounced，输入时降低频率 */
+  const applyJsxDecorations = useCallback(
     (editor: typeof editorRef.current, monaco: typeof monacoRef.current) => {
       if (!editor || !monaco) return;
       clearTimeout(jsxTagTimerRef.current);
-      jsxTagTimerRef.current = setTimeout(() => applyJsxTagDecorationsNow(editor, monaco), 200);
+      jsxTagTimerRef.current = setTimeout(() => applyJsxDecorationsNow(editor, monaco), 200);
     },
-    [applyJsxTagDecorationsNow],
+    [applyJsxDecorationsNow],
   );
 
   return (
@@ -577,13 +700,13 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
           setTimeout(forceTokenization, 200);
         }
 
-        // ── JSX 标签名着色兜底（Monaco TS worker 不把 JSX tag name 识别为 tag token） ──
-        applyJsxTagDecorations(editor, monaco);
-        const jsxTagContentDisposable = editor.getModel()?.onDidChangeContent(() => {
-          applyJsxTagDecorations(editorRef.current, monacoRef.current);
+        // ── JSX 标签名 + 尖括号着色兜底（Monaco TS worker 不识别这些 token） ──
+        applyJsxDecorations(editor, monaco);
+        const jsxContentDisposable = editor.getModel()?.onDidChangeContent(() => {
+          applyJsxDecorations(editorRef.current, monacoRef.current);
         });
-        if (jsxTagContentDisposable) {
-          lspDisposablesRef.current.push({ dispose: () => jsxTagContentDisposable.dispose() });
+        if (jsxContentDisposable) {
+          lspDisposablesRef.current.push({ dispose: () => jsxContentDisposable.dispose() });
         }
 
         // ── 拦截 definition / link 跳转，转到应用内文件打开 ──
