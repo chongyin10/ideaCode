@@ -5,22 +5,15 @@ import type { TerminalProfile } from '../../types/electron';
 
 export interface TerminalTab {
   id: string;
-  /** Electron 主进程中的终端 ID（由 node-pty 分配） */
   processId: number | null;
   name: string;
   profile?: TerminalProfile;
   cwd?: string;
-  /** 终端是否已就绪 */
   ready: boolean;
-  /** 进程是否已退出 */
   exited: boolean;
-  /** 退出码 */
   exitCode?: number;
-  /** 书签列表 */
   bookmarks: TerminalBookmark[];
-  /** 是否为广播模式 */
   isBroadcastReceiver: boolean;
-  /** 是否在编辑器区域 */
   isEditorTerminal: boolean;
 }
 
@@ -29,6 +22,27 @@ export interface TerminalBookmark {
   line: number;
   label: string;
   createdAt: number;
+}
+
+/**
+ * 书签插入时保持按行号排序 (O(n) 但 n 通常 < 20, 数学优化 #17)
+ * 使用二分查找定位插入位置
+ */
+export function addBookmarkSorted(bookmarks: TerminalBookmark[], item: TerminalBookmark): TerminalBookmark[] {
+  const idx = binarySearch(bookmarks, item.line);
+  const result = [...bookmarks];
+  result.splice(idx, 0, item);
+  return result;
+}
+
+function binarySearch(bookmarks: TerminalBookmark[], line: number): number {
+  let lo = 0, hi = bookmarks.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (bookmarks[mid].line < line) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
 }
 
 export interface SplitPane {
@@ -133,7 +147,7 @@ const initialState: TerminalState = {
   panelHeight: 250,
   panelVisible: false,
   isMaximized: false,
-  sidebarWidth: 120,
+  sidebarWidth: 160,
   tabBarWidth: 48,
   profiles: [],
   defaultProfile: null,
@@ -280,7 +294,7 @@ const terminalSlice = createSlice({
       state.panelLayout.activeGroupId = action.payload;
     },
 
-    splitPane(state, action: PayloadAction<{ groupId?: string }>) {
+    splitPane(state, action: PayloadAction<{ groupId?: string; ratios?: [number, number] }>) {
       const groupId = action.payload.groupId || state.panelLayout.activeGroupId;
       const group = state.panelLayout.groups.find(g => g.id === groupId);
       if (!group) return;
@@ -299,10 +313,16 @@ const terminalSlice = createSlice({
       };
       state.tabs[id] = tab;
 
-      // 重新分配尺寸
-      const currentSize = 1 / (group.panes.length + 1);
-      group.panes.forEach(p => { p.relativeSize = currentSize; });
-      group.panes.push({ id: `pane-${id}`, terminalId: id, relativeSize: currentSize });
+      // 使用传入的 ratio 或均分
+      if (action.payload.ratios && group.panes.length === 1) {
+        const [r0, r1] = action.payload.ratios;
+        group.panes[0].relativeSize = r0;
+        group.panes.push({ id: `pane-${id}`, terminalId: id, relativeSize: r1 });
+      } else {
+        const currentSize = 1 / (group.panes.length + 1);
+        group.panes.forEach(p => { p.relativeSize = currentSize; });
+        group.panes.push({ id: `pane-${id}`, terminalId: id, relativeSize: currentSize });
+      }
       group.activePaneId = `pane-${id}`;
     },
 
@@ -370,12 +390,15 @@ const terminalSlice = createSlice({
     addBookmark(state, action: PayloadAction<{ tabId: string; line: number; label: string }>) {
       const tab = state.tabs[action.payload.tabId];
       if (!tab) return;
-      tab.bookmarks.push({
+      const item: TerminalBookmark = {
         id: `bk-${Date.now()}`,
         line: action.payload.line,
         label: action.payload.label,
         createdAt: Date.now(),
-      });
+      };
+      // 二分插入保持有序 (O(log n + n) 但 Redux-Immer 安全)
+      const idx = binarySearch(tab.bookmarks, item.line);
+      tab.bookmarks.splice(idx, 0, item);
     },
 
     removeBookmark(state, action: PayloadAction<{ tabId: string; bookmarkId: string }>) {

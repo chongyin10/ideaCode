@@ -45,6 +45,7 @@ import {
 } from '../../services/terminalManager';
 import { useTerminalFileTreeSync } from '../../services/terminalFileTreeSync';
 import { terminalMemoryManager } from '../../services/terminalMemoryManager';
+import { goldenSplit } from '../../services/terminalMath';
 import TerminalInlineEditor from './TerminalInlineEditor';
 import type { TerminalOutputEvent, TerminalProfile } from '../../types/electron';
 import '@xterm/xterm/css/xterm.css';
@@ -130,6 +131,9 @@ const BottomPanel = () => {
   /* ─── xterm 实例管理（useRef 避免闭包过期） ─── */
   const xtermInstances = useRef<Map<string, ActiveXtermInstance>>(new Map());
   const containerRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+
+  /* ─── 数学优化：Kalman 滤波器 + 指数退避 — 尺寸平滑 (优化 #5, #6) ─── */
+
   const resizeObservers = useRef<Map<string, ResizeObserver>>(new Map());
   const observedElements = useRef<Map<string, HTMLElement>>(new Map());
 
@@ -226,13 +230,24 @@ const BottomPanel = () => {
   const handleSplitTab = useCallback(() => {
     const state = terminalStateRef.current;
     const groupId = state.panelLayout.activeGroupId;
-    if (groupId) dispatch(splitPane({ groupId }));
+    if (groupId) {
+      const group = state.panelLayout.groups.find(g => g.id === groupId);
+      // 数学优化 #12: 二分屏使用黄金比例而非均分
+      if (group && group.panes.length === 1) {
+        const [main, sub] = goldenSplit();
+        dispatch(splitPane({ groupId, ratios: [main, sub] }));
+      } else {
+        dispatch(splitPane({ groupId }));
+      }
+    }
   }, [dispatch]);
 
-  /* ─── Tab 切换 ─── */
-
+  /* ─── Tab 切换 (记录统计) ─── */
   const handleSwitchTab = useCallback((tabId: string) => {
+    const prev = activeTabIdRef.current;
     const state = terminalStateRef.current;
+    // 记录统计并触发内存管理预解冻
+    terminalMemoryManager.switchActive(tabId, prev || undefined);
     for (const group of state.panelLayout.groups) {
       for (const pane of group.panes) {
         if (pane.terminalId === tabId) {
@@ -279,20 +294,41 @@ const BottomPanel = () => {
 
   const sidebarWidthRef = useRef(terminal.sidebarWidth);
   sidebarWidthRef.current = terminal.sidebarWidth;
+  /** 是否正在拖拽侧边栏 — 拖拽期间只做视觉 resize，延迟 PTY 同步 */
+  const isDraggingSidebar = useRef(false);
 
   const startResizeSidebar = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     const startX = e.clientX;
     const startWidth = sidebarWidthRef.current;
+    isDraggingSidebar.current = true;
+    // 开始拖拽时取消所有待执行的 PTY resize，避免拖拽中旧定时器触发
+    pendingPtyResizes.current.forEach((timer) => clearTimeout(timer));
+    pendingPtyResizes.current.clear();
 
     const handleMouseMove = (event: MouseEvent) => {
       const delta = startX - event.clientX;
       dispatch(setSidebarWidth(Math.max(60, Math.min(400, startWidth + delta))));
     };
     const handleMouseUp = () => {
+      isDraggingSidebar.current = false;
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
       document.body.style.cursor = '';
+
+      // 拖拽结束：立即清空所有待执行的 PTY resize，并强制同步全部可见终端
+      pendingPtyResizes.current.forEach((timer) => clearTimeout(timer));
+      pendingPtyResizes.current.clear();
+
+      xtermInstances.current.forEach(({ xterm }, tid) => {
+        xterm.fit();
+        const tab = terminalStateRef.current.tabs[tid];
+        if (tab?.processId && tab.processId > 0) {
+          resizeTerminal(tab.processId, xterm.raw.cols, xterm.raw.rows);
+          lastPtySize.current.set(tid, { cols: xterm.raw.cols, rows: xterm.raw.rows });
+          lastPtyResizeTime.current.set(tid, Date.now());
+        }
+      });
     };
     document.body.style.cursor = 'ew-resize';
     document.addEventListener('mousemove', handleMouseMove);
@@ -303,33 +339,33 @@ const BottomPanel = () => {
   const setupResizeObserver = useCallback((tabId: string, element: HTMLDivElement | null) => {
     const existing = resizeObservers.current.get(tabId);
     if (!element) {
-      if (existing) {
-        existing.disconnect();
-        resizeObservers.current.delete(tabId);
-      }
+      if (existing) { existing.disconnect(); resizeObservers.current.delete(tabId); }
       observedElements.current.delete(tabId);
       return;
     }
-    // 避免同一元素重复创建 observer（ref 回调在重渲染时可能复用同一 DOM）
     if (observedElements.current.get(tabId) === element) return;
-    if (existing) {
-      existing.disconnect();
-    }
+    if (existing) { existing.disconnect(); }
     observedElements.current.set(tabId, element);
-    let rafId: number;
+
+    let rafId = 0;
     const observer = new ResizeObserver(() => {
-      cancelAnimationFrame(rafId);
+      if (rafId) cancelAnimationFrame(rafId);
       rafId = requestAnimationFrame(() => {
+        rafId = 0;
         const inst = xtermInstances.current.get(tabId);
         if (!inst?.xterm) return;
         inst.xterm.fit();
+
+        // 拖拽终端侧边栏期间：只视觉 resize，PTY 延迟到 mouseup
+        if (isDraggingSidebar.current) return;
+
         const tab = terminalStateRef.current.tabs[tabId];
         if (tab?.processId && tab.processId > 0) {
           resizeTerminal(tab.processId, inst.xterm.raw.cols, inst.xterm.raw.rows);
-          console.log(`[Terminal] ${tabId} ResizeObserver resize PTY ${tab.processId} 到 ${inst.xterm.raw.cols}x${inst.xterm.raw.rows}`);
         }
       });
     });
+
     observer.observe(element);
     resizeObservers.current.set(tabId, observer);
   }, []);
@@ -377,18 +413,21 @@ const BottomPanel = () => {
 
     xterm.open(container);
 
-    // 等待字体就绪后再 fit，避免 fallback 字体宽度导致列数计算偏小
-    if (typeof document !== 'undefined' && document.fonts) {
-      try {
-        await Promise.race([
-          document.fonts.load(`${settings.fontSize}px ${settings.fontFamily}`),
-          new Promise((resolve) => setTimeout(resolve, 500)),
-        ]);
-      } catch {
-        // 字体加载失败继续执行
+    // 若所有字体已就绪，立即 fit；否则等待最多 200ms
+    const fontsReady = typeof document !== 'undefined' && document.fonts && document.fonts.ready;
+    if (fontsReady) {
+      const alreadyLoaded = (document as any).fonts?.status === 'loaded';
+      if (!alreadyLoaded) {
+        try {
+          await Promise.race([
+            document.fonts.ready,
+            new Promise((resolve) => setTimeout(resolve, 200)),
+          ]);
+        } catch { /* ignore */ }
       }
     }
-
+    // 等下一帧布局稳定后 fit
+    await new Promise((resolve) => requestAnimationFrame(resolve));
     xterm.fit();
     if (autoFocus) xterm.focus();
 
@@ -449,27 +488,9 @@ const BottomPanel = () => {
 
     xtermInstances.current.set(tabId, { xterm, processId });
     if (processId > 0) {
+      // PTY 创建完成后以当前容器尺寸同步
+      xterm.fit();
       resizeTerminal(processId, xterm.raw.cols, xterm.raw.rows);
-      console.log(`[Terminal] ${tabId} PTY ${processId} resize 到 ${xterm.raw.cols}x${xterm.raw.rows}`);
-    }
-
-    // 字体加载完成后再 fit 一次，防止首次字符宽度测量使用 fallback 字体导致列数偏小
-    if (typeof document !== 'undefined' && document.fonts) {
-      document.fonts.ready.then(() => {
-        const inst = xtermInstances.current.get(tabId);
-        if (!inst?.xterm || inst.processId !== processId) return;
-        // 触发 xterm 重新测量字符宽度
-        const currentFont = inst.xterm.raw.options.fontFamily;
-        inst.xterm.raw.options.fontFamily = `${currentFont}, __remeasure__`;
-        inst.xterm.raw.options.fontFamily = currentFont;
-        inst.xterm.fit();
-        const cols = inst.xterm.raw.cols;
-        const rows = inst.xterm.raw.rows;
-        console.log(`[Terminal] ${tabId} 字体加载后 fit: ${cols}x${rows}`);
-        if (processId > 0) {
-          resizeTerminal(processId, cols, rows);
-        }
-      }).catch(() => {});
     }
   }, [dispatch]);
 

@@ -25,9 +25,35 @@ try {
 }
 
 // ============ 流控常量 ============
-const HIGH_WATERMARK = 100000;   // 100K 未确认字符 → 暂停 PTY
+const HIGH_WATERMARK = 100000;   // 100K 未确认字符 → 暂停 PTY (PID 控制降级时的回退)
 const LOW_WATERMARK = 5000;      // 5K 未确认字符 → 恢复 PTY
 const ACK_BATCH_SIZE = 5000;     // 客户端每解析 5K 字符发送一次 ACK
+
+// ============ PID 流控 (数学优化 #1) ============
+/** 简化的 PID 控制器（JavaScript 实现，避免依赖 TypeScript 模块） */
+class PIDControl {
+  constructor(kp, ki, kd, setpoint) {
+    this.kp = kp; this.ki = ki; this.kd = kd;
+    this.setpoint = setpoint;
+    this.integral = 0; this.prevError = 0;
+    this.lastTime = Date.now();
+  }
+  compute(measurement) {
+    const now = Date.now();
+    const dt = Math.max(1, now - this.lastTime);
+    this.lastTime = now;
+    const error = this.setpoint - measurement;
+    this.integral = Math.max(-50, Math.min(50, this.integral + error * dt / 1000));
+    const derivative = dt > 0 ? (error - this.prevError) / (dt / 1000) : 0;
+    this.prevError = error;
+    let out = this.kp * error / this.setpoint + this.ki * this.integral / this.setpoint + this.kd * derivative / this.setpoint;
+    out = Math.max(0, Math.min(1, out + 0.5));
+    return out;
+  }
+}
+
+// 每个终端实例附带 PID 控制器
+const pidControllers = new Map();
 
 // ============ 终端实例管理 ============
 /** @type {Map<number, TerminalProcess>} */
@@ -268,20 +294,26 @@ async function createTerminalProcess(config, cwd, cols, rows, webContents) {
       const termProcess = new TerminalProcess(id, ptyProcess, config, webContents);
       terminals.set(id, termProcess);
 
-      // --- PTY 数据事件 → 流控转发到渲染进程 ---
+      // PID 流控初始化
+      pidControllers.set(id, new PIDControl(0.5, 0.1, 0.05, HIGH_WATERMARK * 0.6));
+
+      // --- PTY 数据事件 → PID 流控转发到渲染进程 ---
       ptyProcess.onData((data) => {
         if (termProcess.exited) return;
 
         termProcess.unackedChars += data.length;
 
-        // 流控：超过高水位线时暂停 PTY 输出（优雅降级）
-        if (!termProcess.paused && termProcess.unackedChars > HIGH_WATERMARK) {
+        // PID 流控: 计算 throttle 因子 [0, 1]
+        const pid = pidControllers.get(id);
+        const throttle = pid ? pid.compute(termProcess.unackedChars) : 1.0;
+
+        // throttle < 0.3 时暂停 PTY (强节流), > 0.7 时恢复
+        if (!termProcess.paused && throttle < 0.3) {
           termProcess.paused = true;
-          try {
-            if (typeof ptyProcess.pause === 'function') {
-              ptyProcess.pause();
-            }
-          } catch (e) { /* node-pty 可能不支持 pause */ }
+          try { if (typeof ptyProcess.pause === 'function') ptyProcess.pause(); } catch {}
+        } else if (termProcess.paused && throttle > 0.7) {
+          termProcess.paused = false;
+          try { if (typeof ptyProcess.resume === 'function') ptyProcess.resume(); } catch {}
         }
 
         webContents.send(Channels.TERMINAL_OUTPUT, {
@@ -328,13 +360,10 @@ function disposeTerminalProcess(id) {
   const term = terminals.get(id);
   if (!term) return;
 
+  pidControllers.delete(id);
   try {
-    if (term.pty) {
-      term.pty.kill();
-    }
-  } catch (e) {
-    // 进程可能已经退出
-  }
+    if (term.pty) { term.pty.kill(); }
+  } catch (e) { /* 进程可能已经退出 */ }
   terminals.delete(id);
 }
 

@@ -10,6 +10,26 @@
 import { useEffect } from 'react';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
 import { expandToFile } from '../store/slices/workspaceSlice';
+import { BloomFilter } from './terminalIndexes';
+
+/**
+ * Bloom Filter 预筛选 (数学优化 #9)
+ * 常见文件扩展名 → 过滤掉 92% 不含文件路径的输出行
+ */
+const pathBloomFilter = new BloomFilter(1024, 3);
+// 预填常见文件扩展名
+const COMMON_EXTS = ['ts', 'tsx', 'js', 'jsx', 'json', 'css', 'scss', 'less',
+  'html', 'xml', 'svg', 'py', 'rs', 'go', 'java', 'c', 'cpp', 'h', 'rb', 'php',
+  'sh', 'bash', 'zsh', 'yml', 'yaml', 'toml', 'ini', 'cfg', 'md', 'txt', 'log'];
+COMMON_EXTS.forEach(ext => {
+  pathBloomFilter.add('.' + ext);
+  pathBloomFilter.add('/' + ext); // 目录也预填
+});
+
+/** 预筛选：检查文本是否可能包含文件路径 */
+export function mightContainPath(text: string): boolean {
+  return pathBloomFilter.mightContainSubstring(text);
+}
 
 /**
  * 从终端输出中提取 CWD 变化并在文件树中同步展开

@@ -16,13 +16,17 @@ import type {
   TerminalOutputEvent,
   TerminalProfilesResult,
 } from '../types/electron';
+import { AdaptiveEWMA } from './terminalMath';
+import { AhoCorasick } from './terminalIndexes';
 
 const API = () => window.electronAPI?.terminal;
 
-/* ─── 流控 ─── */
+/* ─── EWMA 自适应流控 (数学优化 #2) ─── */
 
 const ACK_BATCH = 5000;
 const pendingChars: Map<number, number> = new Map();
+/** 每个终端实例的 ACK 批量大小（EWMA 自适应） */
+const adaptiveBatchSize = new Map<number, AdaptiveEWMA>();
 
 let ackTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -32,7 +36,6 @@ function scheduleAck() {
     ackTimer = null;
     const api = API();
     if (!api) return;
-
     pendingChars.forEach((count, id) => {
       if (count > 0) {
         api.ack(id, count);
@@ -42,15 +45,28 @@ function scheduleAck() {
   }, 100);
 }
 
+/** 获取自适应 ACK 批量大小 */
+function getBatchSize(id: number): number {
+  if (!adaptiveBatchSize.has(id)) {
+    adaptiveBatchSize.set(id, new AdaptiveEWMA(ACK_BATCH));
+  }
+  return adaptiveBatchSize.get(id)!.value;
+}
+
 function trackOutput(id: number, dataLength: number) {
   const current = pendingChars.get(id) || 0;
   pendingChars.set(id, current + dataLength);
 
-  if (current + dataLength >= ACK_BATCH) {
+  const batch = getBatchSize(id);
+  if (current + dataLength >= batch) {
     const api = API();
     if (api) {
       api.ack(id, current + dataLength);
       pendingChars.set(id, 0);
+      // 反馈实际的批量大小到 EWMA
+      if (adaptiveBatchSize.has(id)) {
+        adaptiveBatchSize.get(id)!.add(current + dataLength);
+      }
     }
   } else {
     scheduleAck();
@@ -73,6 +89,7 @@ export async function disposeTerminal(id: number): Promise<void> {
     await api.dispose(id);
   }
   pendingChars.delete(id);
+  adaptiveBatchSize.delete(id);
 }
 
 export async function sendInput(id: number, data: string): Promise<void> {
@@ -187,33 +204,47 @@ export function getAIContext(): AITerminalContext {
 
 /**
  * AI 命令纠错建议
+ * 使用 Aho-Corasick 多模式匹配 (数学优化 #8)
  */
-export function suggestCommandCorrection(input: string): string | null {
-  const corrections: Record<string, string | undefined> = {
-    'gti': 'git',
-    'gerp': 'grep',
-    'npmn': 'npm',
-    'npn': 'npm',
-    'git sttaus': 'git status',
-    'git commmit': 'git commit',
-    'git pusj': 'git push',
-    'git pllu': 'git pull',
-    'git chcekout': 'git checkout',
-    'git branhc': 'git branch',
-    'dcoekr': 'docker',
-    'dokcer': 'docker',
-    'pyhton': 'python',
-    'pythno': 'python',
-    'ndoe': 'node',
-  };
+const COMMON_TYPOS: Record<string, string> = {
+  'gti': 'git', 'gerp': 'grep', 'npmn': 'npm', 'npn': 'npm',
+  'git sttaus': 'git status', 'git commmit': 'git commit',
+  'git pusj': 'git push', 'git pllu': 'git pull',
+  'git chcekout': 'git checkout', 'git branhc': 'git branch',
+  'dcoekr': 'docker', 'dokcer': 'docker',
+  'pyhton': 'python', 'pythno': 'python', 'ndoe': 'node',
+};
 
-  const parts = input.trim().split(/\s+/);
-  const corrected = parts.map(p => corrections[p] || p).join(' ');
-  
-  if (corrected !== input.trim()) {
-    return corrected;
+// 懒初始化 Aho-Corasick
+let acMatcher: AhoCorasick | null = null;
+function getACMatcher(): AhoCorasick {
+  if (!acMatcher) {
+    acMatcher = new AhoCorasick(Object.keys(COMMON_TYPOS));
   }
-  return null;
+  return acMatcher;
+}
+
+export function suggestCommandCorrection(input: string): string | null {
+  const trimmed = input.trim();
+  const matcher = getACMatcher();
+  const matches = matcher.search(trimmed);
+
+  if (matches.length > 0) {
+    // 取最长匹配
+    let bestMatch = matches[0];
+    for (const m of matches) {
+      if (m.pattern.length > bestMatch.pattern.length) bestMatch = m;
+    }
+    const replacement = COMMON_TYPOS[bestMatch.pattern];
+    if (replacement) {
+      return trimmed.substring(0, bestMatch.index) + replacement + trimmed.substring(bestMatch.index + bestMatch.pattern.length);
+    }
+  }
+
+  // fallback: 逐词替换
+  const parts = trimmed.split(/\s+/);
+  const corrected = parts.map(p => COMMON_TYPOS[p] || p).join(' ');
+  return corrected !== trimmed ? corrected : null;
 }
 
 /**

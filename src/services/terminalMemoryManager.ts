@@ -1,54 +1,48 @@
 /**
  * 终端实例内存分级管理
  * 
- * 功能：
- * 1. 对非活跃 Tab 的终端实例进行"冻结"（暂停渲染循环，仅保留 buffer）
- * 2. 活跃 Tab 正常渲染
- * 3. 切换 Tab 时自动解冻并恢复渲染
- * 
- * 内存策略：
- * - 0-3 个实例：全部活跃渲染
- * - 4-5 个实例：活跃实例 + 1 个可见实例正常渲染，其余暂停渲染
- * - 6+ 个实例：仅活跃实例正常渲染，其余暂停渲染
+ * 数学优化 (#6/#7):
+ * - Zipf 分布活跃预测
+ * - Markov 链预测下一个活跃 tab → 提前解冻
+ * - 约束优化: 动态决定活跃实例数
  */
 
 import { XtermTerminal } from '../components/BottomPanel/xtermInstance';
+import { TabActivityTracker, MarkovPredictor } from './terminalStats';
 
 interface FrozenTerminalState {
-  /** xterm.js 实例引用（渲染已暂停） */
   xterm: XtermTerminal;
-  /** 冻结时间 */
   frozenAt: number;
 }
 
-/**
- * 终端内存管理器
- */
 export class TerminalMemoryManager {
   private activeInstances = new Map<string, XtermTerminal>();
   private frozenInstances = new Map<string, FrozenTerminalState>();
+  public activity = new TabActivityTracker();
+  public markov = new MarkovPredictor();
 
-  /**
-   * 注册活跃实例
-   */
   registerActive(id: string, xterm: XtermTerminal): void {
     this.activeInstances.set(id, xterm);
     this._applyMemoryPolicy();
   }
 
-  /**
-   * 切换活跃 Tab
-   */
-  switchActive(newActiveId: string): void {
-    // 冻结之前的活跃实例
+  /** 记录切换并预测预解冻 */
+  switchActive(newActiveId: string, previousId?: string): void {
+    this.activity.recordSwitch(newActiveId);
+    if (previousId) this.markov.recordTransition(previousId, newActiveId);
+
+    // Markov 预测: 预解冻下一个可能的 tab
+    const predicted = this.markov.predict(newActiveId);
+    if (predicted && this.frozenInstances.has(predicted)) {
+      this.thaw(predicted);
+    }
+
+    // 冻结旧的
     for (const [id, xterm] of this.activeInstances) {
-      if (id !== newActiveId) {
-        this._freeze(id, xterm);
-      }
+      if (id !== newActiveId) this._freeze(id, xterm);
     }
     this.activeInstances.clear();
 
-    // 解冻目标实例
     const frozen = this.frozenInstances.get(newActiveId);
     if (frozen) {
       this.activeInstances.set(newActiveId, frozen.xterm);
@@ -90,12 +84,19 @@ export class TerminalMemoryManager {
   private _applyMemoryPolicy(): void {
     const total = this.activeInstances.size + this.frozenInstances.size;
 
-    // 6+ 个实例：全部非活跃实例冻结渲染
+    // Zipf 约束优化: 根据切换频率动态决定活跃数
+    const candidateIds = Array.from(this.activeInstances.keys());
+    const zipfScores = candidateIds.map(id => ({ id, score: this.activity.getScore(id) }));
+    zipfScores.sort((a, b) => b.score - a.score);
+
+    // 动态阈值: 高频切换 → 保持 3+ 活跃, 低频 → 只保持 1 活跃
+    const recentSwitchCount = Array.from(candidateIds).reduce((sum, id) => sum + this.activity.getScore(id), 0);
+    const activeTarget = recentSwitchCount > 5 ? 3 : 1;
+
     if (total >= 6) {
-      // 找出所有非活跃的 active 实例进行冻结
       const toFreeze: Array<[string, XtermTerminal]> = [];
       for (const [id, xterm] of this.activeInstances) {
-        if (this.activeInstances.size > 1) {
+        if (this.activeInstances.size > activeTarget) {
           toFreeze.push([id, xterm]);
         }
       }

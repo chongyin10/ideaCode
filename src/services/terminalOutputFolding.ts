@@ -1,32 +1,23 @@
 /**
  * useTerminalOutputFolding — 终端输出智能折叠
  * 
- * 检测长输出中的逻辑段落边界，提供折叠/展开功能。
- * 结合 Shell Integration 的命令边界标记进行分段。
- * 
- * 检测策略：
- * 1. OSC 633 序列标记的命令边界（精确）
- * 2. 启发式检测（分隔线、缩进变化）
+ * 数学优化:
+ * - Shannon 熵分类 (#13): 自动跳过二进制/结构化块
+ * - 区间树 (#18): O(log n) 定位行所属段落
  */
 
 import { useMemo } from 'react';
+import { shannonEntropy, classifyBlock } from './terminalMath';
+import { IntervalTree } from './terminalIndexes';
 
 export interface OutputSection {
-  /** 起始行号 */
   startLine: number;
-  /** 结束行号 */
   endLine: number;
-  /** 段落标题（命令文本） */
   title?: string;
-  /** 是否默认折叠 */
   defaultCollapsed?: boolean;
-  /** 是否为错误/警告 */
   severity?: 'info' | 'warning' | 'error';
 }
 
-/**
- * 检测输出段落边界
- */
 function detectSections(lines: string[]): OutputSection[] {
   const sections: OutputSection[] = [];
   if (lines.length === 0) return sections;
@@ -37,51 +28,46 @@ function detectSections(lines: string[]): OutputSection[] {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
-    // 检测 OSC 633 命令边界
+    // Shannon 熵分类 — 跳过二进制块 (优化 #13)
+    const entropy = shannonEntropy(line);
+    const category = classifyBlock(entropy);
+    if (category === 'binary' && line.length > 100) {
+      if (i > currentStart) {
+        sections.push({ startLine: currentStart, endLine: i, title: currentTitle || undefined });
+      }
+      currentStart = i + 1;
+      currentTitle = '';
+      sections.push({ startLine: i, endLine: i + 1, title: '[二进制数据]', defaultCollapsed: true, severity: 'info' });
+      continue;
+    }
+
+    // OSC 633 命令边界
     if (line.includes('\x1b]633;C')) {
       if (i > currentStart) {
-        sections.push({
-          startLine: currentStart,
-          endLine: i,
-          title: currentTitle || undefined,
-        });
+        sections.push({ startLine: currentStart, endLine: i, title: currentTitle || undefined });
       }
       currentStart = i + 1;
       currentTitle = '';
       continue;
     }
+    if (line.includes('\x1b]633;B')) { currentStart = i; continue; }
 
-    // 检测 OSC 633 命令开始
-    if (line.includes('\x1b]633;B')) {
-      currentStart = i;
-      continue;
-    }
-
-    // 启发式：分隔线（如 =====, -----, *****）
+    // 分隔线
     if (/^[=*-]{20,}/.test(line.trim())) {
       if (i > currentStart + 1) {
-        sections.push({
-          startLine: currentStart,
-          endLine: i,
-          title: currentTitle || undefined,
-        });
+        sections.push({ startLine: currentStart, endLine: i, title: currentTitle || undefined });
       }
       currentStart = i;
       currentTitle = line.trim();
       continue;
     }
 
-    // 启发式：命令提示符（如 $, #, >, ❯）
+    // 命令提示符
     if (/^[$#>❯]/.test(line.trim()) || /^\S+\s*[$#>❯]/.test(line.trim())) {
       if (currentStart > 0 && i > currentStart + 1) {
-        sections.push({
-          startLine: currentStart,
-          endLine: i,
-          title: currentTitle || undefined,
-        });
+        sections.push({ startLine: currentStart, endLine: i, title: currentTitle || undefined });
       }
       currentStart = i;
-      // 提取命令
       const cmdMatch = line.match(/[$#>❯]\s*(.+)/);
       currentTitle = cmdMatch ? cmdMatch[1] : line.trim();
       continue;
@@ -89,46 +75,39 @@ function detectSections(lines: string[]): OutputSection[] {
 
     // 错误行
     if (line.includes('error') && line.length < 200) {
-      sections.push({
-        startLine: i,
-        endLine: Math.min(i + 5, lines.length),
-        title: '错误',
-        severity: 'error',
-        defaultCollapsed: false,
-      });
+      sections.push({ startLine: i, endLine: Math.min(i + 5, lines.length), title: '错误', severity: 'error', defaultCollapsed: false });
       continue;
     }
   }
 
-  // 最后一段
   if (currentStart < lines.length - 1) {
-    sections.push({
-      startLine: currentStart,
-      endLine: lines.length,
-      title: currentTitle || undefined,
-    });
+    sections.push({ startLine: currentStart, endLine: lines.length, title: currentTitle || undefined });
   }
 
   return sections;
 }
 
 /**
- * React Hook：终端输出智能折叠
+ * React Hook：终端输出智能折叠 (interval tree 优化 #18)
  */
 export function useTerminalOutputFolding(
   bufferLines: string[] | undefined,
   enabled: boolean = true
 ) {
-  const sections = useMemo(() => {
+  const { sections, intervalTree } = useMemo(() => {
     if (!enabled || !bufferLines || bufferLines.length === 0) {
-      return [];
+      return { sections: [] as OutputSection[], intervalTree: new IntervalTree<OutputSection>() };
     }
-    return detectSections(bufferLines);
+    const sects = detectSections(bufferLines);
+    const tree = new IntervalTree<OutputSection>();
+    for (const s of sects) tree.insert(s.startLine, s.endLine, s);
+    return { sections: sects, intervalTree: tree };
   }, [bufferLines, enabled]);
 
-  const getSectionForLine = (lineNumber: number): OutputSection | undefined => {
-    return sections.find(s => s.startLine <= lineNumber && s.endLine >= lineNumber);
+  /** O(log n) 查找行所在段落 (优化) */
+  const getSectionForLine = (lineNumber: number): OutputSection | null => {
+    return intervalTree.findContaining(lineNumber);
   };
 
-  return { sections, getSectionForLine };
+  return { sections, getSectionForLine, intervalTree };
 }

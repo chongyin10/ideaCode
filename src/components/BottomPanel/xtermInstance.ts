@@ -7,9 +7,7 @@
 
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
-// xterm 的 CSS 将在 BottomPanel.css 中引入或在此 import
-// 以下 addons 采用动态 import 以支持可选加载
-
+import { BoyerMoore } from '../../services/terminalIndexes';
 import type { SearchAddon as SearchAddonType } from '@xterm/addon-search';
 import type { WebglAddon as WebglAddonType } from '@xterm/addon-webgl';
 import type { Unicode11Addon as Unicode11AddonType } from '@xterm/addon-unicode11';
@@ -31,11 +29,15 @@ export interface XtermInstanceConfig {
 export class XtermTerminal {
   readonly raw: Terminal;
   readonly fitAddon: FitAddon;
-
   private _searchAddon?: SearchAddonType;
   private _webglAddon?: WebglAddonType;
   private _unicode11Addon?: Unicode11AddonType;
   private _serializeAddon?: SerializeAddonType;
+  private _bmSearchers = new Map<string, BoyerMoore>();
+
+  /** 上一次 fit 后的 cols/rows — 用于跳过无变更 resize */
+  private _lastFitCols = -1;
+  private _lastFitRows = -1;
 
   private _config: XtermInstanceConfig;
 
@@ -75,14 +77,27 @@ export class XtermTerminal {
     this._loadOptionalAddons();
   }
 
-  /** 自适应尺寸 */
-  fit(): void {
+  /** 自适应尺寸 — 跳过无变更的 resize */
+  fit(): boolean {
     try {
+      const prevCols = this.raw.cols;
+      const prevRows = this.raw.rows;
       this.fitAddon.fit();
+      const changed = this.raw.cols !== prevCols || this.raw.rows !== prevRows;
+
+      if (changed) {
+        this._lastFitCols = this.raw.cols;
+        this._lastFitRows = this.raw.rows;
+      }
+      return changed;
     } catch {
-      // fit 在终端未挂载时可能失败
+      return false;
     }
   }
+
+  /** 上一次 fit 后的尺寸 */
+  get lastFitCols(): number { return this._lastFitCols; }
+  get lastFitRows(): number { return this._lastFitRows; }
 
   /** 写入数据 */
   write(data: string | Uint8Array, callback?: () => void): void {
@@ -200,13 +215,58 @@ export class XtermTerminal {
   }
 
   async findNext(term: string): Promise<boolean> {
+    // 长搜索词使用 Boyer-Moore 加速 (数学优化 #10)
+    if (term.length > 8) {
+      return this._boyerMooreSearch(term);
+    }
     const addon = await this.getSearchAddon();
     return addon.findNext(term);
   }
 
   async findPrevious(term: string): Promise<boolean> {
+    if (term.length > 8) {
+      return this._boyerMooreSearchReverse(term);
+    }
     const addon = await this.getSearchAddon();
     return addon.findPrevious(term);
+  }
+
+  /** Boyer-Moore 搜索 — 对长搜索词更快 */
+  private _boyerMooreSearch(term: string): boolean {
+    const content = this.getContentsAsText();
+    if (!content) return false;
+    if (!this._bmSearchers.has(term)) {
+      this._bmSearchers.set(term, new BoyerMoore(term));
+    }
+    const bm = this._bmSearchers.get(term)!;
+    const index = bm.search(content);
+    if (index >= 0) {
+      // 计算行号并滚动
+      const before = content.substring(0, index);
+      const lineNum = before.split('\n').length - 1;
+      this.scrollToLine(lineNum);
+      return true;
+    }
+    return false;
+  }
+
+  private _boyerMooreSearchReverse(_term: string): boolean {
+    // BM 反向搜索：找最后一个匹配
+    const content = this.getContentsAsText();
+    if (!content) return false;
+    if (!this._bmSearchers.has(_term)) {
+      this._bmSearchers.set(_term, new BoyerMoore(_term));
+    }
+    const bm = this._bmSearchers.get(_term)!;
+    const indices = bm.searchAll(content);
+    if (indices.length > 0) {
+      const lastIndex = indices[indices.length - 1];
+      const before = content.substring(0, lastIndex);
+      const lineNum = before.split('\n').length - 1;
+      this.scrollToLine(lineNum);
+      return true;
+    }
+    return false;
   }
 
   clearSearchDecorations(): void {
@@ -232,17 +292,13 @@ export class XtermTerminal {
   /* ─── 销毁 ─── */
 
   dispose(): void {
+    this._bmSearchers.clear();
     try {
-      if (this._webglAddon) {
-        this._webglAddon.dispose();
-        this._webglAddon = undefined;
-      }
-    } catch { /* WebGL dispose 在不同环境下可能抛出 */ }
+      if (this._webglAddon) { this._webglAddon.dispose(); this._webglAddon = undefined; }
+    } catch { /* WebGL dispose 异常 */ }
     this._searchAddon = undefined;
     this._unicode11Addon = undefined;
     this._serializeAddon = undefined;
-    try {
-      this.raw.dispose();
-    } catch { /* xterm 可能已在 DOM 卸载时自动 dispose */ }
+    try { this.raw.dispose(); } catch { /* 已自动 dispose */ }
   }
 }
