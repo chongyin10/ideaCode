@@ -509,7 +509,7 @@ function Home() {
                 value={panelContent ?? file.content}
                 language={file.language}
                 path={typeof file.source === 'string' ? file.source : file.name}
-                modelPath={`ideacode://${group.id}/${file.id}`}
+                modelPath={`file:///__ideacode_group/${group.id}/${file.id.replace(/^\//, '')}`}
                 onChange={handleEditorChange(group.activeFileId, groupIndex)}
                 snapshot={snapshot}
                 onSnapshot={saveSnapshot}

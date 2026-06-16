@@ -302,9 +302,6 @@ const BottomPanel = () => {
     const startX = e.clientX;
     const startWidth = sidebarWidthRef.current;
     isDraggingSidebar.current = true;
-    // 开始拖拽时取消所有待执行的 PTY resize，避免拖拽中旧定时器触发
-    pendingPtyResizes.current.forEach((timer) => clearTimeout(timer));
-    pendingPtyResizes.current.clear();
 
     const handleMouseMove = (event: MouseEvent) => {
       const delta = startX - event.clientX;
@@ -316,17 +313,12 @@ const BottomPanel = () => {
       document.removeEventListener('mouseup', handleMouseUp);
       document.body.style.cursor = '';
 
-      // 拖拽结束：立即清空所有待执行的 PTY resize，并强制同步全部可见终端
-      pendingPtyResizes.current.forEach((timer) => clearTimeout(timer));
-      pendingPtyResizes.current.clear();
-
+      // 拖拽结束：强制同步全部可见终端
       xtermInstances.current.forEach(({ xterm }, tid) => {
         xterm.fit();
         const tab = terminalStateRef.current.tabs[tid];
         if (tab?.processId && tab.processId > 0) {
           resizeTerminal(tab.processId, xterm.raw.cols, xterm.raw.rows);
-          lastPtySize.current.set(tid, { cols: xterm.raw.cols, rows: xterm.raw.rows });
-          lastPtyResizeTime.current.set(tid, Date.now());
         }
       });
     };
@@ -416,7 +408,7 @@ const BottomPanel = () => {
     // 若所有字体已就绪，立即 fit；否则等待最多 200ms
     const fontsReady = typeof document !== 'undefined' && document.fonts && document.fonts.ready;
     if (fontsReady) {
-      const alreadyLoaded = (document as any).fonts?.status === 'loaded';
+      const alreadyLoaded = document.fonts?.status === 'loaded';
       if (!alreadyLoaded) {
         try {
           await Promise.race([

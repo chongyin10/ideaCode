@@ -66,7 +66,7 @@
   color: #4EC9B0 !important;
 }
 
-/* 变量 / 标签名 / 枚举成员 → 浅蓝色 #50C8FF */
+/* 变量 / 枚举成员 → 浅蓝色 #50C8FF */
 .sem-variable {
   color: #50C8FF !important;
 }
@@ -94,4 +94,10 @@
 /* JSX 尖括号 < > </ /> → 灰色 #7D7D7D */
 .sem-bracket {
   color: #7D7D7D !important;
+}
+
+/* HTML 原生标签名（div / span / button ...）→ 浅蓝色 #50C8FF
+   放在最后，确保覆盖可能与之重叠的语义 token 颜色 */
+.sem-html-tag {
+  color: #50C8FF !important;
 }

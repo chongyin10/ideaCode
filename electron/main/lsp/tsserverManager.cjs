@@ -286,10 +286,41 @@ function registerTsServerHandlers() {
         const result = msg.result;
         if (!result) return resolve(null);
         const contents = result.contents;
-        const text = typeof contents === 'string' ? contents
-          : Array.isArray(contents) ? contents.map((c) => typeof c === 'string' ? c : c.value).join('\n')
-          : contents?.value || '';
-        resolve({ displayString: text, kind: '', documentation: '' });
+        let displayString = '';
+        let documentation = '';
+
+        // parse LSP hover contents into type signature + documentation,
+        // matching VS Code's two-part hover layout.
+        if (Array.isArray(contents)) {
+          // MarkedString[]: first code-block element is the signature, rest is documentation
+          for (const c of contents) {
+            const raw = typeof c === 'string' ? c : (c?.value ?? '');
+            if (!raw) continue;
+            if (!displayString) {
+              displayString = raw;
+            } else {
+              documentation = documentation ? `${documentation}\n${raw}` : raw;
+            }
+          }
+        } else if (contents && typeof contents === 'object' && contents.value != null) {
+          // MarkupContent { kind, value }
+          displayString = String(contents.value || '');
+        } else if (typeof contents === 'string') {
+          displayString = contents;
+        }
+
+        // extract range from LSP response (0-based character → offset for frontend)
+        const range = result.range;
+        const response = {
+          displayString,
+          documentation,
+          kind: '',
+        };
+        if (range) {
+          response.start = { line: range.start.line, offset: range.start.character };
+          response.end = { line: range.end.line, offset: range.end.character };
+        }
+        resolve(response);
       });
       setTimeout(() => { pendingRequests.delete(id); resolve(null); }, 3000);
     });

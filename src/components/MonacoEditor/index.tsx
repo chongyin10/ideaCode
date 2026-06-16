@@ -189,7 +189,7 @@ function buildGrammarDecorations(
 
       decs.push({
         range: new monacoInstance.Range(line, startCol, line, endCol),
-        options: { inlineClassName: 'sem-variable' },
+        options: { inlineClassName: 'sem-html-tag' },
       });
     }
   }
@@ -211,8 +211,46 @@ let originalRegisterHoverProvider: ((languageSelector: unknown, provider: unknow
 const tsserverRefCounts = new Map<string, number>();
 const TSJS_LANGS = new Set(['typescript', 'javascript', 'typescriptreact', 'javascriptreact']);
 
+// ── 屏蔽 Monaco TS worker 虚拟文件系统中的 "Could not find source file" 噪音错误 ──
+// 该错误来自 typescriptServices.js 中的 getValidSourceFile()，当虚拟 file:// 路径
+// 无法被 TS program 解析到（如 node_modules 依赖链、lib 文件懒加载）时会抛出。
+// 错误被 Monaco 内部捕获并正常降级，不影响功能，但会污染控制台。
+(function setupErrorSuppression() {
+  if (typeof window === 'undefined') return;
+  if ((window as unknown as { __ideacodeErrorSuppressed?: boolean }).__ideacodeErrorSuppressed) return;
+  (window as unknown as { __ideacodeErrorSuppressed?: boolean }).__ideacodeErrorSuppressed = true;
+
+  const SUPPRESS_PATTERN = /Could not find source file|ModelService: Cannot add model/;
+
+  // 拦截 console.error（worker 错误会以 Error 对象 + console.error 的方式输出）
+  const origConsoleError = console.error.bind(console);
+  console.error = (...args: unknown[]) => {
+    const first = args[0];
+    if (first instanceof Error && SUPPRESS_PATTERN.test(first.message)) return;
+    if (typeof first === 'string' && SUPPRESS_PATTERN.test(first)) return;
+    origConsoleError(...args);
+  };
+
+  // 拦截全局未捕获错误（某些路径下 error 会冒泡到 window）
+  window.addEventListener('error', (event) => {
+    if (event.error instanceof Error && SUPPRESS_PATTERN.test(event.error.message)) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  });
+
+  // 拦截 Promise 未捕获 rejection
+  window.addEventListener('unhandledrejection', (event) => {
+    if (event.reason instanceof Error && SUPPRESS_PATTERN.test(event.reason.message)) {
+      event.preventDefault();
+    }
+  });
+})();
+
 /** 在 model 创建前配置 Monaco TypeScript/JavaScript 默认选项 */
 const beforeMount: Parameters<typeof Editor>[0]['beforeMount'] = (monaco) => {
+  const hasTsServer = typeof window !== 'undefined' && !!(window as unknown as { electronAPI?: { tsserver?: unknown } }).electronAPI?.tsserver;
+
   const tsDefaults = monaco.languages.typescript.typescriptDefaults;
   tsDefaults.setCompilerOptions({
     jsx: monaco.languages.typescript.JsxEmit.React,
@@ -227,31 +265,54 @@ const beforeMount: Parameters<typeof Editor>[0]['beforeMount'] = (monaco) => {
     esModuleInterop: true,
     strict: true,
     noEmit: true,
+    lib: ['esnext', 'dom'],
   });
-  // 关闭 Monaco 内置 TS worker 的语义验证，避免与 tsserver LSP 重复报错
+  // Eager sync：model 内容立即推送到 TS worker，避免懒同步导致的源文件查找竞态
+  tsDefaults.setEagerModelSync(true);
+  // 诊断策略：Electron 下由 tsserver LSP 全权接管诊断，浏览器下保留内置语法检查
   tsDefaults.setDiagnosticsOptions({
     noSemanticValidation: true,
-    noSyntaxValidation: false,
+    noSyntaxValidation: hasTsServer,
   });
+
   monaco.languages.typescript.javascriptDefaults.setCompilerOptions({
     allowNonTsExtensions: true,
     allowSyntheticDefaultImports: true,
     target: monaco.languages.typescript.ScriptTarget.Latest,
     moduleResolution: monaco.languages.typescript.ModuleResolutionKind.NodeJs,
     esModuleInterop: true,
+    lib: ['esnext', 'dom'],
+  });
+  monaco.languages.typescript.javascriptDefaults.setEagerModelSync(true);
+  monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({
+    noSemanticValidation: true,
+    noSyntaxValidation: hasTsServer,
   });
 
-  // 拦截 Monaco 内置 TS/JS worker 的 hover provider，避免自定义 LSP hover 与内置 hover 重复显示
+  // 浏览器模式：注入通配模块声明，让 TS worker 将所有第三方模块（node_modules）统一视为 any 类型。
+  // 避免因模块在虚拟文件系统中不存在而抛出 "Could not find source file" 错误。
+  // Electron 模式下 tsserver LSP 已接管类型解析，无需此补丁。
+  if (!hasTsServer) {
+    const ambientModules = 'declare module "*" {}\n';
+    tsDefaults.addExtraLib(ambientModules, 'ideacode://ambient-modules.d.ts');
+    monaco.languages.typescript.javascriptDefaults.addExtraLib(ambientModules, 'ideacode://ambient-modules.d.ts');
+  }
+
+  // 仅在 Electron 环境（有 tsserver）时拦截内置 hover provider，
+  // 由自定义 LSP hover 接管，避免两者重复显示。
+  // 浏览器模式下保留 Monaco 内置 hover 作为兜底。
   if (!originalRegisterHoverProvider) {
     originalRegisterHoverProvider = monaco.languages.registerHoverProvider.bind(monaco.languages);
   }
-  monaco.languages.registerHoverProvider = ((languageSelector: unknown, provider: unknown) => {
-    const langs = Array.isArray(languageSelector) ? languageSelector : [languageSelector];
-    if (langs.some((l) => TSJS_LANGS.has(l as string))) {
-      return { dispose: () => {} };
-    }
-    return originalRegisterHoverProvider!(languageSelector, provider);
-  }) as typeof monaco.languages.registerHoverProvider;
+  if (hasTsServer) {
+    monaco.languages.registerHoverProvider = ((languageSelector: unknown, provider: unknown) => {
+      const langs = Array.isArray(languageSelector) ? languageSelector : [languageSelector];
+      if (langs.some((l) => TSJS_LANGS.has(l as string))) {
+        return { dispose: () => {} };
+      }
+      return originalRegisterHoverProvider!(languageSelector, provider);
+    }) as typeof monaco.languages.registerHoverProvider;
+  }
 };
 
 /** 计算光标所在字符串字面量的范围（不含引号），用于让下划线覆盖整个 import 路径 */
@@ -689,11 +750,19 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
               if (!path) return null;
               const info = await tsService.quickInfo(path, position.lineNumber - 1, position.column - 1);
               if (!info) return null;
+
+              const display = info.displayString || info.kind || 'TypeScript';
+              // 类型签名 → 以 LSP MarkedString 代码块形式渲染，带语法高亮
+              const contents: Array<{ language: string; value: string } | monaco.IMarkdownString> = [
+                { language, value: display },
+              ];
+              // 文档注释 → 启用 markdown 渲染（Monaco 自动做 XSS 过滤）
+              if (info.documentation) {
+                contents.push({ value: info.documentation, supportHtml: true });
+              }
+
               return {
-                contents: [
-                  { value: info.displayString || info.kind || 'TypeScript' },
-                  ...(info.documentation ? [{ value: info.documentation }] : []),
-                ],
+                contents,
                 range: {
                   startLineNumber: (info.start?.line ?? info.startLineNumber ?? 0) + 1,
                   startColumn: (info.start?.offset ?? info.startColumn ?? 0) + 1,
@@ -715,15 +784,22 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
               // 预创建目标 model，避免 Monaco 在 hover/click 阶段报 "Model not found"
               for (const d of defs) {
                 const uri = monaco.Uri.file(d.file);
-                if (!monaco.editor.getModel(uri)) {
+                if (monaco.editor.getModel(uri)) continue;
+
+                try {
+                  const content = await window.electronAPI?.fs?.readFile(d.file);
+                  // 二次检查：await 期间可能已有其他提供器调用创建了同一 model
+                  if (monaco.editor.getModel(uri)) continue;
+                  monaco.editor.createModel(content ?? '', undefined, uri);
+                } catch (err) {
+                  // "already exists" → 竞态下已创建，忽略
+                  if (err instanceof Error && /already exists/.test(err.message)) continue;
+                  // 文件不可读（如 node_modules 中的 .d.ts），创建占位 model 防止后续报错
                   try {
-                    const content = await window.electronAPI?.fs?.readFile(d.file);
-                    monaco.editor.createModel(content ?? '', undefined, uri);
-                  } catch {
-                    // 文件不可读（如 node_modules 中的 .d.ts），
-                    // 仍创建占位 model 防止 "Model not found" 错误
-                    monaco.editor.createModel('', undefined, uri);
-                  }
+                    if (!monaco.editor.getModel(uri)) {
+                      monaco.editor.createModel('', undefined, uri);
+                    }
+                  } catch { /* 占位 model 创建失败也忽略 */ }
                 }
               }
 
