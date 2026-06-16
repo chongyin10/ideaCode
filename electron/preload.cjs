@@ -84,6 +84,23 @@ const Channels = {
   TSSERVER_SEMANTIC_TOKENS: 'tsserver:semanticTokens',
   TSSERVER_QUICKINFO: 'tsserver:quickinfo',
   TSSERVER_DIAGNOSTICS: 'tsserver:diagnostics',
+
+  /* ─── 终端 ─── */
+  TERMINAL_CREATE: 'terminal:create',
+  TERMINAL_DISPOSE: 'terminal:dispose',
+  TERMINAL_INPUT: 'terminal:input',
+  TERMINAL_RESIZE: 'terminal:resize',
+  TERMINAL_OUTPUT: 'terminal:output',
+  TERMINAL_EXIT: 'terminal:exit',
+  TERMINAL_LIST_PROFILES: 'terminal:listProfiles',
+  TERMINAL_GET_CWD: 'terminal:getCwd',
+  TERMINAL_DETACH: 'terminal:detach',
+  TERMINAL_ATTACH: 'terminal:attach',
+  TERMINAL_GET_LAYOUT: 'terminal:getLayout',
+  TERMINAL_SET_LAYOUT: 'terminal:setLayout',
+  TERMINAL_BROADCAST: 'terminal:broadcast',
+  TERMINAL_SEND_SIGNAL: 'terminal:sendSignal',
+  TERMINAL_CLEAR: 'terminal:clear',
 };
 
 /**
@@ -207,6 +224,26 @@ const electronAPI = {
     semanticTokens: (file) => ipcRenderer.invoke(Channels.TSSERVER_SEMANTIC_TOKENS, file),
     quickInfo: (file, line, offset) => ipcRenderer.invoke(Channels.TSSERVER_QUICKINFO, file, line, offset),
     onDiagnostics: (cb) => onChannel(Channels.TSSERVER_DIAGNOSTICS, cb),
+  },
+
+  /** 终端 — PTY 伪终端集成 */
+  terminal: {
+    create: (config) => ipcRenderer.invoke(Channels.TERMINAL_CREATE, config),
+    dispose: (id) => ipcRenderer.invoke(Channels.TERMINAL_DISPOSE, { id }),
+    input: (id, data) => ipcRenderer.invoke(Channels.TERMINAL_INPUT, { id, data }),
+    resize: (id, cols, rows) => ipcRenderer.invoke(Channels.TERMINAL_RESIZE, { id, cols, rows }),
+    sendSignal: (id, signal) => ipcRenderer.invoke(Channels.TERMINAL_SEND_SIGNAL, { id, signal }),
+    clear: (id) => ipcRenderer.invoke(Channels.TERMINAL_CLEAR, { id }),
+    ack: (id, charCount) => ipcRenderer.invoke('terminal:ack', { id, charCount }),
+    listProfiles: () => ipcRenderer.invoke(Channels.TERMINAL_LIST_PROFILES),
+    getCwd: (id) => ipcRenderer.invoke(Channels.TERMINAL_GET_CWD, { id }),
+    detach: (id) => ipcRenderer.invoke(Channels.TERMINAL_DETACH, { id }),
+    attach: (id) => ipcRenderer.invoke(Channels.TERMINAL_ATTACH, { id }),
+    getLayout: () => ipcRenderer.invoke(Channels.TERMINAL_GET_LAYOUT),
+    setLayout: (layout) => ipcRenderer.invoke(Channels.TERMINAL_SET_LAYOUT, layout),
+    broadcast: (senderId, data, targetIds) => ipcRenderer.invoke(Channels.TERMINAL_BROADCAST, { senderId, data, targetIds }),
+    onOutput: (callback) => onChannel(Channels.TERMINAL_OUTPUT, callback),
+    onExit: (callback) => onChannel(Channels.TERMINAL_EXIT, callback),
   },
 };
 

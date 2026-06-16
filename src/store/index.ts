@@ -3,6 +3,7 @@ import workspaceReducer from './slices/workspaceSlice';
 import layoutReducer from './slices/layoutSlice';
 import gitReducer from './slices/gitSlice';
 import settingsReducer, { persistSettings } from './slices/settingsSlice';
+import terminalReducer from './slices/terminalSlice';
 
 export const store = configureStore({
   reducer: {
@@ -10,6 +11,7 @@ export const store = configureStore({
     layout: layoutReducer,
     git: gitReducer,
     settings: settingsReducer,
+    terminal: terminalReducer,
   },
 });
 

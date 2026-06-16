@@ -25,6 +25,24 @@ export interface TsSemanticTokens {
   data: number[];
 }
 
+export interface TsCompletionEntry {
+  name: string;
+  kind: string;
+  sortText?: string;
+}
+
+export interface TsQuickInfo {
+  displayString?: string;
+  kind?: string;
+  documentation?: string;
+  start?: { line: number; offset: number };
+  end?: { line: number; offset: number };
+  startLineNumber?: number;
+  startColumn?: number;
+  endLineNumber?: number;
+  endColumn?: number;
+}
+
 function api() {
   return window.electronAPI?.tsserver;
 }
@@ -56,13 +74,13 @@ export const tsService = {
   },
 
   /** 获取补全建议 */
-  async completions(filePath: string, line: number, offset: number) {
-    return api()?.completions(filePath, line, offset) ?? [];
+  async completions(filePath: string, line: number, offset: number): Promise<TsCompletionEntry[]> {
+    return (api()?.completions(filePath, line, offset) as TsCompletionEntry[] | undefined) ?? [];
   },
 
   /** 跳转到定义 */
   async definition(filePath: string, line: number, offset: number): Promise<TsLocation[]> {
-    return api()?.definition(filePath, line, offset) ?? [];
+    return (api()?.definition(filePath, line, offset) as TsLocation[] | undefined) ?? [];
   },
 
   /** 语义高亮 tokens */
@@ -71,14 +89,14 @@ export const tsService = {
   },
 
   /** 悬停信息 */
-  async quickInfo(filePath: string, line: number, offset: number) {
-    return api()?.quickInfo(filePath, line, offset) ?? null;
+  async quickInfo(filePath: string, line: number, offset: number): Promise<TsQuickInfo | null> {
+    return (api()?.quickInfo(filePath, line, offset) as TsQuickInfo | undefined) ?? null;
   },
 
   /** 监听诊断推送 */
   onDiagnostics(cb: (data: { file: string; diagnostics: TsDiagnostic[] } | { error: string }) => void) {
     return api()?.onDiagnostics((data) => {
-      cb(data);
+      cb(data as { file: string; diagnostics: TsDiagnostic[] } | { error: string });
     }) ?? (() => {});
   },
 };

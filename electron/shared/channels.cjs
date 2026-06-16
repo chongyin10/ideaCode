@@ -42,7 +42,7 @@ const Channels = {
   EXTENSION_HOST_STOP: 'extensionHost:stop',
   EXTENSION_HOST_RPC: 'extensionHost:rpc',
   EXTENSION_HOST_MESSAGE: 'extensionHost:message',
-  EXTENSION_MESSAGE: 'extensionHost:message',  // 兼容旧引用
+  EXTENSION_MESSAGE: 'extensionHost:message',
 
   /* ─── 应用生命周期 ─── */
   APP_QUIT: 'app:quit',
@@ -90,6 +90,23 @@ const Channels = {
   TSSERVER_SEMANTIC_TOKENS: 'tsserver:semanticTokens',
   TSSERVER_QUICKINFO: 'tsserver:quickinfo',
   TSSERVER_DIAGNOSTICS: 'tsserver:diagnostics',
+
+  /* ─── 终端 ─── */
+  TERMINAL_CREATE: 'terminal:create',
+  TERMINAL_DISPOSE: 'terminal:dispose',
+  TERMINAL_INPUT: 'terminal:input',
+  TERMINAL_RESIZE: 'terminal:resize',
+  TERMINAL_OUTPUT: 'terminal:output',
+  TERMINAL_EXIT: 'terminal:exit',
+  TERMINAL_LIST_PROFILES: 'terminal:listProfiles',
+  TERMINAL_GET_CWD: 'terminal:getCwd',
+  TERMINAL_DETACH: 'terminal:detach',
+  TERMINAL_ATTACH: 'terminal:attach',
+  TERMINAL_GET_LAYOUT: 'terminal:getLayout',
+  TERMINAL_SET_LAYOUT: 'terminal:setLayout',
+  TERMINAL_BROADCAST: 'terminal:broadcast',
+  TERMINAL_SEND_SIGNAL: 'terminal:sendSignal',
+  TERMINAL_CLEAR: 'terminal:clear',
 };
 
 module.exports = { Channels };

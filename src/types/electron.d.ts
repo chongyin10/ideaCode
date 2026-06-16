@@ -84,6 +84,60 @@ export interface RecentProject {
   openedCount: number;
 }
 
+/* ─── 终端 ─── */
+
+export interface TerminalProfile {
+  name: string;
+  path: string;
+  args?: string[];
+  icon?: string;
+}
+
+export interface TerminalCreateConfig {
+  shellConfig?: { name: string; path: string; args?: string[] };
+  executable?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  cwd?: string;
+  cols?: number;
+  rows?: number;
+}
+
+export interface TerminalCreateResult {
+  success: boolean;
+  id?: number;
+  error?: string;
+}
+
+export interface TerminalOutputEvent {
+  id: number;
+  type: 'data' | 'ready' | 'exit';
+  data?: string;
+  pid?: number;
+  cwd?: string;
+  exitCode?: number;
+  signal?: number;
+}
+
+export interface TerminalProfilesResult {
+  success: boolean;
+  profiles?: TerminalProfile[];
+  defaultShell?: TerminalProfile;
+  error?: string;
+}
+
+export interface TerminalCwdResult {
+  success: boolean;
+  cwd?: string;
+  error?: string;
+}
+
+export interface TerminalLayoutResult {
+  success: boolean;
+  layout?: { tabs: Array<{ id: number; pid?: number; config: unknown; cwd: string }> };
+  error?: string;
+}
+
 /* ─── Electron API 接口（由 preload 脚本注入） ─── */
 
 export interface ElectronAPI {
@@ -187,14 +241,34 @@ export interface ElectronAPI {
   tsserver: {
     start: (root: string) => Promise<boolean>;
     stop: () => Promise<boolean>;
-    open: (file: string, content: string) => Promise<any>;
+    open: (file: string, content: string) => Promise<unknown>;
     close: (file: string) => Promise<void>;
     change: (file: string, content: string) => Promise<void>;
-    completions: (file: string, line: number, offset: number) => Promise<any[]>;
-    definition: (file: string, line: number, offset: number) => Promise<any[]>;
+    completions: (file: string, line: number, offset: number) => Promise<unknown[]>;
+    definition: (file: string, line: number, offset: number) => Promise<unknown[]>;
     semanticTokens: (file: string) => Promise<{ legend?: { tokenTypes: string[]; tokenModifiers: string[] }; resultId?: string; data: number[] } | null>;
-    quickInfo: (file: string, line: number, offset: number) => Promise<any>;
-    onDiagnostics: (cb: (data: any) => void) => () => void;
+    quickInfo: (file: string, line: number, offset: number) => Promise<unknown>;
+    onDiagnostics: (cb: (data: unknown) => void) => () => void;
+  };
+
+  /** 终端 — PTY 伪终端集成 */
+  terminal: {
+    create: (config?: TerminalCreateConfig) => Promise<TerminalCreateResult>;
+    dispose: (id: number) => Promise<{ success: boolean }>;
+    input: (id: number, data: string) => Promise<{ success: boolean }>;
+    resize: (id: number, cols: number, rows: number) => Promise<{ success: boolean }>;
+    sendSignal: (id: number, signal: string) => Promise<{ success: boolean }>;
+    clear: (id: number) => Promise<{ success: boolean }>;
+    ack: (id: number, charCount: number) => Promise<{ success: boolean }>;
+    listProfiles: () => Promise<TerminalProfilesResult>;
+    getCwd: (id: number) => Promise<TerminalCwdResult>;
+    detach: (id: number) => Promise<{ success: boolean }>;
+    attach: (id: number) => Promise<{ success: boolean }>;
+    getLayout: () => Promise<TerminalLayoutResult>;
+    setLayout: (layout: unknown) => Promise<{ success: boolean }>;
+    broadcast: (senderId: number, data: string, targetIds: number[]) => Promise<{ success: boolean }>;
+    onOutput: (callback: (data: TerminalOutputEvent) => void) => () => void;
+    onExit: (callback: (data: TerminalOutputEvent) => void) => () => void;
   };
 }
 

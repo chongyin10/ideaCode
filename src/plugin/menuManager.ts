@@ -95,7 +95,7 @@ export function contributionToMenuItem(c: MenuContribution): {
   disabled?: boolean;
   group?: string;
   order?: number;
-  children?: any[];
+  children?: { id: string; label: string; icon?: React.ReactNode; shortcut?: string; disabled?: boolean; group?: string; order?: number; command?: string; onClick?: () => void }[];
   command?: string;
   onClick?: () => void;
 } {

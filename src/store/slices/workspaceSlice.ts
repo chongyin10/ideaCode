@@ -327,7 +327,7 @@ export const refreshGitStatus = createAsyncThunk(
 
 export const refreshAllFilePaths = createAsyncThunk(
   'workspace/refreshAllFilePaths',
-  async (overrideSource?: FileSource, { getState }) => {
+  async (overrideSource: FileSource | undefined, { getState }) => {
     const state = (getState() as { workspace: WorkspaceState }).workspace;
     const rootSource = overrideSource || state.rootSource;
     if (!rootSource) return [];

@@ -15,8 +15,11 @@ async function start() {
   console.log(`\n[dev] Vite server ready at ${localUrl}\n`);
 
   // 启动 Electron
+  // 强制取消 ELECTRON_RUN_AS_NODE，避免 Electron 以 Node 模式运行导致 app 等 API 不可用
+  const electronEnv = { ...process.env, VITE_DEV_SERVER_URL: localUrl };
+  delete electronEnv.ELECTRON_RUN_AS_NODE;
   const electronProcess = spawn('npx', ['electron', 'electron/main.cjs'], {
-    env: { ...process.env, VITE_DEV_SERVER_URL: localUrl },
+    env: electronEnv,
     stdio: 'inherit',
     shell: true,
   });

@@ -33,6 +33,7 @@ import { setShowCloneForm, refreshGitStatus as refreshGitSliceStatus } from '../
 import { switchPanel } from '../../store/slices/layoutSlice';
 import { openDirectory } from '../../services/fileService';
 import type { FileEntry, FileSource } from '../../services/fileService';
+import type { GitStatusMap } from '../../types/electron';
 import {
   isPath,
   isElectron,
@@ -148,7 +149,7 @@ const ExplorerContent = () => {
   const gitMerge = useAppSelector((s) => s.git.merge);
   const gitUntracked = useAppSelector((s) => s.git.untracked);
   // 合并供 FileTree 使用
-  const gitStatus = useMemo(() => ({ ...gitStaged, ...gitChanges, ...gitMerge, ...gitUntracked }), [gitStaged, gitChanges, gitMerge, gitUntracked]);
+  const gitStatus = useMemo<GitStatusMap>(() => ({ ...gitStaged, ...gitChanges, ...gitMerge, ...gitUntracked }) as GitStatusMap, [gitStaged, gitChanges, gitMerge, gitUntracked]);
   const expandPaths = useAppSelector((state) => state.workspace.expandPaths);
   const expandedDirs = useAppSelector((state) => state.workspace.expandedDirs);
   const openedFiles = useAppSelector((state) => state.workspace.openedFiles);
@@ -364,7 +365,7 @@ const ExplorerContent = () => {
       alert('重命名失败，请检查名称是否合法');
       throw err;
     }
-  }, [notifyChange]);
+  }, [dispatch, notifyChange]);
 
   const handleRenameCancel = useCallback(() => {
     setPendingRename(null);
@@ -642,7 +643,7 @@ const ExplorerContent = () => {
     });
 
     return items;
-  }, [contextMenu, rootSource, startCreate, startRename, handleFindInFiles, handlePaste, notifyChange, selectedEntries, wrapWithClickTracking]);
+  }, [contextMenu, dispatch, rootSource, startCreate, startRename, handleFindInFiles, handlePaste, notifyChange, selectedEntries, wrapWithClickTracking]);
 
   const stableOnOpenFile = useCallback((entry: FileEntry) => {
     dispatch(closeDiffView());

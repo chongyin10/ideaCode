@@ -225,8 +225,8 @@ const SourceControlPanel = () => {
   const renderSection = useCallback(
     (title: string, entries: { path: string; code: string }[], open: boolean,
      setOpen: (v: boolean) => void, _hAction: string,
-     headerBtns: { label: string; icon: React.FC<{ size: number; strokeWidth: number }>; handler: () => void }[],
-     itemBtns: { icon: React.FC<{ size: number; strokeWidth: number }>; handler: (p: string) => void; title: string }[]) => (
+     headerBtns: { label: string; icon: React.ElementType<{ size?: number | string; strokeWidth?: number | string }>; handler: () => void }[],
+     itemBtns: { icon: React.ElementType<{ size?: number | string; strokeWidth?: number | string }>; handler: (p: string) => void; title: string }[]) => (
       <div className="scm-section">
         <div className="scm-section__header" onClick={() => setOpen(!open)}>
           <ChevronRight size={12} strokeWidth={1.5} className={open ? 'scm-rotated' : ''} />

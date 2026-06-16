@@ -16,7 +16,7 @@ function gitApi() {
 export const gitService = {
   /** 获取文件状态映射 */
   async getStatus(dirPath: string): Promise<GitStatusResult> {
-    return gitApi()?.getStatus(dirPath) ?? { staged: {}, unstaged: {} };
+    return gitApi()?.getStatus(dirPath) ?? { staged: {}, changes: {}, merge: {}, untracked: {} };
   },
 
   /** 获取当前分支名 */

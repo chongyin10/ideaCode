@@ -144,17 +144,19 @@ class LinkedList<K, V> {
     this._size++;
   }
 
-  remove(node: WTinyLFUNode<K, V>): void {
-    node.prev!.next = node.next;
-    node.next!.prev = node.prev;
+  remove(node: WTinyLFUNode<K, V>): boolean {
+    if (!node.prev || !node.next) return false;
+    node.prev.next = node.next;
+    node.next.prev = node.prev;
     node.prev = null;
     node.next = null;
     this._size--;
+    return true;
   }
 
   removeTail(): WTinyLFUNode<K, V> | null {
     const node = this.tail.prev;
-    if (node === this.head) return null;
+    if (node === this.head || !node) return null;
     this.remove(node);
     return node;
   }
@@ -221,14 +223,15 @@ export class WTinyLFU<K extends string, V> {
 
     this.tinyLFU.increment(key as string);
 
-    // 确定节点在哪个段
-    if (this.windowList.remove(node) || this.reList(node)) {
-      // 在 Window → 不移动
+    // 确定节点在哪个段并重新放置
+    const segment = this.reList(node);
+    if (segment === 'window') {
+      // 在 Window → 移到 Window 头部
       this.windowList.addToHead(node);
-    } else if (this.protectedList.remove(node) || this.reList(node)) {
+    } else if (segment === 'protected') {
       // 在 Protected → 移到 Protected 头部
       this.protectedList.addToHead(node);
-    } else if (this.probationList.remove(node) || this.reList(node)) {
+    } else if (segment === 'probation') {
       // 在 Probation → 如果频率够高，晋升到 Protected
       const freqEstimate = this.tinyLFU.estimate(key as string);
       if (freqEstimate > 3) {
@@ -248,12 +251,12 @@ export class WTinyLFU<K extends string, V> {
     return node.value;
   }
 
-  /** 尝试从链表移除节点（不抛错） */
-  private reList(node: WTinyLFUNode<K, V>): boolean {
-    try { this.windowList.remove(node); return true; } catch { /* 不在 window */ }
-    try { this.probationList.remove(node); return true; } catch { /* 不在 probation */ }
-    try { this.protectedList.remove(node); return true; } catch { /* 不在 protected */ }
-    return false;
+  /** 尝试从所在链表移除节点，返回所在段 */
+  private reList(node: WTinyLFUNode<K, V>): 'window' | 'probation' | 'protected' | null {
+    if (this.windowList.remove(node)) return 'window';
+    if (this.probationList.remove(node)) return 'probation';
+    if (this.protectedList.remove(node)) return 'protected';
+    return null;
   }
 
   set(key: K, value: V): void {

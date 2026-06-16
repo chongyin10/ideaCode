@@ -45,7 +45,9 @@ const initialState: GitState = {
 
 /* ─── Thunks ─── */
 
-function getRootPath(state: { workspace: { rootSource: string | FileSystemHandle | null } }): string | null {
+type GitRootState = { workspace: { rootSource: string | FileSystemHandle | null } };
+
+function getRootPath(state: GitRootState): string | null {
   const root = state.workspace.rootSource;
   return typeof root === 'string' ? root : null;
 }
@@ -53,7 +55,7 @@ function getRootPath(state: { workspace: { rootSource: string | FileSystemHandle
 export const refreshGitStatus = createAsyncThunk(
   'git/refreshStatus',
   async (_: void, { getState }) => {
-    const root = getRootPath(getState() as { workspace: { rootSource: unknown } });
+    const root = getRootPath(getState() as GitRootState);
     if (!root) return null;
     const result = await gitService.getStatus(root);
     return result;
@@ -63,7 +65,7 @@ export const refreshGitStatus = createAsyncThunk(
 export const refreshBranch = createAsyncThunk(
   'git/refreshBranch',
   async (_: void, { getState }) => {
-    const root = getRootPath(getState() as { workspace: { rootSource: unknown } });
+    const root = getRootPath(getState() as GitRootState);
     if (!root) return null;
     const [branch, behindAhead, remotes] = await Promise.all([
       gitService.getBranch(root),
@@ -77,7 +79,7 @@ export const refreshBranch = createAsyncThunk(
 export const refreshBranches = createAsyncThunk(
   'git/refreshBranches',
   async (_: void, { getState }) => {
-    const root = getRootPath(getState() as { workspace: { rootSource: unknown } });
+    const root = getRootPath(getState() as GitRootState);
     if (!root) return [];
     return gitService.listBranches(root);
   }
@@ -86,7 +88,7 @@ export const refreshBranches = createAsyncThunk(
 export const refreshLog = createAsyncThunk(
   'git/refreshLog',
   async (_: void, { getState }) => {
-    const root = getRootPath(getState() as { workspace: { rootSource: unknown } });
+    const root = getRootPath(getState() as GitRootState);
     if (!root) return [];
     return gitService.getLog(root);
   }
@@ -95,7 +97,7 @@ export const refreshLog = createAsyncThunk(
 export const refreshStashes = createAsyncThunk(
   'git/refreshStashes',
   async (_: void, { getState }) => {
-    const root = getRootPath(getState() as { workspace: { rootSource: unknown } });
+    const root = getRootPath(getState() as GitRootState);
     if (!root) return [];
     return gitService.stashList(root);
   }
@@ -104,7 +106,7 @@ export const refreshStashes = createAsyncThunk(
 export const stageFiles = createAsyncThunk(
   'git/stage',
   async (files: string[], { getState, dispatch }) => {
-    const root = getRootPath(getState() as { workspace: { rootSource: unknown } });
+    const root = getRootPath(getState() as GitRootState);
     if (!root) throw new Error('no project');
     // #1 分块批量暂存: 单批 ≤50 个文件，避免 shell 参数过长
     const BATCH = 50;
@@ -118,7 +120,7 @@ export const stageFiles = createAsyncThunk(
 export const unstageFiles = createAsyncThunk(
   'git/unstage',
   async (files: string[], { getState, dispatch }) => {
-    const root = getRootPath(getState() as { workspace: { rootSource: unknown } });
+    const root = getRootPath(getState() as GitRootState);
     if (!root) throw new Error('no project');
     await gitService.unstage(root, files);
     dispatch(refreshGitStatus());
@@ -128,7 +130,7 @@ export const unstageFiles = createAsyncThunk(
 export const commit = createAsyncThunk(
   'git/commit',
   async (message: string, { getState, dispatch }) => {
-    const root = getRootPath(getState() as { workspace: { rootSource: unknown } });
+    const root = getRootPath(getState() as GitRootState);
     if (!root) throw new Error('no project');
     const output = await gitService.commit(root, message);
     await Promise.all([
@@ -142,7 +144,7 @@ export const commit = createAsyncThunk(
 export const checkoutBranch = createAsyncThunk(
   'git/checkout',
   async (branch: string, { getState, dispatch }) => {
-    const root = getRootPath(getState() as { workspace: { rootSource: unknown } });
+    const root = getRootPath(getState() as GitRootState);
     if (!root) throw new Error('no project');
     await gitService.checkout(root, branch);
     await Promise.all([
@@ -161,7 +163,7 @@ export const checkoutBranch = createAsyncThunk(
 export const createBranch = createAsyncThunk(
   'git/createBranch',
   async ({ branch, startPoint }: { branch: string; startPoint?: string }, { getState, dispatch }) => {
-    const root = getRootPath(getState() as { workspace: { rootSource: unknown } });
+    const root = getRootPath(getState() as GitRootState);
     if (!root) throw new Error('no project');
     await gitService.createBranch(root, branch, startPoint);
     await Promise.all([
@@ -175,7 +177,7 @@ export const createBranch = createAsyncThunk(
 export const pullBranch = createAsyncThunk(
   'git/pull',
   async (_: void, { getState, dispatch }) => {
-    const root = getRootPath(getState() as { workspace: { rootSource: unknown } });
+    const root = getRootPath(getState() as GitRootState);
     if (!root) throw new Error('no project');
     const output = await gitService.pull(root);
     await Promise.all([
@@ -190,7 +192,7 @@ export const pullBranch = createAsyncThunk(
 export const pushBranch = createAsyncThunk(
   'git/push',
   async (_: void, { getState, dispatch }) => {
-    const root = getRootPath(getState() as { workspace: { rootSource: unknown } });
+    const root = getRootPath(getState() as GitRootState);
     if (!root) throw new Error('no project');
     const output = await gitService.push(root);
     await Promise.all([
@@ -204,7 +206,7 @@ export const pushBranch = createAsyncThunk(
 export const discardFile = createAsyncThunk(
   'git/discard',
   async (file: string, { getState, dispatch }) => {
-    const root = getRootPath(getState() as { workspace: { rootSource: unknown } });
+    const root = getRootPath(getState() as GitRootState);
     if (!root) throw new Error('no project');
     await gitService.discard(root, file);
     dispatch(refreshGitStatus());
@@ -214,7 +216,7 @@ export const discardFile = createAsyncThunk(
 export const stashPush = createAsyncThunk(
   'git/stashPush',
   async (message: string | undefined, { getState, dispatch }) => {
-    const root = getRootPath(getState() as { workspace: { rootSource: unknown } });
+    const root = getRootPath(getState() as GitRootState);
     if (!root) throw new Error('no project');
     await gitService.stashPush(root, message);
     await Promise.all([
@@ -227,7 +229,7 @@ export const stashPush = createAsyncThunk(
 export const stashPop = createAsyncThunk(
   'git/stashPop',
   async (_: void, { getState, dispatch }) => {
-    const root = getRootPath(getState() as { workspace: { rootSource: unknown } });
+    const root = getRootPath(getState() as GitRootState);
     if (!root) throw new Error('no project');
     await gitService.stashPop(root);
     await Promise.all([
@@ -240,7 +242,7 @@ export const stashPop = createAsyncThunk(
 export const initRepo = createAsyncThunk(
   'git/init',
   async (_: void, { getState, dispatch }) => {
-    const root = getRootPath(getState() as { workspace: { rootSource: unknown } });
+    const root = getRootPath(getState() as GitRootState);
     if (!root) throw new Error('no project');
     await gitService.init(root);
     await Promise.all([
@@ -351,7 +353,7 @@ const gitSlice = createSlice({
         (action) => action.type.startsWith('git/') && action.type.endsWith('/rejected'),
         (state, action) => {
           state.loading = false;
-          state.error = (action.error as { message?: string }).message || '操作失败';
+          state.error = ((action as { error?: { message?: string } }).error?.message) || '操作失败';
           // #12 熔断器: 连续失败计数
           state.failureCount = (state.failureCount || 0) + 1;
           if (state.failureCount >= 5) {

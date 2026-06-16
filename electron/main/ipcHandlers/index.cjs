@@ -5,6 +5,7 @@ const { registerExtensionHandlers } = require('./extensionHandler.cjs');
 const { registerHistoryHandlers } = require('./historyHandler.cjs');
 const { registerGitHandlers } = require('./gitHandler.cjs');
 const { registerTsServerHandlers } = require('../lsp/tsserverManager.cjs');
+const { registerTerminalHandlers } = require('./terminalHandler.cjs');
 
 /**
  * 统一注册所有 IPC 处理器
@@ -18,6 +19,7 @@ function registerIpcHandlers(deps = {}) {
   registerFsHandlers();
   registerGitHandlers();
   registerTsServerHandlers();
+  registerTerminalHandlers();
 
   if (windowManager) {
     registerWindowHandlers(windowManager);

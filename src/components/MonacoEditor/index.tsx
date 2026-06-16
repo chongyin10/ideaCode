@@ -1,4 +1,5 @@
-import Editor from '@monaco-editor/react';
+import Editor, { type OnMount } from '@monaco-editor/react';
+import type * as monaco from 'monaco-editor';
 import { useRef, useEffect, useCallback } from 'react';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import { clearSearchHighlight } from '../../store/slices/workspaceSlice';
@@ -65,9 +66,9 @@ const TOKEN_COLOR_GROUP: Record<string, string> = {
 function buildSemanticDecorations(
   data: Uint32Array,
   legend: { tokenTypes: string[]; tokenModifiers: string[] },
-  monaco: { Range: new (sl: number, sc: number, el: number, ec: number) => unknown },
-): Array<{ range: unknown; options: { inlineClassName: string } }> {
-  const decs: Array<{ range: unknown; options: { inlineClassName: string } }> = [];
+  monacoInstance: typeof monaco,
+): Array<{ range: monaco.Range; options: { inlineClassName: string } }> {
+  const decs: Array<{ range: monaco.Range; options: { inlineClassName: string } }> = [];
   let line = 0;
   let col = 0;
 
@@ -95,7 +96,7 @@ function buildSemanticDecorations(
     const className = isDeclaration ? `${baseClass} sem-italic` : baseClass;
 
     decs.push({
-      range: new monaco.Range(line + 1, col + 1, line + 1, col + 1 + len),
+      range: new monacoInstance.Range(line + 1, col + 1, line + 1, col + 1 + len),
       options: { inlineClassName: className },
     });
   }
@@ -105,13 +106,13 @@ function buildSemanticDecorations(
 
 /** 状态机逐行扫描：匹配 JSX/HTML 标签名 + 尖括号 <> </ /> + 片段 <> </>，生成 decoration 数组 */
 function buildGrammarDecorations(
-  model: { getLanguageId(): string; getLineContent(lineNumber: number): string; getLineCount(): number },
-  monaco: { Range: new (sl: number, sc: number, el: number, ec: number) => unknown },
-): Array<{ range: unknown; options: { inlineClassName: string } }> {
+  model: monaco.editor.ITextModel,
+  monacoInstance: typeof monaco,
+): Array<{ range: monaco.Range; options: { inlineClassName: string } }> {
   const langId = model.getLanguageId();
   if (!/typescriptreact|javascriptreact|typescript|javascript|html|razor|handlebars/i.test(langId)) return [];
 
-  const decs: Array<{ range: unknown; options: { inlineClassName: string } }> = [];
+  const decs: Array<{ range: monaco.Range; options: { inlineClassName: string } }> = [];
   const lineCount = model.getLineCount();
 
   for (let line = 1; line <= lineCount; line++) {
@@ -129,30 +130,30 @@ function buildGrammarDecorations(
 
           // 片段标签：<> / </>
           if (content[j + 1] === '>') {
-            decs.push({ range: new monaco.Range(line, j + 1, line, j + 3), options: { inlineClassName: 'sem-fragment' } });
+            decs.push({ range: new monacoInstance.Range(line, j + 1, line, j + 3), options: { inlineClassName: 'sem-fragment' } });
             j++; inTag = false; continue;
           }
           if (j + 2 < len && content[j + 1] === '/' && content[j + 2] === '>') {
-            decs.push({ range: new monaco.Range(line, j + 1, line, j + 4), options: { inlineClassName: 'sem-fragment' } });
+            decs.push({ range: new monacoInstance.Range(line, j + 1, line, j + 4), options: { inlineClassName: 'sem-fragment' } });
             j += 2; inTag = false; continue;
           }
 
           // 开尖括号 < → sem-bracket
-          decs.push({ range: new monaco.Range(line, j + 1, line, j + 2), options: { inlineClassName: 'sem-bracket' } });
+          decs.push({ range: new monacoInstance.Range(line, j + 1, line, j + 2), options: { inlineClassName: 'sem-bracket' } });
 
           // 闭标签斜杠 / → sem-bracket
           if (content[j + 1] === '/') {
-            decs.push({ range: new monaco.Range(line, j + 2, line, j + 3), options: { inlineClassName: 'sem-bracket' } });
+            decs.push({ range: new monacoInstance.Range(line, j + 2, line, j + 3), options: { inlineClassName: 'sem-bracket' } });
             j++; // skip '/'
           }
         }
       } else {
         // ── 在标签内部 ──
         if (ch === '>') {
-          decs.push({ range: new monaco.Range(line, j + 1, line, j + 2), options: { inlineClassName: 'sem-bracket' } });
+          decs.push({ range: new monacoInstance.Range(line, j + 1, line, j + 2), options: { inlineClassName: 'sem-bracket' } });
           inTag = false;
         } else if (ch === '/' && j + 1 < len && content[j + 1] === '>') {
-          decs.push({ range: new monaco.Range(line, j + 1, line, j + 3), options: { inlineClassName: 'sem-bracket' } });
+          decs.push({ range: new monacoInstance.Range(line, j + 1, line, j + 3), options: { inlineClassName: 'sem-bracket' } });
           j++; inTag = false;
         } else if (ch === '{') {
           // 跳过 JSX 表达式
@@ -187,7 +188,7 @@ function buildGrammarDecorations(
       const endCol = startCol + tagName.length;
 
       decs.push({
-        range: new monaco.Range(line, startCol, line, endCol),
+        range: new monacoInstance.Range(line, startCol, line, endCol),
         options: { inlineClassName: 'sem-variable' },
       });
     }
@@ -347,8 +348,8 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
   const searchHighlight = useAppSelector((state) => state.workspace.searchHighlight);
   const { theme, fontSize, semanticHighlightingEnabled, wordWrap, minimapEnabled } = useAppSelector((state) => state.settings);
 
-  const editorRef = useRef<Parameters<Parameters<typeof Editor>[0]['onMount']>[0] | null>(null);
-  const monacoRef = useRef<Parameters<Parameters<typeof Editor>[0]['onMount']>[1] | null>(null);
+  const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
+  const monacoRef = useRef<Parameters<OnMount>[1] | null>(null);
   const decorationsRef = useRef<string[]>([]);
   const pendingRef = useRef<SearchHighlight | null>(null);
   const snapshotAppliedRef = useRef(false);
@@ -406,7 +407,7 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
         const count = (tsserverRefCounts.get(currentPath) || 1) - 1;
         if (count <= 0) {
           tsserverRefCounts.delete(currentPath);
-          tsService.close(currentPath).catch(() => {});
+          tsService.close(currentPath)?.catch(() => {});
         } else {
           tsserverRefCounts.set(currentPath, count);
         }
@@ -536,7 +537,7 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
         if (!isBrowser && path) {
           if (changeTimerRef.current) clearTimeout(changeTimerRef.current);
           changeTimerRef.current = setTimeout(() => {
-            tsService.change(path, v || '').catch(() => {});
+            tsService.change(path, v || '')?.catch(() => {});
           }, 500);
         }
       }}
@@ -597,7 +598,11 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
         // Monaco standalone 模式下，如果目标 model 不存在会抛 "Model not found"，
         // 因此必须全部接管，自己处理滚动或文件打开。
         const openerDisposable = monaco.editor.registerEditorOpener({
-          openCodeEditor(source, resource, selectionOrPosition) {
+          openCodeEditor(
+            source: monaco.editor.ICodeEditor,
+            resource: monaco.Uri,
+            selectionOrPosition?: monaco.IRange | { lineNumber: number; column: number },
+          ) {
             if (!resource) return false;
             const targetPath = resource.path;
             const currentPath = pathRef.current;
@@ -654,13 +659,12 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
 
           // 注册补全 provider
           lspDisposablesRef.current.push(monaco.languages.registerCompletionItemProvider(language, {
-            provideCompletionItems: async (model, position) => {
+            provideCompletionItems: async (_model: monaco.editor.ITextModel, position: monaco.Position) => {
               if (!path) return { suggestions: [] };
               const results = await tsService.completions(path, position.lineNumber - 1, position.column - 1);
               if (!results || !results.length) return { suggestions: [] };
               return {
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                suggestions: results.map((entry: any) => ({
+                suggestions: results.map((entry) => ({
                   label: entry.name,
                   kind: entry.kind === 'function' ? monaco.languages.CompletionItemKind.Function
                     : entry.kind === 'class' ? monaco.languages.CompletionItemKind.Class
@@ -681,7 +685,7 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
           // 注册悬停 provider（使用原始函数，绕过上方拦截）
           const registerHover = originalRegisterHoverProvider || monaco.languages.registerHoverProvider;
           lspDisposablesRef.current.push(registerHover(language, {
-            provideHover: async (_model, position) => {
+            provideHover: async (_model: monaco.editor.ITextModel, position: monaco.Position) => {
               if (!path) return null;
               const info = await tsService.quickInfo(path, position.lineNumber - 1, position.column - 1);
               if (!info) return null;
@@ -702,7 +706,7 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
 
           // 注册定义跳转 provider
           lspDisposablesRef.current.push(monaco.languages.registerDefinitionProvider(language, {
-            provideDefinition: async (_model, position) => {
+            provideDefinition: async (_model: monaco.editor.ITextModel, position: monaco.Position) => {
               const currentPath = pathRef.current;
               if (!currentPath) return null;
               const defs = await tsService.definition(currentPath, position.lineNumber - 1, position.column - 1);

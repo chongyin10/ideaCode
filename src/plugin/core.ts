@@ -145,9 +145,9 @@ class PluginStorageManager {
   private scheduleFlush() {
     if (this.writeTimer) clearTimeout(this.writeTimer);
 
-    // 指数退避：cooldown = min(500 * 2^writes, 30s)
+    // 指数退避：cooldown = min(cooldownMs * 2^writes, 30s)
     const delay = Math.min(
-      500 * Math.pow(2, this.consecutiveWrites),
+      this.cooldownMs * Math.pow(2, this.consecutiveWrites),
       30000
     );
 
