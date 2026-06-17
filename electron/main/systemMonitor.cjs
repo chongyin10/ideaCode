@@ -55,7 +55,18 @@ class SystemMonitor {
     ]);
 
     const cpu = typeof load.currentLoad === 'number' ? load.currentLoad : 0;
-    const memory = mem.total > 0 ? (mem.used / mem.total) * 100 : 0;
+    // 使用“已用且不可回收”的内存更贴近用户感知：
+    // 优先用 total - available（macOS/Linux 均可），取不到时回退 active
+    let memory = 0;
+    if (mem.total > 0) {
+      if (typeof mem.available === 'number' && mem.available > 0) {
+        memory = ((mem.total - mem.available) / mem.total) * 100;
+      } else if (typeof mem.active === 'number') {
+        memory = (mem.active / mem.total) * 100;
+      } else {
+        memory = (mem.used / mem.total) * 100;
+      }
+    }
 
     let gpu = null;
     const controllers = graphics?.controllers || [];

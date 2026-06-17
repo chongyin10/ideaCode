@@ -584,7 +584,27 @@ function registerTerminalHandlers(terminalViewManager, broadcastHelpers) {
   });
 
   ipcMain.handle(Channels.TERMINAL_CLEAR, async (_event, { id }) => {
-    sendInput(id, '\x1b[2J\x1b[H');
+    const term = terminals.get(id);
+    if (!term || term.exited) return { success: false };
+    try {
+      // 1. 直接向终端渲染进程发送清屏转义序列，清空屏幕和滚动缓冲区
+      const target = term.viewWebContents && !term.viewWebContents.isDestroyed()
+        ? term.viewWebContents
+        : term.ownerWebContents;
+      if (target && !target.isDestroyed()) {
+        target.send(Channels.TERMINAL_OUTPUT, {
+          id,
+          type: 'data',
+          data: '\x1b[2J\x1b[3J\x1b[H',
+        });
+      }
+      // 2. 给 PTY 发送 Ctrl-L，触发 shell 的 clear-screen 小部件重新打印提示符
+      if (term.pty && !term.exited) {
+        term.pty.write('\x0c');
+      }
+    } catch (e) {
+      console.warn('[TerminalHandler] 清屏失败:', e.message);
+    }
     return { success: true };
   });
 
