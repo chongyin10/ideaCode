@@ -112,6 +112,10 @@ const Channels = {
   TERMINAL_VIEW_SET_BROADCAST: 'terminal:view:setBroadcast',
   TERMINAL_VIEW_FIND: 'terminal:view:find',
   TERMINAL_VIEW_CLEAR_SELECTION: 'terminal:view:clearSelection',
+  TERMINAL_VIEW_RESIZE_STATE: 'terminal:view:resizeState',
+
+  /* ─── 右侧面板 resize 状态 ─── */
+  RIGHT_PANEL_RESIZE_STATE: 'rightPanel:resizeState',
 };
 
 /**
@@ -268,6 +272,12 @@ const electronAPI = {
     setBroadcast: (enabled) => ipcRenderer.invoke(Channels.TERMINAL_VIEW_SET_BROADCAST, { enabled }),
     onFind: (callback) => onChannel(Channels.TERMINAL_VIEW_FIND, callback),
     onClearSelection: (callback) => onChannel(Channels.TERMINAL_VIEW_CLEAR_SELECTION, callback),
+    onResizeState: (callback) => onChannel(Channels.TERMINAL_VIEW_RESIZE_STATE, callback),
+  },
+
+  /** 右侧面板 resize 状态 — 主窗口调用 */
+  rightPanel: {
+    setResizeState: (state) => ipcRenderer.send(Channels.RIGHT_PANEL_RESIZE_STATE, state),
   },
 };
 

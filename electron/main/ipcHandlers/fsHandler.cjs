@@ -94,6 +94,47 @@ function registerFsHandlers() {
 
   /* ── 文件监听（支持后台模式持续运行） ── */
   const watchers = new Map();
+  const gitRefreshTimers = new Map();
+
+  /**
+   * 向上查找 Git 仓库根目录
+   * @param {string} startPath
+   * @returns {string | null}
+   */
+  function findGitRoot(startPath) {
+    let dir = startPath;
+    while (dir !== path.dirname(dir)) {
+      if (fsSync.existsSync(path.join(dir, '.git'))) {
+        return dir;
+      }
+      dir = path.dirname(dir);
+    }
+    return null;
+  }
+
+  /**
+   * 触发 Git 状态刷新（防抖）
+   * @param {string} changedPath
+   */
+  function triggerGitRefresh(changedPath) {
+    const gitRoot = findGitRoot(changedPath);
+    if (!gitRoot) return;
+
+    const existing = gitRefreshTimers.get(gitRoot);
+    if (existing) clearTimeout(existing);
+
+    gitRefreshTimers.set(
+      gitRoot,
+      setTimeout(() => {
+        gitRefreshTimers.delete(gitRoot);
+        BrowserWindow.getAllWindows().forEach((win) => {
+          if (!win.isDestroyed()) {
+            win.webContents.send(Channels.GIT_STATUS_CHANGED, { cwd: gitRoot });
+          }
+        });
+      }, 300)
+    );
+  }
 
   ipcMain.handle(Channels.FS_WATCH, async (_event, watchPath) => {
     if (watchers.has(watchPath)) {
@@ -115,6 +156,10 @@ function registerFsHandlers() {
             });
           }
         });
+
+        // 若变更发生在 Git 仓库内，触发 Source Control 刷新
+        const changedPath = filename ? path.join(watchPath, filename) : watchPath;
+        triggerGitRefresh(changedPath);
       }
     );
 

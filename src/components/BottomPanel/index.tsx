@@ -341,8 +341,10 @@ const BottomPanel = () => {
 
   // 关键状态变化时全量同步（切换 tab、显隐面板、最大化等）
   useEffect(() => {
-    const raf = requestAnimationFrame(() => syncAllBounds());
-    return () => cancelAnimationFrame(raf);
+    syncAllBounds();
+    // CSS transition 结束后可能仍有一次最终尺寸，延迟兜底同步
+    const t = setTimeout(() => syncAllBounds(), 300);
+    return () => clearTimeout(t);
   }, [activeTabIdMemo, activeBottomTab, bottomPanelVisible, terminal.panelVisible, terminal.isMaximized, terminal.panelHeight, terminal.sidebarWidth, syncAllBounds]);
 
   // 窗口 resize 兜底

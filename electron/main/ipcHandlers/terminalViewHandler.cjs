@@ -69,6 +69,14 @@ function registerTerminalViewHandlers(terminalViewManager) {
     console.log(`[TerminalViewHandler] 终端页 ready: terminalId=${terminalId}`);
   });
 
+  // 右侧面板 resize 状态变化，广播给当前窗口的所有终端 BrowserView
+  ipcMain.on(Channels.RIGHT_PANEL_RESIZE_STATE, (event, state) => {
+    const ownerWindow = getOwnerWindow(event);
+    if (ownerWindow) {
+      terminalViewManager.broadcastResizeState(ownerWindow, state);
+    }
+  });
+
   // 设置当前窗口的广播模式
   ipcMain.handle(Channels.TERMINAL_VIEW_SET_BROADCAST, async (event, { enabled }) => {
     const ownerWindow = getOwnerWindow(event);

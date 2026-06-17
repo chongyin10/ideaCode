@@ -118,6 +118,10 @@ const Channels = {
   TERMINAL_VIEW_SET_BROADCAST: 'terminal:view:setBroadcast',
   TERMINAL_VIEW_FIND: 'terminal:view:find',
   TERMINAL_VIEW_CLEAR_SELECTION: 'terminal:view:clearSelection',
+  TERMINAL_VIEW_RESIZE_STATE: 'terminal:view:resizeState',
+
+  /* ─── 右侧面板 resize 状态 ─── */
+  RIGHT_PANEL_RESIZE_STATE: 'rightPanel:resizeState',
 };
 
 module.exports = { Channels };

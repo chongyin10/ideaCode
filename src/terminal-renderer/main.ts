@@ -12,7 +12,7 @@ if (!root) {
   // 页面可见性变化时触发一次 fit，避免从隐藏状态恢复后尺寸不对
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
-      // TerminalRenderer 内部的 ResizeObserver 会处理
+      renderer.syncBounds();
     }
   });
 }

@@ -1,5 +1,6 @@
 const { BrowserView, BrowserWindow } = require('electron');
 const path = require('path');
+const { Channels } = require('../shared/channels.cjs');
 
 const isDev = process.env.VITE_DEV_SERVER_URL !== undefined;
 
@@ -121,6 +122,22 @@ class TerminalViewManager {
     const view = this._getView(ownerWindow, terminalId);
     if (view && !view.webContents.isDestroyed()) {
       view.webContents.focus();
+    }
+  }
+
+  /**
+   * 向某个窗口下的所有终端 BrowserView 广播 resize 状态
+   * @param {import('electron').BrowserWindow} ownerWindow
+   * @param {'start' | 'end'} state
+   */
+  broadcastResizeState(ownerWindow, state) {
+    if (!ownerWindow || ownerWindow.isDestroyed()) return;
+    const windowViews = this.views.get(ownerWindow);
+    if (!windowViews) return;
+    for (const view of windowViews.values()) {
+      if (view && !view.webContents.isDestroyed()) {
+        view.webContents.send(Channels.TERMINAL_VIEW_RESIZE_STATE, state);
+      }
     }
   }
 

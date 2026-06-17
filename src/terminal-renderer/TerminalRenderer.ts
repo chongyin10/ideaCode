@@ -17,6 +17,16 @@ export class TerminalRenderer {
   private resizeObserver: ResizeObserver | null = null;
   private unsubscribeOutput: (() => void) | undefined = undefined;
   private disposed = false;
+  private viewportElement: HTMLElement | null = null;
+  private pendingFitTimer: ReturnType<typeof setTimeout> | null = null;
+  private pendingFitRetries = 0;
+  private static readonly MAX_FIT_RETRIES = 3;
+  private fitTimer: ReturnType<typeof setTimeout> | null = null;
+  private resizeTimer: ReturnType<typeof setTimeout> | null = null;
+  private pendingResize: { cols: number; rows: number } | null = null;
+  /** 右侧面板拖拽期间暂停终端 reflow/resize */
+  private isPanelResizing = false;
+  private panelResizeTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -47,6 +57,8 @@ export class TerminalRenderer {
       drawBoldTextInBrightColors: true,
       macOptionIsMeta: true,
       allowTransparency: true,
+      // 默认 false：光标行由 shell 自己重绘，避免 xterm 重排与 shell 重绘冲突导致乱码
+      reflowCursorLine: false,
     });
 
     this.fitAddon = new FitAddon();
@@ -60,6 +72,9 @@ export class TerminalRenderer {
     await this.loadOptionalAddons();
 
     this.terminal.open(this.container);
+
+    // 缓存 viewport 元素，用于精确测量滚动条宽度
+    this.viewportElement = this.container.querySelector('.xterm-viewport') as HTMLElement | null;
 
     // 输入直接发到 PTY
     this.terminal.onData((data) => {
@@ -100,14 +115,23 @@ export class TerminalRenderer {
       this.terminal.clearSelection();
     });
 
-    // 尺寸变化时 fit 并通知 PTY
-    let rafId = 0;
+    // 监听右侧面板拖拽状态：拖拽期间暂停 reflow，松开后（及频繁切换后的静止期）再触发一次 fit。
+    window.electronAPI?.terminalView?.onResizeState((state) => {
+      this.handlePanelResizeState(state);
+    });
+
+    // 尺寸变化时 fit 并通知 PTY。用 trailing debounce 避免拖拽/动画过程中频繁 reflow，
+    // 等尺寸稳定后再一次性重排，减少 shell 重绘时产生重复行。
     this.resizeObserver = new ResizeObserver(() => {
-      if (rafId) cancelAnimationFrame(rafId);
-      rafId = requestAnimationFrame(() => {
-        rafId = 0;
+      if (this.isPanelResizing) return;
+      if (this.fitTimer) {
+        clearTimeout(this.fitTimer);
+        this.fitTimer = null;
+      }
+      this.fitTimer = setTimeout(() => {
+        this.fitTimer = null;
         this.fitAndResize();
-      });
+      }, 250);
     });
     this.resizeObserver.observe(this.container);
 
@@ -159,14 +183,84 @@ export class TerminalRenderer {
     if (this.disposed) return;
     try {
       const rect = this.container.getBoundingClientRect();
-      if (rect.width === 0 || rect.height === 0) return;
+      if (rect.width === 0 || rect.height === 0) {
+        // 布局尚未就绪，稍后重试
+        this.scheduleFit();
+        return;
+      }
+
+      // 根据实际渲染的滚动条宽度调整 overviewRuler，让 FitAddon 准确计算列数，
+      // 避免因为默认 14px 与自定义 6px 滚动条不一致导致提前换行。
+      const scrollbarWidth = this.viewportElement
+        ? this.viewportElement.offsetWidth - this.viewportElement.clientWidth
+        : 0;
+      // FitAddon 会把 0 回退到 14，所以用极小值表示“无滚动条/overlay 滚动条”
+      this.terminal.options.overviewRuler = { width: scrollbarWidth || 0.01 };
 
       this.fitAddon.fit();
       const { cols, rows } = this.terminal;
-      window.electronAPI?.terminal?.resize(this.id, cols, rows);
+      // 等尺寸稳定后再通知 PTY，减少 shell 收到多次 SIGWINCH 后重绘出重复行
+      this.debouncedResize(cols, rows);
+      // 成功 fit 后重置重试计数
+      this.pendingFitRetries = 0;
     } catch {
       // ignore
     }
+  }
+
+  private scheduleFit(): void {
+    if (this.pendingFitTimer || document.visibilityState !== 'visible') return;
+    if (this.pendingFitRetries >= TerminalRenderer.MAX_FIT_RETRIES) return;
+    this.pendingFitRetries++;
+    this.pendingFitTimer = setTimeout(() => {
+      this.pendingFitTimer = null;
+      this.fitAndResize();
+    }, 100);
+  }
+
+  /** 供外部在页面重新可见时主动触发一次尺寸同步 */
+  syncBounds(): void {
+    if (this.isPanelResizing) return;
+    this.fitAndResize();
+  }
+
+  /** 处理右侧面板拖拽状态：拖拽中忽略尺寸变化，松开后防抖触发最终 fit */
+  private handlePanelResizeState(state: 'start' | 'end'): void {
+    if (state === 'start') {
+      if (this.panelResizeTimer) {
+        clearTimeout(this.panelResizeTimer);
+        this.panelResizeTimer = null;
+      }
+      this.isPanelResizing = true;
+      return;
+    }
+
+    if (state === 'end') {
+      if (this.panelResizeTimer) {
+        clearTimeout(this.panelResizeTimer);
+        this.panelResizeTimer = null;
+      }
+      this.panelResizeTimer = setTimeout(() => {
+        this.panelResizeTimer = null;
+        this.isPanelResizing = false;
+        this.fitAndResize();
+      }, 150);
+    }
+  }
+
+  private debouncedResize(cols: number, rows: number): void {
+    this.pendingResize = { cols, rows };
+    if (this.resizeTimer) {
+      clearTimeout(this.resizeTimer);
+      this.resizeTimer = null;
+    }
+    this.resizeTimer = setTimeout(() => {
+      this.resizeTimer = null;
+      if (this.pendingResize) {
+        window.electronAPI?.terminal?.resize(this.id, this.pendingResize.cols, this.pendingResize.rows);
+        this.pendingResize = null;
+      }
+    }, 150);
   }
 
   private trackOutput(length: number): void {
@@ -216,6 +310,22 @@ export class TerminalRenderer {
     if (this.ackTimer) {
       clearTimeout(this.ackTimer);
       this.ackTimer = null;
+    }
+    if (this.fitTimer) {
+      clearTimeout(this.fitTimer);
+      this.fitTimer = null;
+    }
+    if (this.resizeTimer) {
+      clearTimeout(this.resizeTimer);
+      this.resizeTimer = null;
+    }
+    if (this.pendingFitTimer) {
+      clearTimeout(this.pendingFitTimer);
+      this.pendingFitTimer = null;
+    }
+    if (this.panelResizeTimer) {
+      clearTimeout(this.panelResizeTimer);
+      this.panelResizeTimer = null;
     }
     try {
       this.terminal.dispose();

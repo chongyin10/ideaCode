@@ -8,9 +8,8 @@
   display: flex;
   flex-direction: column;
   border-left: none;
-  transition:
-    width 0.25s cubic-bezier(0.4, 0, 0.2, 1),
-    opacity 0.2s ease;
+  /* 禁用宽度动画：右侧面板展开/拖拽时终端只收到一次 resize，避免 xterm 频繁重排出错 */
+  transition: opacity 0.2s ease;
 }
 
 .right-panel.is-visible {

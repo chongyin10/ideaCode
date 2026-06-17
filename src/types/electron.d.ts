@@ -294,6 +294,12 @@ export interface ElectronAPI {
     setBroadcast: (enabled: boolean) => Promise<{ success: boolean }>;
     onFind: (callback: (data: { term: string; previous?: boolean }) => void) => () => void;
     onClearSelection: (callback: () => void) => () => void;
+    onResizeState: (callback: (state: 'start' | 'end') => void) => () => void;
+  };
+
+  /** 右侧面板 resize 状态 */
+  rightPanel: {
+    setResizeState: (state: 'start' | 'end') => void;
   };
 }
 
