@@ -67,7 +67,7 @@ const BottomPanel = () => {
   const { t } = useTranslation();
   const dispatch = useAppDispatch();
   const bottomTabs = useBottomTabs();
-  const { bottomPanelVisible, activeBottomTab, statusBarOverlayHeight } = useAppSelector((s) => s.layout);
+  const { bottomPanelVisible, activeBottomTab, statusBarOverlayHeight, modalOverlayOpen } = useAppSelector((s) => s.layout);
   const terminal = useAppSelector((s) => s.terminal);
   const rootSource = useAppSelector((s) => s.workspace.rootSource);
 
@@ -332,7 +332,7 @@ const BottomPanel = () => {
         y: rect.y,
         width: rect.width,
         height: Math.max(0, rect.height - overlayHeight),
-        visible,
+        visible: visible && !modalOverlayOpen,
       };
       setTerminalViewBounds(tab.processId, bounds);
       if (visible) visibleTabIds.add(tabId);
@@ -344,7 +344,7 @@ const BottomPanel = () => {
         setTerminalViewBounds(tab.processId, { x: 0, y: 0, width: 0, height: 0, visible: false });
       }
     }
-  }, [activeBottomTab, bottomPanelVisible, statusBarOverlayHeight]);
+  }, [activeBottomTab, bottomPanelVisible, statusBarOverlayHeight, modalOverlayOpen]);
 
   const observePlaceholder = useCallback((tabId: string, element: HTMLDivElement | null) => {
     const existing = resizeObservers.current.get(tabId);
@@ -375,7 +375,7 @@ const BottomPanel = () => {
     // CSS transition 结束后可能仍有一次最终尺寸，延迟兜底同步
     const t = setTimeout(() => syncAllBounds(), 300);
     return () => clearTimeout(t);
-  }, [activeTabIdMemo, activeBottomTab, bottomPanelVisible, terminal.panelVisible, terminal.isMaximized, terminal.panelHeight, terminal.sidebarWidth, statusBarOverlayHeight, syncAllBounds]);
+  }, [activeTabIdMemo, activeBottomTab, bottomPanelVisible, terminal.panelVisible, terminal.isMaximized, terminal.panelHeight, terminal.sidebarWidth, statusBarOverlayHeight, modalOverlayOpen, syncAllBounds]);
 
   // 窗口 resize 兜底
   useEffect(() => {

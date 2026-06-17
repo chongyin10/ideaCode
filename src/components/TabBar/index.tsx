@@ -10,6 +10,7 @@ interface TabBarProps {
   onClose: (id: string) => void;
   onPin?: (id: string) => void;
   onSplitView?: () => void;
+  onContextMenu?: (e: React.MouseEvent, id: string) => void;
   splitActive?: boolean;
   focused?: boolean;
   /** 正在加载中的文件 ID 集合 */
@@ -24,7 +25,7 @@ type DisplayTab = TabBarProps['tabs'][number] & { phase: TabPhase };
 
 const TRANSITION_MS = 200;
 
-const TabBar = ({ tabs, activeId, onActivate, onClose, onPin, onSplitView, splitActive, focused = true, loadingFiles, missingFileIds }: TabBarProps) => {
+const TabBar = ({ tabs, activeId, onActivate, onClose, onPin, onSplitView, onContextMenu, splitActive, focused = true, loadingFiles, missingFileIds }: TabBarProps) => {
   const { t } = useTranslation();
   const [displayTabs, setDisplayTabs] = useState<DisplayTab[]>([]);
   const prevTabsRef = useRef(tabs);
@@ -79,6 +80,10 @@ const TabBar = ({ tabs, activeId, onActivate, onClose, onPin, onSplitView, split
             key={tab.id}
             className={`tab-bar__item tab-bar__item--${tab.phase} ${focused && activeId === tab.id ? 'active' : ''} ${tab.isPreview ? 'preview' : ''} ${missingFileIds?.has(tab.id) ? 'deleted' : ''}`}
             onClick={() => onActivate(tab.id)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              onContextMenu?.(e, tab.id);
+            }}
             onDoubleClick={() => {
               if (tab.isPreview) {
                 onPin?.(tab.id);

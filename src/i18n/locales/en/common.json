@@ -325,7 +325,22 @@
     "close": "Close Diff View"
   },
   "tabBar": {
-    "splitViewTooltip": "Split View"
+    "splitViewTooltip": "Split View",
+    "contextMenu": {
+      "close": "Close",
+      "closeOthers": "Close Others",
+      "closeRight": "Close Tabs to the Right",
+      "closeLeft": "Close Tabs to the Left",
+      "closeAll": "Close All",
+      "copyPath": "Copy Path",
+      "copyRelativePath": "Copy Relative Path",
+      "reveal": "Reveal in Finder",
+      "findReferences": "Find File References"
+    },
+    "referencesModal": {
+      "title": "Find File References",
+      "noResults": "No references found"
+    }
   },
   "confirmDialog": {
     "save": "Save",

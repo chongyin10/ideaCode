@@ -16,6 +16,7 @@ import {
   type SearchOptions,
 } from '../utils/algorithms';
 import type { FileEntry } from './fileService';
+import { readFile } from './fileService';
 
 /* ────────────────────────────────────────────── */
 /*  QuickOpen：文件快速定位                        */
@@ -188,6 +189,104 @@ export function searchInFiles(
   }
 
   // 按匹配数量降序排列
+  return results.sort((a, b) => b.matchCount - a.matchCount);
+}
+
+/* ────────────────────────────────────────────── */
+/*  文件引用查找                                   */
+/* ────────────────────────────────────────────── */
+
+/**
+ * 查找项目中引用了目标文件的其他文件
+ *
+ * 根据目标文件的相对路径、文件名、无扩展名文件名等生成匹配模式，
+ * 使用 Aho-Corasick 多模式匹配在项目中搜索。
+ */
+const CODE_EXTENSIONS = new Set([
+  'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'vue', 'svelte',
+  'py', 'java', 'rb', 'php', 'go', 'rs', 'cpp', 'c', 'h', 'hpp', 'cs',
+  'swift', 'kt', 'scala', 'html', 'css', 'scss', 'less', 'json', 'md',
+  'yaml', 'yml', 'xml', 'sql', 'sh', 'bash', 'zsh',
+]);
+
+function getFileExt(name: string): string {
+  const i = name.lastIndexOf('.');
+  return i > 0 ? name.slice(i + 1).toLowerCase() : '';
+}
+
+export async function findFileReferences(
+  rootPath: string,
+  targetAbsolutePath: string,
+  allFilePaths: string[]
+): Promise<FileSearchResult[]> {
+  if (!rootPath) return [];
+
+  const targetRelativePath = targetAbsolutePath.startsWith(rootPath + '/')
+    ? targetAbsolutePath.slice(rootPath.length + 1)
+    : targetAbsolutePath;
+
+  const parts = targetRelativePath.split('/');
+  const basename = parts.pop() || '';
+  const lastDot = basename.lastIndexOf('.');
+  const basenameNoExt = lastDot > 0 ? basename.slice(0, lastDot) : basename;
+  const relDir = parts.join('/');
+  const dirName = parts.length > 0 ? parts[parts.length - 1] : '';
+
+  // 对 index.ts/index.tsx 等文件，外部引用通常是目录名（即父文件夹名），
+  // 而不是文件名 index；避免用 index 这种高频词导致大量误匹配。
+  const isIndex = basenameNoExt === 'index';
+  const patterns = new Set<string>();
+  if (isIndex) {
+    if (relDir) patterns.add(relDir);               // src/components/FileReferencesModal
+    if (dirName) patterns.add(dirName);             // FileReferencesModal
+  } else {
+    if (targetRelativePath) patterns.add(targetRelativePath);
+    if (basename) patterns.add(basename);
+    if (basenameNoExt) patterns.add(basenameNoExt);
+    const relPathNoExt = lastDot > 0 ? targetRelativePath.slice(0, targetRelativePath.lastIndexOf('.')) : targetRelativePath;
+    if (relPathNoExt) patterns.add(relPathNoExt);
+  }
+
+  const results: FileSearchResult[] = [];
+
+  await Promise.all(
+    allFilePaths.map(async (relPath) => {
+      if (relPath === targetRelativePath) return;
+      if (!CODE_EXTENSIONS.has(getFileExt(relPath))) return;
+
+      let content: string;
+      try {
+        content = await readFile(rootPath + '/' + relPath);
+      } catch {
+        return;
+      }
+
+      // 使用整词匹配，避免 BottomPanel 命中 toggleBottomPanel 等子串
+      const seen = new Set<number>();
+      const matches: FindResult[] = [];
+
+      for (const pattern of patterns) {
+        for (const find of findInFile(content, pattern, { wholeWord: true })) {
+          if (!seen.has(find.match.index)) {
+            seen.add(find.match.index);
+            matches.push(find);
+          }
+        }
+      }
+
+      if (matches.length === 0) return;
+
+      matches.sort((a, b) => a.match.index - b.match.index);
+
+      results.push({
+        filePath: relPath,
+        fileName: relPath.split('/').pop() || relPath,
+        matches,
+        matchCount: matches.length,
+      });
+    })
+  );
+
   return results.sort((a, b) => b.matchCount - a.matchCount);
 }
 

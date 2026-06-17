@@ -325,7 +325,22 @@
     "close": "關閉對比檢視"
   },
   "tabBar": {
-    "splitViewTooltip": "分屏編輯"
+    "splitViewTooltip": "分屏編輯",
+    "contextMenu": {
+      "close": "關閉",
+      "closeOthers": "關閉其它",
+      "closeRight": "關閉右側標籤頁",
+      "closeLeft": "關閉左側標籤頁",
+      "closeAll": "全部關閉",
+      "copyPath": "複製路徑",
+      "copyRelativePath": "複製相對路徑",
+      "reveal": "在 Finder 中打開",
+      "findReferences": "查找檔案引用"
+    },
+    "referencesModal": {
+      "title": "查找檔案引用",
+      "noResults": "未找到引用"
+    }
   },
   "confirmDialog": {
     "save": "儲存",

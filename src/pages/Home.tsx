@@ -21,6 +21,7 @@ import {
   setGroupRatio,
   equalizeGroupRatios,
 } from '../store/slices/workspaceSlice';
+import { setModalOverlayOpen } from '../store/slices/layoutSlice';
 import { openDirectory, warmupFileCache } from '../services/fileService';
 import TabBar from '../components/TabBar';
 import MonacoEditor from '../components/MonacoEditor';
@@ -29,6 +30,10 @@ import QuickOpen from '../components/QuickOpen';
 import GitSetupPanel from '../components/GitSetupPanel';
 import DiffEditorPanel from '../components/DiffEditorPanel';
 import SettingsPanel from '../components/SettingsPanel';
+import ContextMenu, { type MenuItem } from '../components/ContextMenu';
+import FileReferencesModal from '../components/FileReferencesModal';
+import { findFileReferences, type FileSearchResult } from '../services/searchService';
+import { revealInExplorer } from '../services/fileOperations';
 import { BCMTabManager } from '../utils/algorithms/neuralTabManager';
 import { EntropyFilePrefetcher } from '../utils/algorithms/filePrediction';
 import { eventBus } from '../utils/eventBus';
@@ -112,8 +117,15 @@ function Home() {
   const prefetcherRef = useRef(new EntropyFilePrefetcher());
 
   const [quickOpenVisible, setQuickOpenVisible] = useState(false);
-  const [closeConfirm, setCloseConfirm] = useState<{ id: string; groupIndex: number } | null>(null);
+  const [pendingClose, setPendingClose] = useState<{ id: string; groupIndex: number }[] | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; fileId: string; groupIndex: number } | null>(null);
+  const [referencesModal, setReferencesModal] = useState<{ fileId: string; results: FileSearchResult[] } | null>(null);
   const [loadingFiles, setLoadingFiles] = useState<Set<string>>(new Set());
+
+  // 模态层/右键菜单打开时隐藏终端 BrowserView，避免 BrowserView 穿透覆盖上层 UI
+  useEffect(() => {
+    dispatch(setModalOverlayOpen(!!referencesModal || !!pendingClose || quickOpenVisible || !!contextMenu));
+  }, [dispatch, referencesModal, pendingClose, quickOpenVisible, contextMenu]);
   const loadingTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   // Tab 加载就绪回调（tsserver 返回诊断时）
@@ -369,7 +381,7 @@ function Home() {
     (id: string, groupIndex: number) => {
       const file = openedFilesRef.current.find((f) => f.id === id);
       if (file?.isDirty) {
-        setCloseConfirm({ id, groupIndex });
+        setPendingClose([{ id, groupIndex }]);
         return;
       }
       dispatch(closeFile({ id, groupIndex }));
@@ -377,23 +389,51 @@ function Home() {
     [dispatch]
   );
 
+  const closeTargetsWithConfirm = useCallback(
+    (targets: { id: string; groupIndex: number }[]) => {
+      if (targets.length === 0) return;
+      const hasDirty = targets.some((t) => {
+        const file = openedFilesRef.current.find((f) => f.id === t.id);
+        return file?.isDirty;
+      });
+      if (hasDirty) {
+        setPendingClose(targets);
+        return;
+      }
+      targets
+        .slice()
+        .sort((a, b) => b.groupIndex - a.groupIndex)
+        .forEach((t) => dispatch(closeFile(t)));
+    },
+    [dispatch]
+  );
+
   const handleCloseConfirm = useCallback(
     async (result: ConfirmResult) => {
-      if (!closeConfirm) return;
-      const { id, groupIndex } = closeConfirm;
-      setCloseConfirm(null);
+      if (!pendingClose) return;
+      const targets = pendingClose;
+      setPendingClose(null);
       if (result === 'cancel') return;
+
       if (result === 'save') {
-        try {
-          await dispatch(saveFile({ id, groupIndex })).unwrap();
-        } catch (err) {
-          console.error('保存失败', err);
-          return;
+        for (const { id, groupIndex } of targets) {
+          const file = openedFilesRef.current.find((f) => f.id === id);
+          if (!file?.isDirty) continue;
+          try {
+            await dispatch(saveFile({ id, groupIndex })).unwrap();
+          } catch (err) {
+            console.error('保存失败', err);
+            return;
+          }
         }
       }
-      dispatch(closeFile({ id, groupIndex }));
+
+      targets
+        .slice()
+        .sort((a, b) => b.groupIndex - a.groupIndex)
+        .forEach((t) => dispatch(closeFile(t)));
     },
-    [closeConfirm, dispatch]
+    [pendingClose, dispatch]
   );
 
   /* ─── 拖拽调整列宽 ─── */
@@ -449,6 +489,135 @@ function Home() {
     dispatch(openFile({ name, kind: 'file', source: filePath }));
   }, [openedFiles, dispatch]);
 
+  /* ─── Tab 右键菜单 ─── */
+
+  const handleTabContextMenu = useCallback(
+    (e: React.MouseEvent, fileId: string, groupIndex: number) => {
+      setContextMenu({ x: e.clientX, y: e.clientY, fileId, groupIndex });
+    },
+    []
+  );
+
+  const handleCopyPath = useCallback(
+    (fileId: string) => {
+      const file = openedFileMap.get(fileId);
+      if (file && typeof file.source === 'string') {
+        navigator.clipboard.writeText(file.source).catch(() => {});
+      }
+    },
+    [openedFileMap]
+  );
+
+  const handleCopyRelativePath = useCallback(
+    (fileId: string) => {
+      const file = openedFileMap.get(fileId);
+      if (file && typeof file.source === 'string' && rootPath) {
+        const rel = file.source.startsWith(rootPath + '/') ? file.source.slice(rootPath.length + 1) : file.source;
+        navigator.clipboard.writeText(rel).catch(() => {});
+      }
+    },
+    [openedFileMap, rootPath]
+  );
+
+  const handleRevealFile = useCallback(
+    (fileId: string) => {
+      const file = openedFileMap.get(fileId);
+      if (file) revealInExplorer(file.source).catch(() => {});
+    },
+    [openedFileMap]
+  );
+
+  const handleFindReferences = useCallback(
+    async (fileId: string) => {
+      const file = openedFileMap.get(fileId);
+      if (!file || typeof file.source !== 'string' || !rootPath) return;
+      const results = await findFileReferences(rootPath, file.source, allFilePaths);
+      setReferencesModal({ fileId, results });
+    },
+    [openedFileMap, rootPath, allFilePaths]
+  );
+
+  const contextMenuItems: MenuItem[] = useMemo(() => {
+    if (!contextMenu) return [];
+    const { fileId, groupIndex } = contextMenu;
+    const group = editorGroups[groupIndex];
+    const fileIds = group?.fileIds ?? [];
+    const index = fileIds.indexOf(fileId);
+
+    return [
+      {
+        id: 'close',
+        label: t('tabBar.contextMenu.close'),
+        group: '1_close',
+        onClick: () => handleCloseTab(fileId, groupIndex),
+      },
+      {
+        id: 'closeOthers',
+        label: t('tabBar.contextMenu.closeOthers'),
+        group: '1_close',
+        onClick: () => {
+          const targets = fileIds.filter((id) => id !== fileId).map((id) => ({ id, groupIndex }));
+          closeTargetsWithConfirm(targets);
+        },
+      },
+      {
+        id: 'closeRight',
+        label: t('tabBar.contextMenu.closeRight'),
+        group: '1_close',
+        disabled: index < 0 || index === fileIds.length - 1,
+        onClick: () => {
+          if (index < 0) return;
+          const targets = fileIds.slice(index + 1).map((id) => ({ id, groupIndex }));
+          closeTargetsWithConfirm(targets);
+        },
+      },
+      {
+        id: 'closeLeft',
+        label: t('tabBar.contextMenu.closeLeft'),
+        group: '1_close',
+        disabled: index < 0 || index === 0,
+        onClick: () => {
+          if (index < 0) return;
+          const targets = fileIds.slice(0, index).map((id) => ({ id, groupIndex }));
+          closeTargetsWithConfirm(targets);
+        },
+      },
+      {
+        id: 'closeAll',
+        label: t('tabBar.contextMenu.closeAll'),
+        group: '1_close',
+        onClick: () => {
+          const targets = editorGroups.flatMap((g, gi) => g.fileIds.map((id) => ({ id, groupIndex: gi })));
+          closeTargetsWithConfirm(targets);
+        },
+      },
+      {
+        id: 'copyPath',
+        label: t('tabBar.contextMenu.copyPath'),
+        group: '2_path',
+        onClick: () => handleCopyPath(fileId),
+      },
+      {
+        id: 'copyRelativePath',
+        label: t('tabBar.contextMenu.copyRelativePath'),
+        group: '2_path',
+        onClick: () => handleCopyRelativePath(fileId),
+      },
+      {
+        id: 'reveal',
+        label: t('tabBar.contextMenu.reveal'),
+        group: '3_reveal',
+        onClick: () => handleRevealFile(fileId),
+      },
+      {
+        id: 'findReferences',
+        label: t('tabBar.contextMenu.findReferences'),
+        group: '4_refs',
+        onClick: () => handleFindReferences(fileId),
+      },
+    ];
+  }, [contextMenu, editorGroups, t, handleCloseTab, closeTargetsWithConfirm, handleCopyPath, handleCopyRelativePath, handleRevealFile, handleFindReferences]);
+
   /* ─── 编辑器快照 ─── */
 
   const snapshotsRef = useRef(snapshots);
@@ -498,6 +667,7 @@ function Home() {
             activeId={group.activeFileId}
             onActivate={(id) => dispatch(activateFile(id))}
             onClose={(id) => handleCloseTab(id, groupIndex)}
+            onContextMenu={(e, id) => handleTabContextMenu(e, id, groupIndex)}
             onPin={() => dispatch(pinPreviewFile())}
             onSplitView={() => dispatch(toggleSplitView())}
             splitActive={splitView}
@@ -532,7 +702,7 @@ function Home() {
         </>
       );
     },
-    [dispatch, handleCloseTab, handleEditorChange, handleOpenQuickOpen, splitView, getPanelContent, rootPath, gitStatus, handleTabReady, handleOpenFileByPath, loadingFiles, missingFileIdsSet, t]
+    [dispatch, handleCloseTab, handleTabContextMenu, handleEditorChange, handleOpenQuickOpen, splitView, getPanelContent, rootPath, gitStatus, handleTabReady, handleOpenFileByPath, loadingFiles, missingFileIdsSet, t]
   );
 
   return (
@@ -541,11 +711,34 @@ function Home() {
         <QuickOpen onClose={() => setQuickOpenVisible(false)} files={allFilePaths} />
       )}
 
-      {closeConfirm && (
+      {pendingClose && (
         <ConfirmDialog
           title={t('home.unsavedChanges.title')}
           message={t('home.unsavedChanges.message')}
           onResult={handleCloseConfirm}
+        />
+      )}
+
+      {contextMenu && (
+        <ContextMenu
+          items={contextMenuItems}
+          x={contextMenu.x}
+          y={contextMenu.y}
+          visible={!!contextMenu}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
+
+      {referencesModal && (
+        <FileReferencesModal
+          results={referencesModal.results}
+          onClose={() => setReferencesModal(null)}
+          onOpenResult={(relativePath) => {
+            const source = rootPath ? `${rootPath}/${relativePath}` : relativePath;
+            const name = relativePath.split('/').pop() || relativePath;
+            dispatch(openFile({ name, kind: 'file', source }));
+            setReferencesModal(null);
+          }}
         />
       )}
 
