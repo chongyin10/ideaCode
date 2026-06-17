@@ -301,6 +301,17 @@ export interface ElectronAPI {
   rightPanel: {
     setResizeState: (state: 'start' | 'end') => void;
   };
+
+  /** 系统资源监控 */
+  system: {
+    onStats: (callback: (data: SystemStats) => void) => () => void;
+  };
+}
+
+export interface SystemStats {
+  cpu: number;
+  memory: number;
+  gpu: number | null;
 }
 
 declare global {

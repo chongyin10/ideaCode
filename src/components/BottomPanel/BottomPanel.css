@@ -425,6 +425,45 @@
   color: #cccccc;
 }
 
+.terminal-tab__edit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: none;
+  background: transparent;
+  color: #858585;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.terminal-tab__edit:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #cccccc;
+}
+
+.terminal-tab__actions.is-editing {
+  opacity: 1;
+}
+
+.terminal-tab__rename-input {
+  flex: 1;
+  min-width: 0;
+  background: #3c3c3c;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+  padding: 2px 4px;
+  color: #cccccc;
+  font-size: 12px;
+  outline: none;
+  margin-right: 4px;
+}
+
+.terminal-tab__rename-input:focus {
+  border-color: #007acc;
+}
+
 /* ─── 侧边栏书签 ─── */
 
 .terminal-sidebar__bookmarks {

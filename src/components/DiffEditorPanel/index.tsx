@@ -1,4 +1,5 @@
 import { useRef, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { DiffEditor } from '@monaco-editor/react';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { closeDiffView, updateDiffView } from '../../store/slices/workspaceSlice';
@@ -9,6 +10,7 @@ import type * as Monaco from 'monaco-editor';
 import './DiffEditorPanel.css';
 
 const DiffEditorPanel = () => {
+  const { t } = useTranslation();
   const dispatch = useAppDispatch();
   const diffView = useAppSelector((s) => s.workspace.diffView);
   const editorRef = useRef<Monaco.editor.IStandaloneDiffEditor | null>(null);
@@ -68,23 +70,23 @@ const DiffEditorPanel = () => {
     <div className="diff-panel">
       <div className="diff-panel__header">
         <span className="diff-panel__title">
-          {diffView.fileName} — 对比 HEAD
+          {t('diffEditorPanel.compareTitle', { fileName: diffView.fileName })}
         </span>
 
         <div className="diff-panel__tools">
-          <button className="diff-panel__tool" onClick={replaceRightWithLeft} title="向右全部替换（把左侧内容复制到右侧）">
+          <button className="diff-panel__tool" onClick={replaceRightWithLeft} title={t('diffEditorPanel.replaceRight')}>
             <ArrowLeftRight size={14} strokeWidth={1.5} />
           </button>
-          <button className="diff-panel__tool" onClick={replaceLeftWithRight} title="向左全部替换（把右侧内容复制到左侧）">
+          <button className="diff-panel__tool" onClick={replaceLeftWithRight} title={t('diffEditorPanel.replaceLeft')}>
             <ArrowRightLeft size={14} strokeWidth={1.5} />
           </button>
 
           <span className="diff-panel__sep" />
 
-          <button className="diff-panel__tool" onClick={goToPrevDiff} title="上一个更改 (Shift+F7)">
+          <button className="diff-panel__tool" onClick={goToPrevDiff} title={t('diffEditorPanel.prevChange')}>
             <ArrowUp size={14} strokeWidth={1.5} />
           </button>
-          <button className="diff-panel__tool" onClick={goToNextDiff} title="下一个更改 (F7)">
+          <button className="diff-panel__tool" onClick={goToNextDiff} title={t('diffEditorPanel.nextChange')}>
             <ArrowDown size={14} strokeWidth={1.5} />
           </button>
         </div>
@@ -92,7 +94,7 @@ const DiffEditorPanel = () => {
         <button
           className="diff-panel__close"
           onClick={() => dispatch(closeDiffView())}
-          title="关闭对比视图"
+          title={t('diffEditorPanel.close')}
         >
           <X size={14} strokeWidth={1.5} />
         </button>

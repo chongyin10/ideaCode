@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { X, Columns2, Loader2 } from 'lucide-react';
 import './TabBar.css';
 
@@ -24,6 +25,7 @@ type DisplayTab = TabBarProps['tabs'][number] & { phase: TabPhase };
 const TRANSITION_MS = 200;
 
 const TabBar = ({ tabs, activeId, onActivate, onClose, onPin, onSplitView, splitActive, focused = true, loadingFiles, missingFileIds }: TabBarProps) => {
+  const { t } = useTranslation();
   const [displayTabs, setDisplayTabs] = useState<DisplayTab[]>([]);
   const prevTabsRef = useRef(tabs);
 
@@ -103,7 +105,7 @@ const TabBar = ({ tabs, activeId, onActivate, onClose, onPin, onSplitView, split
           <button
             className="tab-bar__action-btn"
             onClick={onSplitView}
-            title="分屏编辑"
+            title={t('tabBar.splitViewTooltip')}
           >
             <Columns2 size={14} strokeWidth={1.5} />
           </button>

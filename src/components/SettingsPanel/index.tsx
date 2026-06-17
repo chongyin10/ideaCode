@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { X, Search, ChevronRight } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import {
@@ -12,51 +13,85 @@ import {
   type WordWrapOption,
 } from '../../store/slices/settingsSlice';
 import { closeSettings } from '../../store/slices/workspaceSlice';
+import { SUPPORTED_LANGUAGES, saveLanguage, type LanguageCode } from '../../i18n';
+import i18n from '../../i18n';
 import './SettingsPanel.css';
 
-type Category = { id: string; label: string };
-
-const categories: Category[] = [
-  { id: 'commonlyUsed', label: '常用设置' },
-  { id: 'editor', label: '文本编辑器' },
-  { id: 'appearance', label: '外观' },
-];
-
-const themeOptions: { value: EditorTheme; label: string }[] = [
-  { value: 'vs', label: '浅色 (Light)' },
-  { value: 'vs-dark', label: '深色 (Dark)' },
-  { value: 'hc-black', label: '高对比度 (High Contrast)' },
-];
-
-const wordWrapOptions: { value: WordWrapOption; label: string }[] = [
-  { value: 'on', label: '开启' },
-  { value: 'off', label: '关闭' },
-  { value: 'bounded', label: '视区宽度' },
-];
-
-interface SettingItemData {
-  id: string;
-  category: 'commonlyUsed' | 'editor' | 'appearance';
-  label: string;
-  desc: string;
-  keywords: string;
-  render: () => React.ReactNode;
-}
-
 const SettingsPanel = () => {
+  const { t } = useTranslation();
   const dispatch = useAppDispatch();
   const settings = useAppSelector((state) => state.settings);
   const [query, setQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState('commonlyUsed');
 
+  const categories = useMemo(
+    () => [
+      { id: 'commonlyUsed', label: t('settingsPanel.categories.commonlyUsed') },
+      { id: 'editor', label: t('settingsPanel.categories.editor') },
+      { id: 'appearance', label: t('settingsPanel.categories.appearance') },
+    ],
+    [t]
+  );
+
+  const themeOptions: { value: EditorTheme; label: string }[] = useMemo(
+    () => [
+      { value: 'vs', label: t('settingsPanel.theme.light') },
+      { value: 'vs-dark', label: t('settingsPanel.theme.dark') },
+      { value: 'hc-black', label: t('settingsPanel.theme.hc') },
+    ],
+    [t]
+  );
+
+  const wordWrapOptions: { value: WordWrapOption; label: string }[] = useMemo(
+    () => [
+      { value: 'on', label: t('settingsPanel.wordWrap.on') },
+      { value: 'off', label: t('settingsPanel.wordWrap.off') },
+      { value: 'bounded', label: t('settingsPanel.wordWrap.bounded') },
+    ],
+    [t]
+  );
+
+  interface SettingItemData {
+    id: string;
+    category: 'commonlyUsed' | 'editor' | 'appearance';
+    label: string;
+    desc: string;
+    keywords: string;
+    render: () => React.ReactNode;
+  }
+
   const settingItems: SettingItemData[] = useMemo(() => {
     const q = query.trim().toLowerCase();
     const all: SettingItemData[] = [
       {
+        id: 'displayLanguage',
+        category: 'commonlyUsed',
+        label: t('settingsPanel.displayLanguage.label'),
+        desc: t('settingsPanel.displayLanguage.desc'),
+        keywords: 'language 语言 語言 display',
+        render: () => (
+          <select
+            className="setting-item__control"
+            value={i18n.language}
+            onChange={(e) => {
+              const lng = e.target.value as LanguageCode;
+              i18n.changeLanguage(lng);
+              saveLanguage(lng);
+            }}
+          >
+            {SUPPORTED_LANGUAGES.map((lang) => (
+              <option key={lang.code} value={lang.code}>
+                {lang.name}
+              </option>
+            ))}
+          </select>
+        ),
+      },
+      {
         id: 'theme',
         category: 'appearance',
-        label: '颜色主题',
-        desc: '选择编辑器的语法高亮主题',
+        label: t('settingsPanel.theme.label'),
+        desc: t('settingsPanel.theme.desc'),
         keywords: 'theme color 主题 颜色 浅色 深色',
         render: () => (
           <select
@@ -75,8 +110,8 @@ const SettingsPanel = () => {
       {
         id: 'fontSize',
         category: 'editor',
-        label: '字体大小',
-        desc: '编辑器中的字体大小（像素）',
+        label: t('settingsPanel.fontSize.label'),
+        desc: t('settingsPanel.fontSize.desc'),
         keywords: 'font size 字体 大小',
         render: () => (
           <input
@@ -92,8 +127,8 @@ const SettingsPanel = () => {
       {
         id: 'wordWrap',
         category: 'editor',
-        label: '自动换行',
-        desc: '超出视区时是否自动换行',
+        label: t('settingsPanel.wordWrap.label'),
+        desc: t('settingsPanel.wordWrap.desc'),
         keywords: 'word wrap 自动换行',
         render: () => (
           <select
@@ -112,8 +147,8 @@ const SettingsPanel = () => {
       {
         id: 'semanticHighlighting',
         category: 'commonlyUsed',
-        label: '语义高亮',
-        desc: '根据语言服务提供的语义信息为符号着色（方法、变量、类型等）',
+        label: t('settingsPanel.semanticHighlighting.label'),
+        desc: t('settingsPanel.semanticHighlighting.desc'),
         keywords: 'semantic highlighting 语义 高亮 颜色',
         render: () => (
           <label className="setting-item__toggle">
@@ -129,8 +164,8 @@ const SettingsPanel = () => {
       {
         id: 'minimap',
         category: 'appearance',
-        label: 'Minimap',
-        desc: '在编辑器右侧显示代码缩略图',
+        label: t('settingsPanel.minimap.label'),
+        desc: t('settingsPanel.minimap.desc'),
         keywords: 'minimap 缩略图 小地图',
         render: () => (
           <label className="setting-item__toggle">
@@ -154,7 +189,7 @@ const SettingsPanel = () => {
         item.desc.toLowerCase().includes(q) ||
         item.keywords.toLowerCase().includes(q)
     );
-  }, [activeCategory, query, settings, dispatch]);
+  }, [activeCategory, query, settings, dispatch, t, themeOptions, wordWrapOptions]);
 
   const handleClose = () => dispatch(closeSettings());
 
@@ -162,8 +197,8 @@ const SettingsPanel = () => {
     <div className="settings-panel">
       {/* 标题栏 */}
       <div className="settings-panel__header">
-        <h2 className="settings-panel__title">设置</h2>
-        <button className="settings-panel__close" onClick={handleClose} aria-label="关闭设置">
+        <h2 className="settings-panel__title">{t('settingsPanel.title')}</h2>
+        <button className="settings-panel__close" onClick={handleClose} aria-label={t('close')}>
           <X size={16} strokeWidth={1.5} />
         </button>
       </div>
@@ -173,13 +208,13 @@ const SettingsPanel = () => {
         <Search size={14} strokeWidth={1.5} />
         <input
           type="text"
-          placeholder="搜索设置"
+          placeholder={t('settingsPanel.searchPlaceholder')}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
         {query && (
           <button className="settings-panel__search-clear" onClick={() => setQuery('')}>
-            清除
+            {t('clear')}
           </button>
         )}
       </div>
@@ -206,16 +241,16 @@ const SettingsPanel = () => {
         <div className="settings-panel__content">
           <div className="settings-section">
             <h3 className="settings-section__title">
-              {query ? '搜索结果' : categories.find((c) => c.id === activeCategory)?.label}
+              {query ? t('settingsPanel.searchResults') : categories.find((c) => c.id === activeCategory)?.label}
             </h3>
             <p className="settings-section__desc">
               {query
-                ? `找到 ${settingItems.length} 个匹配设置`
-                : '控制 Monaco 编辑器的外观和行为'}
+                ? t('settingsPanel.matchedSettings', { count: settingItems.length })
+                : t('settingsPanel.sectionDesc')}
             </p>
 
             {settingItems.length === 0 ? (
-              <div className="settings-panel__empty">未找到匹配设置</div>
+              <div className="settings-panel__empty">{t('settingsPanel.noResults')}</div>
             ) : (
               settingItems.map((item) => (
                 <div key={item.id} className="setting-item">
@@ -231,7 +266,7 @@ const SettingsPanel = () => {
 
           <div className="settings-panel__actions">
             <button className="settings-panel__reset" onClick={() => dispatch(resetSettings())}>
-              恢复默认设置
+              {t('settingsPanel.reset')}
             </button>
           </div>
         </div>

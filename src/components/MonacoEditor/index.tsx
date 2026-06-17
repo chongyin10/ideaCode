@@ -1,6 +1,7 @@
 import Editor, { type OnMount } from '@monaco-editor/react';
 import type * as monaco from 'monaco-editor';
 import { useRef, useEffect, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import { clearSearchHighlight } from '../../store/slices/workspaceSlice';
 import type { SearchHighlight, EditorSnapshot } from '../../store/slices/workspaceSlice';
@@ -173,12 +174,15 @@ function buildJsxDecorations(
   return decs;
 }
 
-const Loading = () => (
-  <div className="monaco-loading">
-    <div className="monaco-loading__spinner" />
-    <span className="monaco-loading__text">正在加载编辑器...</span>
-  </div>
-);
+const Loading = () => {
+  const { t } = useTranslation();
+  return (
+    <div className="monaco-loading">
+      <div className="monaco-loading__spinner" />
+      <span className="monaco-loading__text">{t('monacoEditor.loading')}</span>
+    </div>
+  );
+};
 
 // 保存 Monaco 原始的 registerHoverProvider，用于在拦截后仍能注册自定义 hover provider
 let originalRegisterHoverProvider: ((languageSelector: unknown, provider: unknown) => { dispose(): void }) | null = null;

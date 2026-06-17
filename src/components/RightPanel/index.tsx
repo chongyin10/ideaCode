@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Plus, X, Maximize2, Minimize2 } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import { toggleRightPanel } from '../../store/slices/layoutSlice';
@@ -15,14 +16,22 @@ const DEFAULT_WIDTH = 260;
 const MIN_WIDTH = 180;
 const MAX_WIDTH_RATIO = 0.85;
 
-const createTab = (name?: string): RightPanelTab => ({
-  id: `right-tab-${nextTabId++}`,
-  name: name || `标签 ${nextTabId - 1}`,
-});
-
 const RightPanel = () => {
+  const { t } = useTranslation();
   const dispatch = useAppDispatch();
   const { rightPanelVisible } = useAppSelector((state) => state.layout);
+
+  const createTab = useCallback(
+    (name?: string): RightPanelTab => {
+      const index = nextTabId++;
+      return {
+        id: `right-tab-${index}`,
+        name: name || t('rightPanel.defaultTabName', { index }),
+      };
+    },
+    [t]
+  );
+
   const [tabs, setTabs] = useState<RightPanelTab[]>(() => [createTab('KIMI CODE')]);
   const [activeId, setActiveId] = useState<string>(tabs[0].id);
   const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH);
@@ -40,7 +49,7 @@ const RightPanel = () => {
     const newTab = createTab();
     setTabs((prev) => [...prev, newTab]);
     setActiveId(newTab.id);
-  }, []);
+  }, [createTab]);
 
   const closeActiveTab = useCallback(() => {
     // 只有一个标签时，直接收缩整个右侧面板
@@ -142,14 +151,14 @@ const RightPanel = () => {
           <button
             className="right-panel__action-btn"
             onClick={addTab}
-            title="添加标签"
+            title={t('rightPanel.addTab')}
           >
             <Plus size={12} strokeWidth={1.5} />
           </button>
           <button
             className="right-panel__action-btn"
             onClick={toggleMaximize}
-            title={isMaximized ? '恢复' : '全屏'}
+            title={isMaximized ? t('rightPanel.restore') : t('rightPanel.maximize')}
           >
             {isMaximized ? (
               <Minimize2 size={12} strokeWidth={1.5} />
@@ -160,14 +169,14 @@ const RightPanel = () => {
           <button
             className="right-panel__action-btn"
             onClick={closeActiveTab}
-            title="关闭当前标签"
+            title={t('rightPanel.closeTab')}
           >
             <X size={12} strokeWidth={1.5} />
           </button>
         </div>
       </div>
       <div className="right-panel__content">
-        <div className="right-panel__placeholder">{activeTab.name} 面板</div>
+        <div className="right-panel__placeholder">{t('rightPanel.placeholder', { name: activeTab.name })}</div>
       </div>
     </div>
   );

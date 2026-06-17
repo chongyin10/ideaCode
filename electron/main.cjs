@@ -7,6 +7,7 @@ const { ExtensionHostManager } = require('./main/extensionHost.cjs');
 const { HistoryManager } = require('./main/historyManager.cjs');
 const { createAppMenu } = require('./main/appMenu.cjs');
 const { registerIpcHandlers } = require('./main/ipcHandlers/index.cjs');
+const { SystemMonitor } = require('./main/systemMonitor.cjs');
 
 /**
  * IDEACODE 主进程入口
@@ -71,6 +72,10 @@ app.whenReady().then(() => {
 
   // 创建首个窗口
   windowManager.createWindow();
+
+  // 启动系统资源监控，定期向所有窗口广播 CPU/GPU/内存使用率
+  const systemMonitor = new SystemMonitor(windowManager, { intervalMs: 2000 });
+  systemMonitor.start();
 
   // 启动扩展宿主进程（延迟启动，避免与应用启动竞争资源）
   setTimeout(() => {

@@ -116,6 +116,9 @@ const Channels = {
 
   /* ─── 右侧面板 resize 状态 ─── */
   RIGHT_PANEL_RESIZE_STATE: 'rightPanel:resizeState',
+
+  /* ─── 系统资源监控 ─── */
+  SYSTEM_STATS: 'system:stats',
 };
 
 /**
@@ -278,6 +281,11 @@ const electronAPI = {
   /** 右侧面板 resize 状态 — 主窗口调用 */
   rightPanel: {
     setResizeState: (state) => ipcRenderer.send(Channels.RIGHT_PANEL_RESIZE_STATE, state),
+  },
+
+  /** 系统资源监控 — 主进程广播 */
+  system: {
+    onStats: (callback) => onChannel(Channels.SYSTEM_STATS, callback),
   },
 };
 

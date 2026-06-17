@@ -1,10 +1,12 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
-import { GitBranch, AlertCircle, XCircle, FileText, ChevronDown, Check, Plus, Search } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { GitBranch, AlertCircle, XCircle, FileText, ChevronDown, Check, Plus, Search, Cpu, MemoryStick, Monitor } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import { setFileLanguage } from '../../store/slices/workspaceSlice';
 import { openBottomTab } from '../../store/slices/layoutSlice';
 import { checkoutBranch, createBranch, refreshBranches } from '../../store/slices/gitSlice';
 import { isPath } from '../../services/fileService';
+import type { SystemStats } from '../../types/electron';
 import './StatusBar.css';
 
 const LANGUAGES = [
@@ -42,6 +44,7 @@ const isActiveLanguage = (lang: string, activeLanguage: string) => {
 };
 
 const StatusBar = () => {
+  const { t } = useTranslation();
   const dispatch = useAppDispatch();
   const [pathMode, setPathMode] = useState<'relative' | 'absolute'>('relative');
   const { openedFiles, activeFileId, rootSource, rootName } = useAppSelector(
@@ -56,6 +59,7 @@ const StatusBar = () => {
   const totalChanges = stagedCount + changesCount + mergeCount + untrackedCount;
 
   const [langOpen, setLangOpen] = useState(false);
+  const [systemStats, setSystemStats] = useState<SystemStats | null>(null);
   const [branchOpen, setBranchOpen] = useState(false);
   const [branchVisible, setBranchVisible] = useState(false);
   const [branchPhase, setBranchPhase] = useState<'entering' | 'stable' | 'exiting'>('entering');
@@ -127,6 +131,16 @@ const StatusBar = () => {
     }
   }, [branchOpen, dispatch]);
 
+  // 订阅主进程广播的系统资源监控数据
+  useEffect(() => {
+    const unsubscribe = window.electronAPI?.system?.onStats((data) => {
+      setSystemStats(data);
+    });
+    return () => {
+      unsubscribe?.();
+    };
+  }, []);
+
   const { localBranches, remoteBranches } = useMemo(() => {
     const q = branchQuery.trim().toLowerCase();
     const local = branches.filter((b) => !b.name.includes('/'));
@@ -177,7 +191,7 @@ const StatusBar = () => {
           <span
             className="status-bar__branch"
             onClick={() => setBranchOpen(!branchOpen)}
-            title="切换分支"
+            title={t('statusBar.branch')}
           >
             <GitBranch size={12} strokeWidth={1.5} />
             {gitBranch || 'master'}
@@ -191,7 +205,7 @@ const StatusBar = () => {
                 <Search size={12} strokeWidth={1.5} />
                 <input
                   type="text"
-                  placeholder="查找分支"
+                  placeholder={t('statusBar.branchSearchPlaceholder')}
                   value={branchQuery}
                   onChange={(e) => setBranchQuery(e.target.value)}
                   autoFocus
@@ -204,7 +218,7 @@ const StatusBar = () => {
                   onClick={() => setCreating(true)}
                 >
                   <Plus size={12} strokeWidth={1.5} />
-                  创建新分支...
+                  {t('statusBar.createNewBranch')}
                 </button>
               )}
 
@@ -212,7 +226,7 @@ const StatusBar = () => {
                 <div className="status-bar__branch-create-input">
                   <input
                     type="text"
-                    placeholder={newBranchStartPoint ? `基于 ${newBranchStartPoint}` : '新分支名称'}
+                    placeholder={newBranchStartPoint ? t('statusBar.branchBasedOnPlaceholder', { branch: newBranchStartPoint }) : t('statusBar.newBranchNamePlaceholder')}
                     value={newBranchName}
                     onChange={(e) => setNewBranchName(e.target.value)}
                     onKeyDown={(e) => {
@@ -225,12 +239,12 @@ const StatusBar = () => {
                     }}
                     autoFocus
                   />
-                  <button onClick={handleCreateBranch}>创建</button>
+                  <button onClick={handleCreateBranch}>{t('create')}</button>
                 </div>
               )}
 
               {localBranches.length > 0 && (
-                <div className="status-bar__branch-section">本地分支</div>
+                <div className="status-bar__branch-section">{t('statusBar.localBranches')}</div>
               )}
               {localBranches.map((branch) => (
                 <button
@@ -248,7 +262,7 @@ const StatusBar = () => {
               ))}
 
               {remoteBranches.length > 0 && (
-                <div className="status-bar__branch-section">远程分支</div>
+                <div className="status-bar__branch-section">{t('statusBar.remoteBranches')}</div>
               )}
               {remoteBranches.map((branch) => (
                 <button
@@ -262,7 +276,7 @@ const StatusBar = () => {
               ))}
 
               {localBranches.length === 0 && remoteBranches.length === 0 && (
-                <div className="status-bar__branch-empty">未找到分支</div>
+                <div className="status-bar__branch-empty">{t('statusBar.noBranchesFound')}</div>
               )}
             </div>
           )}
@@ -271,7 +285,7 @@ const StatusBar = () => {
         <span
           className="status-bar__item status-bar__item--clickable"
           onClick={() => dispatch(openBottomTab('problems'))}
-          title="打开问题面板"
+          title={t('statusBar.problems')}
         >
           <AlertCircle size={12} strokeWidth={1.5} />
           0
@@ -279,7 +293,7 @@ const StatusBar = () => {
         <span
           className="status-bar__item status-bar__item--clickable"
           onClick={() => dispatch(openBottomTab('problems'))}
-          title="打开问题面板"
+          title={t('statusBar.errors')}
         >
           <XCircle size={12} strokeWidth={1.5} />
           0
@@ -292,7 +306,7 @@ const StatusBar = () => {
             </span>
             <button
               className="status-bar__path-toggle"
-              title={pathMode === 'relative' ? '切换为绝对路径' : '切换为相对路径'}
+              title={pathMode === 'relative' ? t('statusBar.absolutePath') : t('statusBar.relativePath')}
               onClick={() => setPathMode((m) => (m === 'relative' ? 'absolute' : 'relative'))}
             >
               <FileText size={11} strokeWidth={1.5} />
@@ -302,11 +316,29 @@ const StatusBar = () => {
       </div>
 
       <div className="status-bar__right">
-        <span>Ln 12, Col 34</span>
-        <span>UTF-8</span>
+        {systemStats && (
+          <div className="status-bar__system">
+            <span className="status-bar__system-item" title={`${t('statusBar.system.cpu')} ${systemStats.cpu.toFixed(0)}%`}>
+              <Cpu size={12} strokeWidth={1.5} />
+              <span>{systemStats.cpu.toFixed(0)}%</span>
+            </span>
+            <span className="status-bar__system-item" title={`${t('statusBar.system.memory')} ${systemStats.memory.toFixed(0)}%`}>
+              <MemoryStick size={12} strokeWidth={1.5} />
+              <span>{systemStats.memory.toFixed(0)}%</span>
+            </span>
+            {systemStats.gpu !== null && (
+              <span className="status-bar__system-item" title={`${t('statusBar.system.gpu')} ${systemStats.gpu.toFixed(0)}%`}>
+                <Monitor size={12} strokeWidth={1.5} />
+                <span>{systemStats.gpu.toFixed(0)}%</span>
+              </span>
+            )}
+          </div>
+        )}
+        <span>{t('statusBar.lineColumn', { line: 12, column: 34 })}</span>
+        <span>{t('statusBar.encoding')}</span>
         {activeFile && (
           <div className="status-bar__lang">
-            <button className="status-bar__lang-btn" onClick={() => setLangOpen(!langOpen)} title="选择语言模式">
+            <button className="status-bar__lang-btn" onClick={() => setLangOpen(!langOpen)} title={t('statusBar.language')}>
               {LANG_DISPLAY[activeFile.language] || activeFile.language}
               <ChevronDown size={10} strokeWidth={1.5} />
             </button>
@@ -328,7 +360,7 @@ const StatusBar = () => {
             )}
           </div>
         )}
-        <span>Prettier</span>
+        <span>{t('statusBar.formatter')}</span>
       </div>
     </div>
   );

@@ -1,0 +1,351 @@
+{
+  "language": {
+    "zh-CN": "简体中文",
+    "zh-TW": "繁體中文",
+    "en": "English"
+  },
+  "loading": "正在加载...",
+  "cancel": "取消",
+  "confirm": "确认",
+  "save": "保存",
+  "close": "关闭",
+  "search": "搜索",
+  "clear": "清除",
+  "create": "创建",
+  "add": "添加",
+  "remove": "移除",
+  "delete": "删除",
+  "rename": "重命名",
+  "edit": "编辑",
+  "copy": "复制",
+  "paste": "粘贴",
+  "cut": "剪切",
+  "statusBar": {
+    "branch": "分支",
+    "problems": "问题",
+    "errors": "错误",
+    "lineColumn": "行 {{line}}, 列 {{column}}",
+    "encoding": "UTF-8",
+    "formatter": "Prettier",
+    "language": "语言模式",
+    "absolutePath": "切换为绝对路径",
+    "relativePath": "切换为相对路径",
+    "system": {
+      "cpu": "CPU",
+      "memory": "内存",
+      "gpu": "GPU"
+    },
+    "branchSearchPlaceholder": "查找分支",
+    "createNewBranch": "创建新分支...",
+    "branchBasedOnPlaceholder": "基于 {{branch}}",
+    "newBranchNamePlaceholder": "新分支名称",
+    "localBranches": "本地分支",
+    "remoteBranches": "远程分支",
+    "noBranchesFound": "未找到分支"
+  },
+  "bottomPanel": {
+    "terminal": "终端",
+    "problems": "问题",
+    "output": "输出",
+    "debugConsole": "调试控制台",
+    "ports": "端口",
+    "gitlens": "GITLENS",
+    "newTerminal": "新建终端",
+    "selectShell": "选择 Shell",
+    "splitTerminal": "拆分终端",
+    "broadcastMode": "广播模式",
+    "aiAnalyze": "AI 分析（暂不可用）",
+    "search": "搜索",
+    "copy": "复制（暂不可用）",
+    "paste": "粘贴（暂不可用）",
+    "clear": "清屏",
+    "maximize": "最大化",
+    "restore": "恢复",
+    "closePanel": "关闭面板",
+    "terminals": "终端",
+    "bookmarks": "书签",
+    "empty": "点击 + 创建终端",
+    "shellProfile": "Shell 配置文件",
+    "bookmarkLine": "跳转到行 {{line}}",
+    "selectShellTooltip": "选择 Shell 创建新终端",
+    "searchPlaceholder": "搜索...",
+    "renameTooltip": "修改名称",
+    "problemsPanel": "问题面板",
+    "outputPanel": "输出面板",
+    "debugConsolePanel": "调试控制台",
+    "portsPanel": "端口面板"
+  },
+  "rightPanel": {
+    "addTab": "添加标签",
+    "maximize": "全屏",
+    "restore": "恢复",
+    "closeTab": "关闭当前标签",
+    "placeholder": "{{name}} 面板",
+    "defaultTabName": "标签 {{index}}"
+  },
+  "settingsPanel": {
+    "title": "设置",
+    "searchPlaceholder": "搜索设置",
+    "categories": {
+      "commonlyUsed": "常用设置",
+      "editor": "文本编辑器",
+      "appearance": "外观"
+    },
+    "theme": {
+      "label": "颜色主题",
+      "desc": "选择编辑器的语法高亮主题",
+      "light": "浅色 (Light)",
+      "dark": "深色 (Dark)",
+      "hc": "高对比度 (High Contrast)"
+    },
+    "fontSize": {
+      "label": "字体大小",
+      "desc": "编辑器中的字体大小（像素）"
+    },
+    "wordWrap": {
+      "label": "自动换行",
+      "desc": "超出视区时是否自动换行",
+      "on": "开启",
+      "off": "关闭",
+      "bounded": "视区宽度"
+    },
+    "semanticHighlighting": {
+      "label": "语义高亮",
+      "desc": "根据语言服务提供的语义信息为符号着色（方法、变量、类型等）"
+    },
+    "minimap": {
+      "label": "Minimap",
+      "desc": "在编辑器右侧显示代码缩略图"
+    },
+    "displayLanguage": {
+      "label": "显示语言",
+      "desc": "更改界面显示语言（重启后部分菜单生效）"
+    },
+    "searchResults": "搜索结果",
+    "matchedSettings": "找到 {{count}} 个匹配设置",
+    "sectionDesc": "控制 Monaco 编辑器的外观和行为",
+    "noResults": "未找到匹配设置",
+    "reset": "恢复默认设置"
+  },
+  "monacoEditor": {
+    "loading": "正在加载编辑器..."
+  },
+  "activityBar": {
+    "explorer": "资源管理器",
+    "search": "搜索",
+    "sourceControl": "源代码管理",
+    "runAndDebug": "运行和调试",
+    "extensions": "扩展",
+    "account": "账户",
+    "settings": "设置"
+  },
+  "topBar": {
+    "searchFilesTooltip": "搜索文件 (Ctrl+P)",
+    "search": "搜索",
+    "settings": "设置",
+    "toggleRightPanel": "切换右侧面板",
+    "toggleBottomPanel": "切换底部面板",
+    "minimize": "最小化",
+    "maximize": "最大化",
+    "close": "关闭"
+  },
+  "sidePanel": {
+    "explorer": "资源管理器",
+    "search": "搜索",
+    "sourceControl": "源代码管理",
+    "runAndDebug": "运行和调试",
+    "extensions": "扩展",
+    "noPanel": "面板",
+    "selectView": "选择一个视图"
+  },
+  "explorer": {
+    "inputPlaceholder": {
+      "fileName": "请输入文件名",
+      "folderName": "请输入文件夹名"
+    },
+    "errors": {
+      "nameExists": "名称 \"{{name}}\" 已被占用，请更换名称后重试",
+      "createFailed": "创建失败，请检查名称是否合法或路径是否存在",
+      "renameFailed": "重命名失败，请检查名称是否合法",
+      "revealFailed": "打开失败: {{message}}",
+      "deleteFailed": "删除 \"{{name}}\" 失败: {{message}}"
+    },
+    "confirm": {
+      "delete": "确定要删除 \"{{names}}\" 吗？"
+    },
+    "contextMenu": {
+      "newFile": "新建文件",
+      "newFolder": "新建文件夹",
+      "revealInExplorer": "在磁盘中打开",
+      "findInFiles": "在文件中查找",
+      "copyPath": "复制路径",
+      "copyRelativePath": "复制相对路径"
+    },
+    "empty": {
+      "title": "尚未打开文件夹",
+      "openFolder": "打开文件夹",
+      "cloneRepo": "克隆仓库",
+      "noOpenEditors": "没有打开的编辑器",
+      "noFiles": "暂无文件",
+      "timelineComingSoon": "时间线功能即将推出"
+    },
+    "sections": {
+      "openEditors": "打开的编辑器",
+      "timeline": "时间线"
+    },
+    "header": {
+      "newFile": "新建文件",
+      "newFolder": "新建文件夹",
+      "refresh": "刷新",
+      "collapseAll": "折叠所有"
+    },
+    "git": {
+      "containsChanges": "包含修改"
+    }
+  },
+  "searchPanel": {
+    "searchPlaceholder": "搜索",
+    "caseSensitive": "大小写敏感",
+    "wholeWord": "全字匹配",
+    "regex": "正则表达式",
+    "fuzzyMatch": "模糊匹配（拼写纠错）",
+    "toggleReplace": "切换替换",
+    "replacePlaceholder": "替换",
+    "replace": "替换",
+    "replaceAll": "全部替换",
+    "include": "包含",
+    "includePlaceholder": "例如: *.ts, *.tsx",
+    "exclude": "排除",
+    "excludePlaceholder": "例如: node_modules, dist",
+    "searchingProgress": "正在搜索... {{searched}}/{{total}} 文件",
+    "resultStats": "{{files}} 文件中有 {{matches}} 个结果{{suffix}}",
+    "resultStatsTruncated": "（已截断，最多 500 个）",
+    "resultsTruncated": "结果过多，已截断显示",
+    "noResults": "未找到匹配结果"
+  },
+  "home": {
+    "time": {
+      "today": "今天 {{time}}",
+      "yesterday": "昨天 {{time}}"
+    },
+    "openQuickOpen": "快速打开文件 (Ctrl+P)",
+    "unsavedChanges": {
+      "title": "文件有未保存的更改",
+      "message": "是否保存对当前文件的更改？"
+    },
+    "welcome": {
+      "title": "欢迎使用 IDEACODE",
+      "subtitle": "基于 Monaco Editor 的轻量级 IDE",
+      "openFolder": "打开文件夹",
+      "openQuickOpen": "快速打开文件 (Ctrl+P)"
+    },
+    "recentProjects": {
+      "title": "最近打开的项目",
+      "removeTooltip": "从历史记录中移除"
+    },
+    "shortcuts": {
+      "openFile": "快速打开文件",
+      "splitView": "分屏编辑",
+      "splitViewKey": "点击 Columns 图标",
+      "switchTab": "切换 Tab (MRU)"
+    },
+    "split": {
+      "equalizeWidths": "均匀分布列宽"
+    }
+  },
+  "sourceControlPanel": {
+    "title": "源代码管理",
+    "setupDesc": "克隆仓库或打开文件夹以开始",
+    "cloneRepo": "克隆仓库",
+    "initTitle": "初始化 Git 仓库",
+    "initDesc": "当前文件夹尚未初始化 Git",
+    "initRepo": "初始化仓库",
+    "cloneTitle": "克隆 Git 仓库",
+    "cloneDesc": "输入仓库地址和本地目标路径",
+    "repoUrlLabel": "仓库 URL",
+    "repoUrlPlaceholder": "https://github.com/user/repo.git",
+    "targetPathLabel": "本地目标路径",
+    "selectFolder": "点击选择本地文件夹",
+    "clone": "克隆",
+    "openLocalFolder": "打开本地文件夹",
+    "cloning": "正在克隆仓库...",
+    "cloningProgress": "正在克隆... {{percent}}%",
+    "eta": "预计剩余 {{seconds}} 秒",
+    "commitPlaceholder": "输入提交信息（Ctrl+Enter）",
+    "commitTooltip": "提交 (Ctrl+Enter)",
+    "refresh": "刷新",
+    "stageAllChanges": "暂存所有更改",
+    "pull": "拉取",
+    "push": "推送",
+    "more": "更多",
+    "sections": {
+      "staged": "暂存的更改",
+      "changes": "更改",
+      "merge": "合并更改",
+      "untracked": "未跟踪的文件",
+      "stash": "储藏"
+    },
+    "actions": {
+      "unstageAll": "全部取消暂存",
+      "revertStagedAll": "全部撤回暂存",
+      "stageAll": "全部暂存",
+      "discardAllChanges": "全部撤回更改",
+      "discardAllMerge": "全部撤回合并更改",
+      "deleteAllUntracked": "全部删除未跟踪文件",
+      "stage": "暂存",
+      "unstage": "取消暂存",
+      "discard": "丢弃更改",
+      "openFile": "打开文件"
+    },
+    "confirm": {
+      "discardFile": "确定要丢弃 \"{{file}}\" 的更改吗？",
+      "discardFiles": "确定要丢弃 {{count}} 个文件的更改吗？",
+      "discardMergeFiles": "确定要丢弃 {{count}} 个合并冲突文件的更改吗？",
+      "deleteUntracked": "确定要删除 {{count}} 个未跟踪的文件/文件夹吗？"
+    },
+    "empty": "没有{{title}}"
+  },
+  "quickOpen": {
+    "placeholder": "输入文件名（支持模糊匹配，如 apptsx → App.tsx）",
+    "placeholderInPrefix": "在 {{prefix}} 中搜索文件...",
+    "settingsTitle": "过滤设置",
+    "excludeDirsLabel": "排除目录",
+    "excludeDirsPlaceholder": "例如: node_modules, .git, dist",
+    "noResults": "未找到匹配的文件",
+    "startTyping": "开始输入以搜索文件",
+    "resultsCount": "{{count}} 个结果",
+    "footerShortcuts": "↑↓ 选择 · Enter 打开 · Esc 关闭"
+  },
+  "diffEditorPanel": {
+    "compareTitle": "{{fileName}} — 对比 HEAD",
+    "replaceRight": "向右全部替换（把左侧内容复制到右侧）",
+    "replaceLeft": "向左全部替换（把右侧内容复制到左侧）",
+    "prevChange": "上一个更改 (Shift+F7)",
+    "nextChange": "下一个更改 (F7)",
+    "close": "关闭对比视图"
+  },
+  "tabBar": {
+    "splitViewTooltip": "分屏编辑"
+  },
+  "confirmDialog": {
+    "save": "保存",
+    "discard": "不保存",
+    "cancel": "取消"
+  },
+  "gitSetup": {
+    "platformGithub": "检测到 GitHub 仓库",
+    "platformGitlab": "检测到 GitLab 仓库",
+    "platformGitee": "检测到 Gitee 仓库"
+  },
+  "extensionsPanel": {
+    "searchPlaceholder": "搜索扩展...",
+    "refresh": "刷新",
+    "testCommand": "测试命令",
+    "noMatching": "未找到匹配的扩展",
+    "noInstalled": "暂无已安装的扩展",
+    "statusActive": "运行中",
+    "statusInactive": "已停止",
+    "statusError": "错误",
+    "unknownAuthor": "未知作者"
+  }
+}

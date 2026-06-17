@@ -10,6 +10,7 @@ import { createPluginManager } from './plugin'
 import { createPluginContext } from './plugin'
 import { helloWorldPlugin } from './plugin'
 import { ensureLanguage } from './services/languageLoader'
+import './i18n'
 import './index.css'
 
 // ─── Monaco Editor Worker 按需加载 ───

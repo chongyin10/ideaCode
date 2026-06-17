@@ -1,4 +1,5 @@
-import { useRef, useState, useCallback } from 'react';
+import { useRef, useState, useCallback, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import type { PanelId } from '../../store/slices/layoutSlice';
 import {
@@ -13,17 +14,21 @@ import ExtensionsPanel from '../ExtensionsPanel';
 import SourceControlPanel from '../SourceControlPanel';
 import './SidePanel.css';
 
-const panelTitles: Record<PanelId, string> = {
-  explorer: '资源管理器',
-  search: '搜索',
-  git: '源代码管理',
-  debug: '运行和调试',
-  extensions: '扩展',
-};
-
 const SidePanel = () => {
+  const { t } = useTranslation();
   const { sidePanelVisible, activePanel, sidePanelWidth } = useAppSelector((state) => state.layout);
   const dispatch = useAppDispatch();
+
+  const panelTitles: Record<PanelId, string> = useMemo(
+    () => ({
+      explorer: t('sidePanel.explorer'),
+      search: t('sidePanel.search'),
+      git: t('sidePanel.sourceControl'),
+      debug: t('sidePanel.runAndDebug'),
+      extensions: t('sidePanel.extensions'),
+    }),
+    [t]
+  );
   const [isResizing, setIsResizing] = useState(false);
   const isDraggingRef = useRef(false);
 
@@ -73,7 +78,7 @@ const SidePanel = () => {
       style={{ width: sidePanelVisible ? sidePanelWidth : 0 }}
     >
       <div className="side-panel__header">
-        {activePanel ? panelTitles[activePanel] : '面板'}
+        {activePanel ? panelTitles[activePanel] : t('sidePanel.noPanel')}
       </div>
       <div className="side-panel__content">
         {/* 所有面板同时存在，通过 CSS display 切换可见性。
@@ -89,13 +94,13 @@ const SidePanel = () => {
           <SourceControlPanel />
         </div>
         <div style={{ display: activePanel === 'debug' ? 'block' : 'none', height: '100%' }}>
-          <div className="panel-placeholder">运行和调试</div>
+          <div className="panel-placeholder">{t('sidePanel.runAndDebug')}</div>
         </div>
         <div style={{ display: activePanel === 'extensions' ? 'block' : 'none', height: '100%' }}>
           <ExtensionsPanel />
         </div>
         <div style={{ display: activePanel ? 'none' : 'block', height: '100%' }}>
-          <div className="panel-placeholder">选择一个视图</div>
+          <div className="panel-placeholder">{t('sidePanel.selectView')}</div>
         </div>
       </div>
       <div className="side-panel__resize-handle" onMouseDown={startResize} />

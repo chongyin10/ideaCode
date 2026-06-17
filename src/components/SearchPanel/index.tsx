@@ -1,4 +1,5 @@
 import { useCallback, useRef, forwardRef, useImperativeHandle } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   ChevronDown,
   ChevronRight,
@@ -22,6 +23,7 @@ export interface SearchPanelRef {
 }
 
 const SearchPanel = forwardRef<SearchPanelRef>((_props, ref) => {
+  const { t } = useTranslation();
   const dispatch = useAppDispatch();
   const entries = useAppSelector((state) => state.workspace.entries);
   const rootSource = useAppSelector((state) => state.workspace.rootSource);
@@ -89,7 +91,7 @@ const SearchPanel = forwardRef<SearchPanelRef>((_props, ref) => {
         <div className="search-input-wrap">
           <input
             type="text"
-            placeholder="搜索"
+            placeholder={t('searchPanel.searchPlaceholder')}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
@@ -103,28 +105,28 @@ const SearchPanel = forwardRef<SearchPanelRef>((_props, ref) => {
           <div className="search-input__actions">
             <button
               className={`search-input__btn ${caseSensitive ? 'active' : ''}`}
-              title="大小写敏感"
+              title={t('searchPanel.caseSensitive')}
               onClick={() => setCaseSensitive((v) => !v)}
             >
               <CaseSensitive size={14} strokeWidth={1.5} />
             </button>
             <button
               className={`search-input__btn ${wholeWord ? 'active' : ''}`}
-              title="全字匹配"
+              title={t('searchPanel.wholeWord')}
               onClick={() => setWholeWord((v) => !v)}
             >
               <WholeWord size={14} strokeWidth={1.5} />
             </button>
             <button
               className={`search-input__btn ${useRegex ? 'active' : ''}`}
-              title="正则表达式"
+              title={t('searchPanel.regex')}
               onClick={() => setUseRegex((v) => !v)}
             >
               <Regex size={14} strokeWidth={1.5} />
             </button>
             <button
               className={`search-input__btn ${fuzzyMode ? 'active' : ''}`}
-              title="模糊匹配（拼写纠错）"
+              title={t('searchPanel.fuzzyMatch')}
               onClick={() => setFuzzyMode((v) => !v)}
             >
               <Sparkles size={14} strokeWidth={1.5} />
@@ -132,7 +134,7 @@ const SearchPanel = forwardRef<SearchPanelRef>((_props, ref) => {
             <span className="search-input__sep" />
             <button
               className={`search-input__btn ${showReplace ? 'active' : ''}`}
-              title="切换替换"
+              title={t('searchPanel.toggleReplace')}
               onClick={() => setShowReplace((v) => !v)}
             >
               <ChevronDown size={14} strokeWidth={1.5} className={showReplace ? 'rotate-180' : ''} />
@@ -142,10 +144,10 @@ const SearchPanel = forwardRef<SearchPanelRef>((_props, ref) => {
 
         {showReplace && (
           <div className="search-panel__replace">
-            <input type="text" placeholder="替换" value={replaceQuery} onChange={(e) => setReplaceQuery(e.target.value)} />
+            <input type="text" placeholder={t('searchPanel.replacePlaceholder')} value={replaceQuery} onChange={(e) => setReplaceQuery(e.target.value)} />
             <div className="replace-actions">
-              <button title="替换"><Replace size={14} strokeWidth={1.5} /></button>
-              <button title="全部替换"><ReplaceAll size={14} strokeWidth={1.5} /></button>
+              <button title={t('searchPanel.replace')}><Replace size={14} strokeWidth={1.5} /></button>
+              <button title={t('searchPanel.replaceAll')}><ReplaceAll size={14} strokeWidth={1.5} /></button>
             </div>
           </div>
         )}
@@ -153,27 +155,31 @@ const SearchPanel = forwardRef<SearchPanelRef>((_props, ref) => {
 
       <div className="search-panel__filters">
         <div className="filter-row">
-          <label>包含</label>
-          <input type="text" placeholder="例如: *.ts, *.tsx" value={includePattern} onChange={(e) => setIncludePattern(e.target.value)} />
+          <label>{t('searchPanel.include')}</label>
+          <input type="text" placeholder={t('searchPanel.includePlaceholder')} value={includePattern} onChange={(e) => setIncludePattern(e.target.value)} />
         </div>
         <div className="filter-row">
-          <label>排除</label>
-          <input type="text" placeholder="例如: node_modules, dist" value={excludePattern} onChange={(e) => setExcludePattern(e.target.value)} />
+          <label>{t('searchPanel.exclude')}</label>
+          <input type="text" placeholder={t('searchPanel.excludePlaceholder')} value={excludePattern} onChange={(e) => setExcludePattern(e.target.value)} />
         </div>
       </div>
 
       {(results.length > 0 || isSearching) && (
         <div className="search-panel__stats">
           {isSearching
-            ? `正在搜索... ${searchedCount}/${totalFileCount} 文件`
-            : `${totalFiles} 文件中有 ${totalMatches} 个结果${isTruncated ? '（已截断，最多 500 个）' : ''}`}
+            ? t('searchPanel.searchingProgress', { searched: searchedCount, total: totalFileCount })
+            : t('searchPanel.resultStats', {
+                files: totalFiles,
+                matches: totalMatches,
+                suffix: isTruncated ? t('searchPanel.resultStatsTruncated') : '',
+              })}
         </div>
       )}
 
       <div className="search-panel__results">
         {results.length === 0 && !isSearching && query && (
           <div className="search-panel__empty">
-            {isTruncated ? '结果过多，已截断显示' : '未找到匹配结果'}
+            {isTruncated ? t('searchPanel.resultsTruncated') : t('searchPanel.noResults')}
           </div>
         )}
 

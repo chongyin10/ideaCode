@@ -12,7 +12,22 @@
 .scm-content {
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.scm-section {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.scm-section__content {
   overflow-y: auto;
+  flex-shrink: 0;
+  transition: height 0.18s ease;
 }
 
 .scm-content::-webkit-scrollbar {
@@ -107,10 +122,6 @@
 
 /* ─── 分组 ─── */
 
-.scm-section {
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-}
-
 .scm-section__header {
   display: flex;
   align-items: center;
@@ -172,8 +183,23 @@
 }
 
 .scm-item:hover { background: #2a2d2e; }
-.scm-item--empty { color: #5a5a5a; cursor: default; padding: 8px 20px; font-style: italic; }
-.scm-item--empty:hover { background: none; }
+
+.scm-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 100%;
+  min-height: 80px;
+  color: #5a5a5a;
+  text-align: center;
+  user-select: none;
+}
+
+.scm-empty__icon {
+  color: #4a4a4a;
+}
 
 .scm-item__status {
   width: 16px;

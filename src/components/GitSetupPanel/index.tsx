@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Check, Loader2, FolderOpen } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import { loadDirectory } from '../../store/slices/workspaceSlice';
@@ -7,6 +8,7 @@ import { openDirectory } from '../../services/fileService';
 import './GitSetupPanel.css';
 
 const GitSetupPanel = () => {
+  const { t } = useTranslation();
   const dispatch = useAppDispatch();
   const rootSource = useAppSelector((s) => s.workspace.rootSource);
   const rootPath = typeof rootSource === 'string' ? rootSource : null;
@@ -28,9 +30,9 @@ const GitSetupPanel = () => {
 
   const platformHint = (() => {
     if (!repoUrl) return '';
-    if (repoUrl.includes('github.com')) return '检测到 GitHub 仓库';
-    if (repoUrl.includes('gitlab')) return '检测到 GitLab 仓库';
-    if (repoUrl.includes('gitee.com')) return '检测到 Gitee 仓库';
+    if (repoUrl.includes('github.com')) return t('gitSetup.platformGithub');
+    if (repoUrl.includes('gitlab')) return t('gitSetup.platformGitlab');
+    if (repoUrl.includes('gitee.com')) return t('gitSetup.platformGitee');
     return '';
   })();
 
@@ -54,10 +56,10 @@ const GitSetupPanel = () => {
     return (
       <div className="gitsetup">
         <div className="gitsetup-hero">
-          <h2>初始化 Git 仓库</h2>
-          <p>当前文件夹尚未初始化 Git 版本控制</p>
+          <h2>{t('sourceControlPanel.initTitle')}</h2>
+          <p>{t('sourceControlPanel.initDesc')}</p>
           <button className="gitsetup-btn gitsetup-btn--primary" onClick={handleInit} disabled={loading}>
-            {loading ? <Loader2 size={16} className="gitsetup-spin" /> : <span>初始化仓库</span>}
+            {loading ? <Loader2 size={16} className="gitsetup-spin" /> : <span>{t('sourceControlPanel.initRepo')}</span>}
           </button>
           {error && <p className="gitsetup-error">{error}</p>}
         </div>
@@ -69,24 +71,24 @@ const GitSetupPanel = () => {
     <div className="gitsetup">
       {loading ? (
         <div className="gitsetup-progress">
-          <h2>{clonePercent > 0 ? `正在克隆... ${clonePercent}%` : '正在克隆仓库...'}</h2>
+          <h2>{clonePercent > 0 ? t('sourceControlPanel.cloningProgress', { percent: clonePercent }) : t('sourceControlPanel.cloning')}</h2>
           <div className="gitsetup-progress__bar">
             <div className="gitsetup-progress__fill" style={{ width: `${Math.max(clonePercent, 3)}%` }} />
           </div>
-          {eta !== null && <span className="gitsetup-progress__eta">预计剩余 {eta} 秒</span>}
+          {eta !== null && <span className="gitsetup-progress__eta">{t('sourceControlPanel.eta', { seconds: eta })}</span>}
           {cloneProgress && (
             <pre className="gitsetup-progress__log">{cloneProgress}</pre>
           )}
         </div>
       ) : (
         <div className="gitsetup-form">
-          <h2>克隆 Git 仓库</h2>
-          <p>输入仓库地址和本地目标路径</p>
+          <h2>{t('sourceControlPanel.cloneTitle')}</h2>
+          <p>{t('sourceControlPanel.cloneDesc')}</p>
           <div className="gitsetup-field">
-            <label>仓库 URL</label>
+            <label>{t('sourceControlPanel.repoUrlLabel')}</label>
             <input
               type="text"
-              placeholder="https://github.com/user/repo.git"
+              placeholder={t('sourceControlPanel.repoUrlPlaceholder')}
               value={repoUrl}
               onChange={(e) => setRepoUrl(e.target.value)}
               autoFocus
@@ -94,7 +96,7 @@ const GitSetupPanel = () => {
             {platformHint && <span className="gitsetup-hint">{platformHint}</span>}
           </div>
           <div className="gitsetup-field">
-            <label>本地目标路径</label>
+            <label>{t('sourceControlPanel.targetPathLabel')}</label>
             <button
               className="gitsetup-path-selector"
               onClick={async () => {
@@ -104,7 +106,7 @@ const GitSetupPanel = () => {
                 }
               }}
             >
-              {clonePath || '点击选择本地文件夹'}
+              {clonePath || t('sourceControlPanel.selectFolder')}
             </button>
           </div>
           <div className="gitsetup-form__actions">
@@ -114,10 +116,10 @@ const GitSetupPanel = () => {
               disabled={loading || !repoUrl.trim() || !clonePath.trim()}
             >
               {loading ? <Loader2 size={16} className="gitsetup-spin" /> : <Check size={16} />}
-              克隆
+              {t('sourceControlPanel.clone')}
             </button>
             <button className="gitsetup-btn" onClick={handleOpenFolder}>
-              <FolderOpen size={16} /> 打开本地文件夹
+              <FolderOpen size={16} /> {t('sourceControlPanel.openLocalFolder')}
             </button>
           </div>
           {error && <p className="gitsetup-error">{error}</p>}

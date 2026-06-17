@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import './ConfirmDialog.css';
 
 export type ConfirmResult = 'save' | 'discard' | 'cancel';
@@ -9,6 +10,7 @@ interface ConfirmDialogProps {
 }
 
 const ConfirmDialog = ({ title, message, onResult }: ConfirmDialogProps) => {
+  const { t } = useTranslation();
   return (
     <div className="confirm-dialog-overlay" onClick={() => onResult('cancel')}>
       <div className="confirm-dialog" onClick={(e) => e.stopPropagation()}>
@@ -19,19 +21,19 @@ const ConfirmDialog = ({ title, message, onResult }: ConfirmDialogProps) => {
             className="confirm-dialog__btn confirm-dialog__btn--secondary"
             onClick={() => onResult('discard')}
           >
-            不保存
+            {t('confirmDialog.discard')}
           </button>
           <button
             className="confirm-dialog__btn confirm-dialog__btn--secondary"
             onClick={() => onResult('cancel')}
           >
-            取消
+            {t('confirmDialog.cancel')}
           </button>
           <button
             className="confirm-dialog__btn confirm-dialog__btn--primary"
             onClick={() => onResult('save')}
           >
-            保存
+            {t('confirmDialog.save')}
           </button>
         </div>
       </div>

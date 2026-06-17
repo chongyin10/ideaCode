@@ -1,0 +1,351 @@
+{
+  "language": {
+    "zh-CN": "Simplified Chinese",
+    "zh-TW": "Traditional Chinese",
+    "en": "English"
+  },
+  "loading": "Loading...",
+  "cancel": "Cancel",
+  "confirm": "Confirm",
+  "save": "Save",
+  "close": "Close",
+  "search": "Search",
+  "clear": "Clear",
+  "create": "Create",
+  "add": "Add",
+  "remove": "Remove",
+  "delete": "Delete",
+  "rename": "Rename",
+  "edit": "Edit",
+  "copy": "Copy",
+  "paste": "Paste",
+  "cut": "Cut",
+  "statusBar": {
+    "branch": "Branch",
+    "problems": "Problems",
+    "errors": "Errors",
+    "lineColumn": "Ln {{line}}, Col {{column}}",
+    "encoding": "UTF-8",
+    "formatter": "Prettier",
+    "language": "Language Mode",
+    "absolutePath": "Switch to absolute path",
+    "relativePath": "Switch to relative path",
+    "system": {
+      "cpu": "CPU",
+      "memory": "Memory",
+      "gpu": "GPU"
+    },
+    "branchSearchPlaceholder": "Find branch",
+    "createNewBranch": "Create new branch...",
+    "branchBasedOnPlaceholder": "Based on {{branch}}",
+    "newBranchNamePlaceholder": "New branch name",
+    "localBranches": "Local branches",
+    "remoteBranches": "Remote branches",
+    "noBranchesFound": "No branches found"
+  },
+  "bottomPanel": {
+    "terminal": "Terminal",
+    "problems": "Problems",
+    "output": "Output",
+    "debugConsole": "Debug Console",
+    "ports": "Ports",
+    "gitlens": "GITLENS",
+    "newTerminal": "New Terminal",
+    "selectShell": "Select Shell",
+    "splitTerminal": "Split Terminal",
+    "broadcastMode": "Broadcast Mode",
+    "aiAnalyze": "AI Analyze (N/A)",
+    "search": "Search",
+    "copy": "Copy (N/A)",
+    "paste": "Paste (N/A)",
+    "clear": "Clear",
+    "maximize": "Maximize",
+    "restore": "Restore",
+    "closePanel": "Close Panel",
+    "terminals": "Terminals",
+    "bookmarks": "Bookmarks",
+    "empty": "Click + to create a terminal",
+    "shellProfile": "Shell Profile",
+    "bookmarkLine": "Jump to line {{line}}",
+    "selectShellTooltip": "Select Shell to create a new terminal",
+    "searchPlaceholder": "Search...",
+    "renameTooltip": "Rename",
+    "problemsPanel": "Problems Panel",
+    "outputPanel": "Output Panel",
+    "debugConsolePanel": "Debug Console",
+    "portsPanel": "Ports Panel"
+  },
+  "rightPanel": {
+    "addTab": "Add Tab",
+    "maximize": "Maximize",
+    "restore": "Restore",
+    "closeTab": "Close Current Tab",
+    "placeholder": "{{name}} Panel",
+    "defaultTabName": "Tab {{index}}"
+  },
+  "settingsPanel": {
+    "title": "Settings",
+    "searchPlaceholder": "Search settings",
+    "categories": {
+      "commonlyUsed": "Commonly Used",
+      "editor": "Text Editor",
+      "appearance": "Appearance"
+    },
+    "theme": {
+      "label": "Color Theme",
+      "desc": "Choose the editor syntax highlighting theme",
+      "light": "Light",
+      "dark": "Dark",
+      "hc": "High Contrast"
+    },
+    "fontSize": {
+      "label": "Font Size",
+      "desc": "Editor font size in pixels"
+    },
+    "wordWrap": {
+      "label": "Word Wrap",
+      "desc": "Whether to wrap lines automatically",
+      "on": "On",
+      "off": "Off",
+      "bounded": "Viewport Width"
+    },
+    "semanticHighlighting": {
+      "label": "Semantic Highlighting",
+      "desc": "Color symbols based on semantic information from the language service"
+    },
+    "minimap": {
+      "label": "Minimap",
+      "desc": "Show a thumbnail of the code on the right side"
+    },
+    "displayLanguage": {
+      "label": "Display Language",
+      "desc": "Change the UI display language (some menus require a restart)"
+    },
+    "searchResults": "Search Results",
+    "matchedSettings": "Found {{count}} matching settings",
+    "sectionDesc": "Control the appearance and behavior of the Monaco editor",
+    "noResults": "No matching settings found",
+    "reset": "Reset to Default"
+  },
+  "monacoEditor": {
+    "loading": "Loading editor..."
+  },
+  "activityBar": {
+    "explorer": "Explorer",
+    "search": "Search",
+    "sourceControl": "Source Control",
+    "runAndDebug": "Run and Debug",
+    "extensions": "Extensions",
+    "account": "Account",
+    "settings": "Settings"
+  },
+  "topBar": {
+    "searchFilesTooltip": "Search files (Ctrl+P)",
+    "search": "Search",
+    "settings": "Settings",
+    "toggleRightPanel": "Toggle right panel",
+    "toggleBottomPanel": "Toggle bottom panel",
+    "minimize": "Minimize",
+    "maximize": "Maximize",
+    "close": "Close"
+  },
+  "sidePanel": {
+    "explorer": "Explorer",
+    "search": "Search",
+    "sourceControl": "Source Control",
+    "runAndDebug": "Run and Debug",
+    "extensions": "Extensions",
+    "noPanel": "Panel",
+    "selectView": "Select a view"
+  },
+  "explorer": {
+    "inputPlaceholder": {
+      "fileName": "Enter file name",
+      "folderName": "Enter folder name"
+    },
+    "errors": {
+      "nameExists": "Name \"{{name}}\" is already taken, please choose another",
+      "createFailed": "Create failed. Please check if the name is valid or the path exists",
+      "renameFailed": "Rename failed. Please check if the name is valid",
+      "revealFailed": "Reveal failed: {{message}}",
+      "deleteFailed": "Delete \"{{name}}\" failed: {{message}}"
+    },
+    "confirm": {
+      "delete": "Are you sure you want to delete \"{{names}}\"?"
+    },
+    "contextMenu": {
+      "newFile": "New File",
+      "newFolder": "New Folder",
+      "revealInExplorer": "Reveal in Explorer",
+      "findInFiles": "Find in Files",
+      "copyPath": "Copy Path",
+      "copyRelativePath": "Copy Relative Path"
+    },
+    "empty": {
+      "title": "No folder opened",
+      "openFolder": "Open Folder",
+      "cloneRepo": "Clone Repository",
+      "noOpenEditors": "No open editors",
+      "noFiles": "No files yet",
+      "timelineComingSoon": "Timeline coming soon"
+    },
+    "sections": {
+      "openEditors": "Open Editors",
+      "timeline": "Timeline"
+    },
+    "header": {
+      "newFile": "New File",
+      "newFolder": "New Folder",
+      "refresh": "Refresh",
+      "collapseAll": "Collapse All"
+    },
+    "git": {
+      "containsChanges": "Contains changes"
+    }
+  },
+  "searchPanel": {
+    "searchPlaceholder": "Search",
+    "caseSensitive": "Case Sensitive",
+    "wholeWord": "Whole Word",
+    "regex": "Regular Expression",
+    "fuzzyMatch": "Fuzzy match (spell correction)",
+    "toggleReplace": "Toggle Replace",
+    "replacePlaceholder": "Replace",
+    "replace": "Replace",
+    "replaceAll": "Replace All",
+    "include": "Include",
+    "includePlaceholder": "e.g. *.ts, *.tsx",
+    "exclude": "Exclude",
+    "excludePlaceholder": "e.g. node_modules, dist",
+    "searchingProgress": "Searching... {{searched}}/{{total}} files",
+    "resultStats": "{{matches}} results in {{files}} files{{suffix}}",
+    "resultStatsTruncated": " (truncated at 500)",
+    "resultsTruncated": "Too many results, truncated",
+    "noResults": "No matching results"
+  },
+  "home": {
+    "time": {
+      "today": "Today {{time}}",
+      "yesterday": "Yesterday {{time}}"
+    },
+    "openQuickOpen": "Quick Open File (Ctrl+P)",
+    "unsavedChanges": {
+      "title": "Unsaved Changes",
+      "message": "Do you want to save the changes to the current file?"
+    },
+    "welcome": {
+      "title": "Welcome to IDEACODE",
+      "subtitle": "A lightweight IDE based on Monaco Editor",
+      "openFolder": "Open Folder",
+      "openQuickOpen": "Quick Open File (Ctrl+P)"
+    },
+    "recentProjects": {
+      "title": "Recent Projects",
+      "removeTooltip": "Remove from history"
+    },
+    "shortcuts": {
+      "openFile": "Quick Open File",
+      "splitView": "Split View",
+      "splitViewKey": "Click Columns icon",
+      "switchTab": "Switch Tab (MRU)"
+    },
+    "split": {
+      "equalizeWidths": "Equalize column widths"
+    }
+  },
+  "sourceControlPanel": {
+    "title": "Source Control",
+    "setupDesc": "Clone a repository or open a folder to get started",
+    "cloneRepo": "Clone Repository",
+    "initTitle": "Initialize Git Repository",
+    "initDesc": "The current folder has not been initialized with Git",
+    "initRepo": "Initialize Repository",
+    "cloneTitle": "Clone Git Repository",
+    "cloneDesc": "Enter the repository URL and local target path",
+    "repoUrlLabel": "Repository URL",
+    "repoUrlPlaceholder": "https://github.com/user/repo.git",
+    "targetPathLabel": "Local Target Path",
+    "selectFolder": "Click to select a local folder",
+    "clone": "Clone",
+    "openLocalFolder": "Open Local Folder",
+    "cloning": "Cloning repository...",
+    "cloningProgress": "Cloning... {{percent}}%",
+    "eta": "Estimated {{seconds}}s remaining",
+    "commitPlaceholder": "Enter commit message (Ctrl+Enter)",
+    "commitTooltip": "Commit (Ctrl+Enter)",
+    "refresh": "Refresh",
+    "stageAllChanges": "Stage All Changes",
+    "pull": "Pull",
+    "push": "Push",
+    "more": "More",
+    "sections": {
+      "staged": "Staged Changes",
+      "changes": "Changes",
+      "merge": "Merge Changes",
+      "untracked": "Untracked Files",
+      "stash": "Stash"
+    },
+    "actions": {
+      "unstageAll": "Unstage All",
+      "revertStagedAll": "Revert All Staged",
+      "stageAll": "Stage All",
+      "discardAllChanges": "Discard All Changes",
+      "discardAllMerge": "Discard All Merge Changes",
+      "deleteAllUntracked": "Delete All Untracked",
+      "stage": "Stage",
+      "unstage": "Unstage",
+      "discard": "Discard Changes",
+      "openFile": "Open File"
+    },
+    "confirm": {
+      "discardFile": "Are you sure you want to discard changes to \"{{file}}\"?",
+      "discardFiles": "Are you sure you want to discard changes to {{count}} files?",
+      "discardMergeFiles": "Are you sure you want to discard changes to {{count}} merge conflict files?",
+      "deleteUntracked": "Are you sure you want to delete {{count}} untracked files/folders?"
+    },
+    "empty": "No {{title}}"
+  },
+  "quickOpen": {
+    "placeholder": "Enter file name (fuzzy match, e.g. apptsx → App.tsx)",
+    "placeholderInPrefix": "Search files in {{prefix}}...",
+    "settingsTitle": "Filter Settings",
+    "excludeDirsLabel": "Exclude Directories",
+    "excludeDirsPlaceholder": "e.g. node_modules, .git, dist",
+    "noResults": "No matching files",
+    "startTyping": "Start typing to search files",
+    "resultsCount": "{{count}} results",
+    "footerShortcuts": "↑↓ select · Enter open · Esc close"
+  },
+  "diffEditorPanel": {
+    "compareTitle": "{{fileName}} — Compare with HEAD",
+    "replaceRight": "Replace right with left (copy left content to right)",
+    "replaceLeft": "Replace left with right (copy right content to left)",
+    "prevChange": "Previous Change (Shift+F7)",
+    "nextChange": "Next Change (F7)",
+    "close": "Close Diff View"
+  },
+  "tabBar": {
+    "splitViewTooltip": "Split View"
+  },
+  "confirmDialog": {
+    "save": "Save",
+    "discard": "Don't Save",
+    "cancel": "Cancel"
+  },
+  "gitSetup": {
+    "platformGithub": "GitHub repository detected",
+    "platformGitlab": "GitLab repository detected",
+    "platformGitee": "Gitee repository detected"
+  },
+  "extensionsPanel": {
+    "searchPlaceholder": "Search extensions...",
+    "refresh": "Refresh",
+    "testCommand": "Test Command",
+    "noMatching": "No matching extensions",
+    "noInstalled": "No installed extensions",
+    "statusActive": "Running",
+    "statusInactive": "Stopped",
+    "statusError": "Error",
+    "unknownAuthor": "Unknown author"
+  }
+}

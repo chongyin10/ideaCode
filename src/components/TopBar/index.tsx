@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Search,
   Settings,
@@ -26,6 +27,7 @@ import './TopBar.css';
  * - 标题栏主体为拖拽区域（-webkit-app-region: drag），按钮区域排除
  */
 const TopBar = () => {
+  const { t } = useTranslation();
   const dispatch = useAppDispatch();
   const [quickOpenVisible, setQuickOpenVisible] = useState(false);
   const [, setIsMaximized] = useState(false);
@@ -86,7 +88,7 @@ const TopBar = () => {
           <button
             className="topbar__search-trigger"
             onClick={() => setQuickOpenVisible(true)}
-            title="搜索文件 (Ctrl+P)"
+            title={t('topBar.searchFilesTooltip')}
           >
             <Search size={12} strokeWidth={1.5} />
             <span>{rootName || 'IdeaCode'}</span>
@@ -97,31 +99,31 @@ const TopBar = () => {
         <div className="topbar__right">
           <button
             className="topbar__btn"
-            aria-label="搜索"
+            aria-label={t('topBar.search')}
             onClick={() => setQuickOpenVisible(true)}
           >
             <Search size={14} strokeWidth={1.5} />
           </button>
           <button
             className="topbar__btn"
-            aria-label="设置"
+            aria-label={t('topBar.settings')}
             onClick={() => dispatch(setSettingsVisible(true))}
           >
             <Settings size={14} strokeWidth={1.5} />
           </button>
           <button
             className={`topbar__btn ${rightPanelVisible ? 'active' : ''}`}
-            aria-label="切换右侧面板"
+            aria-label={t('topBar.toggleRightPanel')}
             onClick={() => dispatch(toggleRightPanel())}
-            title="切换右侧面板"
+            title={t('topBar.toggleRightPanel')}
           >
             <PanelRight size={14} strokeWidth={1.5} />
           </button>
           <button
             className={`topbar__btn ${bottomPanelVisible ? 'active' : ''}`}
-            aria-label="切换底部面板"
+            aria-label={t('topBar.toggleBottomPanel')}
             onClick={() => dispatch(toggleBottomPanel())}
-            title="切换底部面板"
+            title={t('topBar.toggleBottomPanel')}
           >
             <PanelBottom size={14} strokeWidth={1.5} />
           </button>
@@ -131,21 +133,21 @@ const TopBar = () => {
             <div className="window-controls">
               <button
                 className="window-controls__btn"
-                aria-label="最小化"
+                aria-label={t('topBar.minimize')}
                 onClick={handleMinimize}
               >
                 <Minus size={12} strokeWidth={1.5} />
               </button>
               <button
                 className="window-controls__btn"
-                aria-label="最大化"
+                aria-label={t('topBar.maximize')}
                 onClick={handleMaximize}
               >
                 <Square size={10} strokeWidth={1.5} />
               </button>
               <button
                 className="window-controls__btn window-controls__btn--close"
-                aria-label="关闭"
+                aria-label={t('topBar.close')}
                 onClick={handleClose}
               >
                 <X size={12} strokeWidth={1.5} />

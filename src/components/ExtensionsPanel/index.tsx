@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Search, Puzzle } from 'lucide-react';
 import { getPluginManager } from '../../plugin';
 import type { PluginState } from '../../plugin';
@@ -10,6 +11,7 @@ import './ExtensionsPanel.css';
  * 展示已安装/已注册的插件列表，支持查看状态、激活/停用。
  */
 const ExtensionsPanel = () => {
+  const { t } = useTranslation();
   const [plugins, setPlugins] = useState<PluginState[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -47,13 +49,13 @@ const ExtensionsPanel = () => {
           <Search size={12} strokeWidth={1.5} />
           <input
             type="text"
-            placeholder="搜索扩展..."
+            placeholder={t('extensionsPanel.searchPlaceholder')}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
         </div>
         <div className="extensions-actions">
-          <button onClick={refresh}>刷新</button>
+          <button onClick={refresh}>{t('extensionsPanel.refresh')}</button>
           <button
             onClick={() => {
               // 触发示例命令
@@ -67,7 +69,7 @@ const ExtensionsPanel = () => {
               }
             }}
           >
-            测试命令
+            {t('extensionsPanel.testCommand')}
           </button>
         </div>
       </div>
@@ -75,7 +77,7 @@ const ExtensionsPanel = () => {
       <div className="extensions-list">
         {filteredPlugins.length === 0 ? (
           <div className="extensions-empty">
-            {searchQuery ? '未找到匹配的扩展' : '暂无已安装的扩展'}
+            {searchQuery ? t('extensionsPanel.noMatching') : t('extensionsPanel.noInstalled')}
           </div>
         ) : (
           filteredPlugins.map((plugin) => (
@@ -93,7 +95,7 @@ const ExtensionsPanel = () => {
                     {plugin.manifest.name}
                   </div>
                   <div className="extension-item__meta">
-                    v{plugin.manifest.version} · {plugin.manifest.author || '未知作者'}
+                    v{plugin.manifest.version} · {plugin.manifest.author || t('extensionsPanel.unknownAuthor')}
                   </div>
                 </div>
                 <span
@@ -105,7 +107,7 @@ const ExtensionsPanel = () => {
                       : 'extension-item__status--inactive'
                   }`}
                 >
-                  {plugin.error ? '错误' : plugin.isActive ? '运行中' : '已停止'}
+                  {plugin.error ? t('extensionsPanel.statusError') : plugin.isActive ? t('extensionsPanel.statusActive') : t('extensionsPanel.statusInactive')}
                 </span>
               </div>
               {plugin.manifest.description && (

@@ -1,7 +1,9 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Plus, Minus, Check, RefreshCw, GitBranch, GitPullRequest,
   ChevronRight, Download, Loader2, Ellipsis, Undo2, FileText,
+  Inbox,
 } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import { openFile, openDiffView } from '../../store/slices/workspaceSlice';
@@ -73,6 +75,7 @@ function inferLanguage(filename: string): string {
 /* ─── 组件 ─── */
 
 const SourceControlPanel = () => {
+  const { t } = useTranslation();
   const dispatch = useAppDispatch();
 
   // #11 选择性注意力: 细粒度 selector，避免全量订阅
@@ -95,6 +98,7 @@ const SourceControlPanel = () => {
   const [mergeOpen, setMergeOpen] = useState(true);
   const [untrackedOpen, setUntrackedOpen] = useState(true);
   const [stashOpen, setStashOpen] = useState(false);
+  const contentRef = useRef<HTMLDivElement>(null);
 
   // #7 自适应轮询: 空闲期指数退避
   const idleRef = useRef(0);
@@ -203,33 +207,33 @@ const SourceControlPanel = () => {
     }
   }, [dispatch, rootPath]);
   const handleDiscard = useCallback((file: string) => {
-    if (window.confirm(`确定要丢弃 "${file}" 的更改吗？`)) {
+    if (window.confirm(t('sourceControlPanel.confirm.discardFile', { file }))) {
       dispatch(discardFile(file)).then(() => resetPolling());
     }
-  }, [dispatch, resetPolling]);
+  }, [dispatch, resetPolling, t]);
   const handleDiscardAllChanges = useCallback(() => {
     const files = changesEntries.map((e) => e.path);
     if (!files.length) return;
-    if (window.confirm(`确定要丢弃 ${files.length} 个文件的更改吗？`)) {
+    if (window.confirm(t('sourceControlPanel.confirm.discardFiles', { count: files.length }))) {
       Promise.all(files.map((f) => dispatch(discardFile(f)))).then(() => resetPolling());
     }
-  }, [dispatch, changesEntries, resetPolling]);
+  }, [dispatch, changesEntries, resetPolling, t]);
   const handleDiscardAllMerge = useCallback(() => {
     const files = mergeEntries.map((e) => e.path);
     if (!files.length) return;
-    if (window.confirm(`确定要丢弃 ${files.length} 个合并冲突文件的更改吗？`)) {
+    if (window.confirm(t('sourceControlPanel.confirm.discardMergeFiles', { count: files.length }))) {
       Promise.all(files.map((f) => dispatch(discardFile(f)))).then(() => resetPolling());
     }
-  }, [dispatch, mergeEntries, resetPolling]);
+  }, [dispatch, mergeEntries, resetPolling, t]);
   const handleDeleteAllUntracked = useCallback(async () => {
     const files = untrackedEntries.map((e) => e.path);
     if (!files.length || !rootPath) return;
-    if (window.confirm(`确定要删除 ${files.length} 个未跟踪的文件/文件夹吗？`)) {
+    if (window.confirm(t('sourceControlPanel.confirm.deleteUntracked', { count: files.length }))) {
       const base = rootPath.replace(/\/$/, '');
       await Promise.all(files.map((f) => window.electronAPI?.fs?.delete(`${base}/${f}`)));
       resetPolling();
     }
-  }, [rootPath, untrackedEntries, resetPolling]);
+  }, [rootPath, untrackedEntries, resetPolling, t]);
   const handleOpenFileNormal = useCallback((filePath: string) => {
     if (!rootPath) return;
     const base = rootPath.replace(/\/$/, '');
@@ -237,6 +241,34 @@ const SourceControlPanel = () => {
     dispatch(openFile({ name: filePath, kind: 'file', source: `${base}/${file}` }));
   }, [dispatch, rootPath]);
   const handleInit = useCallback(() => dispatch(initRepo()), [dispatch]);
+
+  /** 动态均分各展开分组的内容高度 */
+  const computeHeights = useCallback(() => {
+    const container = contentRef.current;
+    if (!container) return;
+    const headers = Array.from(container.querySelectorAll<HTMLElement>('.scm-section__header'));
+    const contents = Array.from(container.querySelectorAll<HTMLElement>('.scm-section__content'));
+    if (headers.length === 0) return;
+    const containerHeight = container.clientHeight;
+    const headersHeight = headers.reduce((sum, h) => sum + h.offsetHeight, 0);
+    const expandedCount = contents.length;
+    if (expandedCount === 0) return;
+    const available = Math.max(0, containerHeight - headersHeight);
+    const per = Math.floor(available / expandedCount);
+    contents.forEach((c) => { c.style.height = `${per}px`; });
+  }, []);
+
+  useLayoutEffect(() => {
+    computeHeights();
+  }, [computeHeights, stagedOpen, changesOpen, mergeOpen, untrackedOpen, stashOpen, stagedEntries, changesEntries, mergeEntries, untrackedEntries, stashes]);
+
+  useEffect(() => {
+    const container = contentRef.current;
+    if (!container) return;
+    const ro = new ResizeObserver(() => computeHeights());
+    ro.observe(container);
+    return () => ro.disconnect();
+  }, [computeHeights]);
 
   /** 渲染文件分组 */
   const renderSection = useCallback(
@@ -257,23 +289,32 @@ const SourceControlPanel = () => {
             ))}
           </span>
         </div>
-        {open && entries.map(({ path, code }) => (
-          <div key={path} className={`scm-item ${statusClass(code)}`} title={path} onClick={() => handleOpenFile(path)}>
-            <span className="scm-item__status">{code}</span>
-            <span className="scm-item__name">{path.split('/').pop()}</span>
-            <span className="scm-item__path">{path}</span>
-            <span className="scm-item__actions">
-              {itemBtns.map((b, i) => (
-                <button key={i} onClick={e => { e.stopPropagation(); b.handler(path); }} title={b.title}>
-                  <b.icon size={13} strokeWidth={1.5} />
-                </button>
-              ))}
-            </span>
+        {open && (
+          <div className="scm-section__content">
+            {entries.map(({ path, code }) => (
+              <div key={path} className={`scm-item ${statusClass(code)}`} title={path} onClick={() => handleOpenFile(path)}>
+                <span className="scm-item__status">{code}</span>
+                <span className="scm-item__name">{path.split('/').pop()}</span>
+                <span className="scm-item__path">{path}</span>
+                <span className="scm-item__actions">
+                  {itemBtns.map((b, i) => (
+                    <button key={i} onClick={e => { e.stopPropagation(); b.handler(path); }} title={b.title}>
+                      <b.icon size={13} strokeWidth={1.5} />
+                    </button>
+                  ))}
+                </span>
+              </div>
+            ))}
+            {entries.length === 0 && (
+              <div className="scm-empty">
+                <Inbox size={28} strokeWidth={1.5} className="scm-empty__icon" />
+                <span>{t('sourceControlPanel.empty', { title })}</span>
+              </div>
+            )}
           </div>
-        ))}
-        {open && entries.length === 0 && <div className="scm-item scm-item--empty">没有{title}</div>}
+        )}
       </div>
-    ), [handleOpenFile]
+    ), [handleOpenFile, t]
   );
 
   if (!rootPath) {
@@ -281,10 +322,10 @@ const SourceControlPanel = () => {
       <div className="scm-panel scm-setup">
         <div className="scm-setup__hero">
           <GitBranch size={36} strokeWidth={1} className="scm-setup__hero-icon" />
-          <h2>源代码管理</h2>
-          <p>克隆仓库或打开文件夹以开始</p>
+          <h2>{t('sidePanel.sourceControl')}</h2>
+          <p>{t('sourceControlPanel.setupDesc')}</p>
           <button className="scm-btn scm-btn--primary" onClick={() => dispatch(setShowCloneForm(true))}>
-            <Download size={14} /> 克隆仓库
+            <Download size={14} /> {t('sourceControlPanel.cloneRepo')}
           </button>
         </div>
       </div>
@@ -296,10 +337,10 @@ const SourceControlPanel = () => {
       <div className="scm-panel scm-setup">
         <div className="scm-setup__hero">
           <GitBranch size={36} strokeWidth={1} className="scm-setup__hero-icon" />
-          <h2>初始化 Git 仓库</h2>
-          <p>当前文件夹尚未初始化 Git</p>
+          <h2>{t('sourceControlPanel.initTitle')}</h2>
+          <p>{t('sourceControlPanel.initDesc')}</p>
           <button className="scm-btn scm-btn--primary" onClick={handleInit} disabled={loading}>
-            {loading ? <Loader2 size={14} className="scm-spin" /> : <GitBranch size={14} />} 初始化仓库
+            {loading ? <Loader2 size={14} className="scm-spin" /> : <GitBranch size={14} />} {t('sourceControlPanel.initRepo')}
           </button>
         </div>
       </div>
@@ -312,74 +353,77 @@ const SourceControlPanel = () => {
 
       <div className="scm-header">
         <div className="scm-header__input-row">
-          <input className="scm-header__input" placeholder="输入提交信息（Ctrl+Enter）"
+          <input className="scm-header__input" placeholder={t('sourceControlPanel.commitPlaceholder')}
             value={commitMsg} onChange={e => setCommitMsg(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleCommit(); } }}
           />
-          <button className="scm-header__commit" onClick={handleCommit} disabled={!commitMsg.trim()} title="提交 (Ctrl+Enter)">
+          <button className="scm-header__commit" onClick={handleCommit} disabled={!commitMsg.trim()} title={t('sourceControlPanel.commitTooltip')}>
             <Check size={16} strokeWidth={1.5} />
           </button>
         </div>
         <div className="scm-header__tools">
-          <button className="scm-icon-btn" onClick={resetPolling} title="刷新">
+          <button className="scm-icon-btn" onClick={resetPolling} title={t('sourceControlPanel.refresh')}>
             <RefreshCw size={15} strokeWidth={1.5} className={loading ? 'scm-spin' : ''} />
           </button>
-          <button className="scm-icon-btn" onClick={handleStageAllChanges} title="暂存所有更改">
+          <button className="scm-icon-btn" onClick={handleStageAllChanges} title={t('sourceControlPanel.stageAllChanges')}>
             <Plus size={15} strokeWidth={1.5} />
           </button>
-          <button className="scm-icon-btn" onClick={() => dispatch(pullBranch()).then(resetPolling)} title="拉取">
+          <button className="scm-icon-btn" onClick={() => dispatch(pullBranch()).then(resetPolling)} title={t('sourceControlPanel.pull')}>
             <GitPullRequest size={15} strokeWidth={1.5} />
           </button>
-          <button className="scm-icon-btn" onClick={() => dispatch(pushBranch()).then(resetPolling)} title="推送">
+          <button className="scm-icon-btn" onClick={() => dispatch(pushBranch()).then(resetPolling)} title={t('sourceControlPanel.push')}>
             <GitBranch size={15} strokeWidth={1.5} />
           </button>
           <span className="scm-header__spacer" />
-          <button className="scm-icon-btn" onClick={() => dispatch(initRepo())} title="更多">
+          <button className="scm-icon-btn" onClick={() => dispatch(initRepo())} title={t('sourceControlPanel.more')}>
             <Ellipsis size={15} strokeWidth={1.5} />
           </button>
         </div>
       </div>
 
-      <div className="scm-content">
-        {renderSection('暂存的更改', stagedEntries, stagedOpen, setStagedOpen, 'undo', [
-          { label: '全部取消暂存', icon: Minus, handler: handleUnstageAll },
-          { label: '全部撤回暂存', icon: Undo2, handler: handleUnstageAll },
+      <div className="scm-content" ref={contentRef}>
+        {renderSection(t('sourceControlPanel.sections.staged'), stagedEntries, stagedOpen, setStagedOpen, 'undo', [
+          { label: t('sourceControlPanel.actions.unstageAll'), icon: Minus, handler: handleUnstageAll },
+          { label: t('sourceControlPanel.actions.revertStagedAll'), icon: Undo2, handler: handleUnstageAll },
         ], [
-          { icon: Minus, handler: handleUnstage, title: '取消暂存' },
-          { icon: FileText, handler: handleOpenFileNormal, title: '打开文件' },
+          { icon: Minus, handler: handleUnstage, title: t('sourceControlPanel.actions.unstage') },
+          { icon: FileText, handler: handleOpenFileNormal, title: t('sourceControlPanel.actions.openFile') },
         ])}
-        {renderSection('更改', changesEntries, changesOpen, setChangesOpen, 'plus', [
-          { label: '全部暂存', icon: Plus, handler: handleStageAllChanges },
-          { label: '全部撤回更改', icon: Undo2, handler: handleDiscardAllChanges },
+        {renderSection(t('sourceControlPanel.sections.changes'), changesEntries, changesOpen, setChangesOpen, 'plus', [
+          { label: t('sourceControlPanel.actions.stageAll'), icon: Plus, handler: handleStageAllChanges },
+          { label: t('sourceControlPanel.actions.discardAllChanges'), icon: Undo2, handler: handleDiscardAllChanges },
         ], [
-          { icon: Plus, handler: handleStage, title: '暂存' },
-          { icon: Undo2, handler: handleDiscard, title: '丢弃更改' },
-          { icon: FileText, handler: handleOpenFileNormal, title: '打开文件' },
+          { icon: Plus, handler: handleStage, title: t('sourceControlPanel.actions.stage') },
+          { icon: Undo2, handler: handleDiscard, title: t('sourceControlPanel.actions.discard') },
+          { icon: FileText, handler: handleOpenFileNormal, title: t('sourceControlPanel.actions.openFile') },
         ])}
-        {renderSection('合并更改', mergeEntries, mergeOpen, setMergeOpen, 'alert', [
-          { label: '全部撤回合并更改', icon: Undo2, handler: handleDiscardAllMerge },
+        {renderSection(t('sourceControlPanel.sections.merge'), mergeEntries, mergeOpen, setMergeOpen, 'alert', [
+          { label: t('sourceControlPanel.actions.discardAllMerge'), icon: Undo2, handler: handleDiscardAllMerge },
         ], [
-          { icon: FileText, handler: handleOpenFileNormal, title: '打开文件' },
+          { icon: FileText, handler: handleOpenFileNormal, title: t('sourceControlPanel.actions.openFile') },
         ])}
-        {renderSection('未跟踪的文件', untrackedEntries, untrackedOpen, setUntrackedOpen, 'plus', [
-          { label: '全部暂存', icon: Plus, handler: () => {
+        {renderSection(t('sourceControlPanel.sections.untracked'), untrackedEntries, untrackedOpen, setUntrackedOpen, 'plus', [
+          { label: t('sourceControlPanel.actions.stageAll'), icon: Plus, handler: () => {
             const files = untrackedEntries.map(e => e.path);
             if (files.length) dispatch(stageFiles(files));
           }},
-          { label: '全部删除未跟踪文件', icon: Undo2, handler: handleDeleteAllUntracked },
+          { label: t('sourceControlPanel.actions.deleteAllUntracked'), icon: Undo2, handler: handleDeleteAllUntracked },
         ], [
-          { icon: Plus, handler: handleStage, title: '暂存' },
-          { icon: FileText, handler: handleOpenFileNormal, title: '打开文件' },
+          { icon: Plus, handler: handleStage, title: t('sourceControlPanel.actions.stage') },
+          { icon: FileText, handler: handleOpenFileNormal, title: t('sourceControlPanel.actions.openFile') },
         ])}
-
         {stashes.length > 0 && (
           <div className="scm-section">
             <div className="scm-section__header" onClick={() => setStashOpen(!stashOpen)}>
               <ChevronRight size={12} strokeWidth={1.5} className={stashOpen ? 'scm-rotated' : ''} />
-              <span className="scm-section__title">储藏</span>
+              <span className="scm-section__title">{t('sourceControlPanel.sections.stash')}</span>
               <span className="scm-section__badge">{stashes.length}</span>
             </div>
-            {stashOpen && stashes.map((s, i) => <div key={i} className="scm-item scm-item--stash">{s}</div>)}
+            {stashOpen && (
+              <div className="scm-section__content">
+                {stashes.map((s, i) => <div key={i} className="scm-item scm-item--stash">{s}</div>)}
+              </div>
+            )}
           </div>
         )}
       </div>

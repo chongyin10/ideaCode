@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Search, Settings } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import { openFile, expandToFile } from '../../store/slices/workspaceSlice';
@@ -47,6 +48,7 @@ interface QuickOpenProps {
  * 时间复杂度：O(m × n)，m=输入长度, n=文件路径长度
  */
 const QuickOpen = ({ onClose, files }: QuickOpenProps) => {
+  const { t } = useTranslation();
   const dispatch = useAppDispatch();
   const { allFilePaths: storeAllFilePaths, rootSource } = useAppSelector((state) => state.workspace);
   const allFilePaths = files ?? storeAllFilePaths;
@@ -154,13 +156,13 @@ const QuickOpen = ({ onClose, files }: QuickOpenProps) => {
           <input
             ref={inputRef}
             className="quick-open-input"
-            placeholder={prefix ? `在 ${prefix} 中搜索文件...` : '输入文件名（支持模糊匹配，如 apptsx → App.tsx）'}
+            placeholder={prefix ? t('quickOpen.placeholderInPrefix', { prefix }) : t('quickOpen.placeholder')}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
           <button
             className={`quick-open-settings-btn ${showSettings ? 'active' : ''}`}
-            title="过滤设置"
+            title={t('quickOpen.settingsTitle')}
             onClick={() => setShowSettings((v) => !v)}
           >
             <Settings size={14} strokeWidth={1.5} />
@@ -170,12 +172,12 @@ const QuickOpen = ({ onClose, files }: QuickOpenProps) => {
         {showSettings && (
           <div className="quick-open-settings">
             <div className="quick-open-settings__row">
-              <label>排除目录</label>
+              <label>{t('quickOpen.excludeDirsLabel')}</label>
               <input
                 type="text"
                 value={excludeDirsRaw}
                 onChange={(e) => setExcludeDirsRaw(e.target.value)}
-                placeholder="例如: node_modules, .git, dist"
+                placeholder={t('quickOpen.excludeDirsPlaceholder')}
               />
             </div>
           </div>
@@ -184,7 +186,7 @@ const QuickOpen = ({ onClose, files }: QuickOpenProps) => {
         <div className="quick-open-list">
           {results.length === 0 ? (
             <div className="quick-open-empty">
-              {query ? '未找到匹配的文件' : '开始输入以搜索文件'}
+              {query ? t('quickOpen.noResults') : t('quickOpen.startTyping')}
             </div>
           ) : (
             results.map((item, index) => (
@@ -206,8 +208,8 @@ const QuickOpen = ({ onClose, files }: QuickOpenProps) => {
         </div>
 
         <div className="quick-open-footer">
-          <span>{results.length} 个结果</span>
-          <span>↑↓ 选择 · Enter 打开 · Esc 关闭</span>
+          <span>{t('quickOpen.resultsCount', { count: results.length })}</span>
+          <span>{t('quickOpen.footerShortcuts')}</span>
         </div>
       </div>
     </div>

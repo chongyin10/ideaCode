@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ChevronRight } from 'lucide-react';
 import type { FileEntry, FileSource } from '../../services/fileService';
 import type { GitStatusMap, GitStatusCode } from '../../types/electron';
@@ -92,6 +93,7 @@ const FileTree = memo(({
   expandedDirs,
   onToggleExpand,
 }: FileTreeProps) => {
+  const { t } = useTranslation();
   const [children, setChildren] = useState<FileEntry[]>([]);
 
   // 计算当前 entry 的相对路径（用于 Git 状态查询 + 自动展开匹配）
@@ -315,7 +317,7 @@ const FileTree = memo(({
         )}
         {activeGitCode && (
           entry.kind === 'directory' ? (
-            <span className="git-dot" title="包含修改" />
+            <span className="git-dot" title={t('explorer.git.containsChanges')} />
           ) : (
             <span className={`git-status ${activeGitCode}`}>{activeGitCode}</span>
           )
@@ -332,7 +334,7 @@ const FileTree = memo(({
             {myPendingCreateType === 'file' ? <DefaultFileIcon /> : <ClosedFolderIcon />}
           </span>
           <InlineInput
-            placeholder={myPendingCreateType === 'file' ? '请输入文件名' : '请输入文件夹名'}
+            placeholder={myPendingCreateType === 'file' ? t('explorer.inputPlaceholder.fileName') : t('explorer.inputPlaceholder.folderName')}
             onConfirm={(name) => onCreateConfirm?.(entry.source, myPendingCreateType, name)}
             onCancel={() => onCreateCancel?.()}
           />

@@ -6,11 +6,12 @@
  */
 
 import { useState, useCallback, useMemo, useRef, useEffect, type ElementType } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Plus, X, Trash2, Search, Bookmark, SplitSquareVertical,
   Maximize2, Minimize2, Terminal, ChevronDown,
   Wifi, WifiOff, Copy, ClipboardPaste, Sparkles,
-  AlertCircle, PanelTopOpen, Bug, Plug, GitBranch,
+  AlertCircle, PanelTopOpen, Bug, Plug, GitBranch, Pencil,
 } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import { toggleBottomPanel, setBottomPanelVisible, switchBottomTab, type BottomTabId } from '../../store/slices/layoutSlice';
@@ -18,7 +19,7 @@ import {
   addTab, removeTab, setTabProcessId, setTabReady, setTabExited,
   setPanelVisible, setPanelHeight, toggleMaximize as toggleMaximizeAction,
   setSidebarWidth, splitPane, setActivePane, setActiveGroup,
-  removeBookmark,
+  removeBookmark, renameTab,
   setBroadcastMode, setProfiles,
   TerminalTab,
 } from '../../store/slices/terminalSlice';
@@ -47,17 +48,25 @@ interface BottomTab {
   icon: ElementType;
 }
 
-const bottomTabs: BottomTab[] = [
-  { id: 'terminal', name: '终端', icon: Terminal },
-  { id: 'problems', name: '问题', icon: AlertCircle },
-  { id: 'output', name: '输出', icon: PanelTopOpen },
-  { id: 'debug-console', name: '调试控制台', icon: Bug },
-  { id: 'ports', name: '端口', icon: Plug },
-  { id: 'gitlens', name: 'GITLENS', icon: GitBranch },
-];
+const useBottomTabs = (): BottomTab[] => {
+  const { t } = useTranslation();
+  return useMemo(
+    () => [
+      { id: 'terminal', name: t('bottomPanel.terminal'), icon: Terminal },
+      { id: 'problems', name: t('bottomPanel.problems'), icon: AlertCircle },
+      { id: 'output', name: t('bottomPanel.output'), icon: PanelTopOpen },
+      { id: 'debug-console', name: t('bottomPanel.debugConsole'), icon: Bug },
+      { id: 'ports', name: t('bottomPanel.ports'), icon: Plug },
+      { id: 'gitlens', name: t('bottomPanel.gitlens'), icon: GitBranch },
+    ],
+    [t]
+  );
+};
 
 const BottomPanel = () => {
+  const { t } = useTranslation();
   const dispatch = useAppDispatch();
+  const bottomTabs = useBottomTabs();
   const { bottomPanelVisible, activeBottomTab } = useAppSelector((s) => s.layout);
   const terminal = useAppSelector((s) => s.terminal);
   const rootSource = useAppSelector((s) => s.workspace.rootSource);
@@ -98,6 +107,8 @@ const BottomPanel = () => {
   const [searchVisible, setSearchVisible] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [isResizing, setIsResizing] = useState(false);
+  const [editingTabId, setEditingTabId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState('');
   const panelRef = useRef<HTMLDivElement>(null);
 
   /* ─── 占位 div 引用与 ResizeObserver ─── */
@@ -192,6 +203,24 @@ const BottomPanel = () => {
     }
     dispatch(removeTab(tabId));
   }, [dispatch]);
+
+  const startRenameTab = useCallback((tabId: string) => {
+    const tab = terminalStateRef.current.tabs[tabId];
+    if (!tab) return;
+    setEditingTabId(tabId);
+    setEditingName(tab.name);
+  }, []);
+
+  const finishRenameTab = useCallback(() => {
+    if (editingTabId) {
+      const trimmed = editingName.trim();
+      if (trimmed) {
+        dispatch(renameTab({ id: editingTabId, name: trimmed }));
+      }
+    }
+    setEditingTabId(null);
+    setEditingName('');
+  }, [editingTabId, editingName, dispatch]);
 
   const handleSplitTab = useCallback(async () => {
     const state = terminalStateRef.current;
@@ -459,34 +488,34 @@ const BottomPanel = () => {
                   const profile = terminal.profiles.find(p => p.name === name);
                   if (profile) handleCreateTab(profile);
                 }}
-                title="选择 Shell 创建新终端"
+                title={t('bottomPanel.selectShellTooltip')}
               >
-                <option value="" disabled>新建终端</option>
+                <option value="" disabled>{t('bottomPanel.newTerminal')}</option>
                 {terminal.profiles.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
                 {terminal.profiles.length === 0 && <option value="">...</option>}
               </select>
-              <button className="bottom-panel__btn" onClick={() => handleCreateTab()} title="新建终端">
+              <button className="bottom-panel__btn" onClick={() => handleCreateTab()} title={t('bottomPanel.newTerminal')}>
                 <Plus size={14} />
               </button>
-              <button className="bottom-panel__btn" onClick={handleSplitTab} title="拆分终端">
+              <button className="bottom-panel__btn" onClick={handleSplitTab} title={t('bottomPanel.splitTerminal')}>
                 <SplitSquareVertical size={14} />
               </button>
-              <button className={`bottom-panel__btn ${terminal.broadcastMode ? 'active' : ''}`} onClick={toggleBroadcast} title="广播模式">
+              <button className={`bottom-panel__btn ${terminal.broadcastMode ? 'active' : ''}`} onClick={toggleBroadcast} title={t('bottomPanel.broadcastMode')}>
                 {terminal.broadcastMode ? <Wifi size={14} /> : <WifiOff size={14} />}
               </button>
-              <button className="bottom-panel__btn" title="AI 分析（暂不可用）"><Sparkles size={14} /></button>
-              <button className={`bottom-panel__btn ${searchVisible ? 'active' : ''}`} onClick={() => setSearchVisible(!searchVisible)} title="搜索">
+              <button className="bottom-panel__btn" title={t('bottomPanel.aiAnalyze')}><Sparkles size={14} /></button>
+              <button className={`bottom-panel__btn ${searchVisible ? 'active' : ''}`} onClick={() => setSearchVisible(!searchVisible)} title={t('bottomPanel.search')}>
                 <Search size={14} />
               </button>
-              <button className="bottom-panel__btn" title="复制（暂不可用）"><Copy size={14} /></button>
-              <button className="bottom-panel__btn" title="粘贴（暂不可用）"><ClipboardPaste size={14} /></button>
-              <button className="bottom-panel__btn" onClick={handleClear} title="清屏"><Trash2 size={14} /></button>
+              <button className="bottom-panel__btn" title={t('bottomPanel.copy')}><Copy size={14} /></button>
+              <button className="bottom-panel__btn" title={t('bottomPanel.paste')}><ClipboardPaste size={14} /></button>
+              <button className="bottom-panel__btn" onClick={handleClear} title={t('bottomPanel.clear')}><Trash2 size={14} /></button>
             </>
           )}
-          <button className="bottom-panel__btn" onClick={handleToggleMaximize} title="最大化">
+          <button className="bottom-panel__btn" onClick={handleToggleMaximize} title={terminal.isMaximized ? t('bottomPanel.restore') : t('bottomPanel.maximize')}>
             {terminal.isMaximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
           </button>
-          <button className="bottom-panel__btn" onClick={() => dispatch(setBottomPanelVisible(false))} title="关闭面板"><X size={14} /></button>
+          <button className="bottom-panel__btn" onClick={() => dispatch(setBottomPanelVisible(false))} title={t('bottomPanel.closePanel')}><X size={14} /></button>
         </div>
       </div>
 
@@ -500,7 +529,7 @@ const BottomPanel = () => {
           <div className="bottom-panel__search-bar">
             <input
               className="bottom-panel__search-input"
-              placeholder="搜索..."
+              placeholder={t('bottomPanel.searchPlaceholder')}
               value={searchTerm}
               onChange={e => setSearchTerm(e.target.value)}
               onKeyDown={e => {
@@ -533,7 +562,7 @@ const BottomPanel = () => {
             {!activeTabIdMemo && allTabs.length === 0 && (
               <div className="terminal-empty">
                 <Terminal size={32} opacity={0.3} />
-                <p>点击 + 创建终端</p>
+                <p>{t('bottomPanel.empty')}</p>
               </div>
             )}
           </div>
@@ -542,7 +571,7 @@ const BottomPanel = () => {
           <div className="terminal-sidebar" style={{ width: terminal.sidebarWidth }}>
             <div className="terminal-sidebar__resize-handle" onMouseDown={startResizeSidebar} />
             <div className="terminal-sidebar__tabs">
-              <div className="terminal-sidebar__section-title">终端</div>
+              <div className="terminal-sidebar__section-title">{t('bottomPanel.terminals')}</div>
               {allTabs.map(tab => (
                 <div
                   key={tab.id}
@@ -557,11 +586,44 @@ const BottomPanel = () => {
                   <div className="terminal-tab__icon">
                     <span className={`terminal-tab__status ${tab.ready ? 'ready' : ''} ${tab.exited ? 'exited' : ''}`} />
                   </div>
-                  <span className="terminal-tab__name">{tab.name}</span>
-                  <div className="terminal-tab__actions">
-                    <button className="terminal-tab__close" onClick={e => { e.stopPropagation(); handleCloseTab(tab.id); }}>
-                      <X size={10} />
-                    </button>
+                  {editingTabId === tab.id ? (
+                    <input
+                      className="terminal-tab__rename-input"
+                      value={editingName}
+                      onChange={(e) => setEditingName(e.target.value)}
+                      onBlur={() => finishRenameTab()}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          finishRenameTab();
+                        } else if (e.key === 'Escape') {
+                          setEditingTabId(null);
+                          setEditingName('');
+                        }
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                      autoFocus
+                    />
+                  ) : (
+                    <span className="terminal-tab__name">{tab.name}</span>
+                  )}
+                  <div className={`terminal-tab__actions ${editingTabId === tab.id ? 'is-editing' : ''}`}>
+                    {editingTabId !== tab.id && (
+                      <button
+                        className="terminal-tab__edit"
+                        title={t('bottomPanel.renameTooltip')}
+                        onClick={(e) => { e.stopPropagation(); startRenameTab(tab.id); }}
+                      >
+                        <Pencil size={10} />
+                      </button>
+                    )}
+                    {editingTabId !== tab.id && (
+                      <button
+                        className="terminal-tab__close"
+                        onClick={(e) => { e.stopPropagation(); handleCloseTab(tab.id); }}
+                      >
+                        <X size={10} />
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}
@@ -569,9 +631,9 @@ const BottomPanel = () => {
 
             {activeTab && activeTab.bookmarks.length > 0 && (
               <div className="terminal-sidebar__bookmarks">
-                <div className="terminal-sidebar__section-title">书签</div>
+                <div className="terminal-sidebar__section-title">{t('bottomPanel.bookmarks')}</div>
                 {activeTab.bookmarks.map(bk => (
-                  <div key={bk.id} className="terminal-bookmark" onClick={() => jumpToBookmark(bk.line)} title={`跳转到行 ${bk.line}`}>
+                  <div key={bk.id} className="terminal-bookmark" onClick={() => jumpToBookmark(bk.line)} title={t('bottomPanel.bookmarkLine', { line: bk.line })}>
                     <Bookmark size={12} />
                     <span className="terminal-bookmark__label">{bk.label}</span>
                     <button className="terminal-bookmark__remove" onClick={e => {
@@ -587,10 +649,10 @@ const BottomPanel = () => {
       </div>
 
       {/* 其他 Tab 占位 */}
-      <div className="bottom-panel__placeholder" style={{ display: activeBottomTab === 'problems' ? 'flex' : 'none' }}>问题面板</div>
-      <div className="bottom-panel__placeholder" style={{ display: activeBottomTab === 'output' ? 'flex' : 'none' }}>输出面板</div>
-      <div className="bottom-panel__placeholder" style={{ display: activeBottomTab === 'debug-console' ? 'flex' : 'none' }}>调试控制台</div>
-      <div className="bottom-panel__placeholder" style={{ display: activeBottomTab === 'ports' ? 'flex' : 'none' }}>端口面板</div>
+      <div className="bottom-panel__placeholder" style={{ display: activeBottomTab === 'problems' ? 'flex' : 'none' }}>{t('bottomPanel.problemsPanel')}</div>
+      <div className="bottom-panel__placeholder" style={{ display: activeBottomTab === 'output' ? 'flex' : 'none' }}>{t('bottomPanel.outputPanel')}</div>
+      <div className="bottom-panel__placeholder" style={{ display: activeBottomTab === 'debug-console' ? 'flex' : 'none' }}>{t('bottomPanel.debugConsolePanel')}</div>
+      <div className="bottom-panel__placeholder" style={{ display: activeBottomTab === 'ports' ? 'flex' : 'none' }}>{t('bottomPanel.portsPanel')}</div>
       <div className="bottom-panel__placeholder" style={{ display: activeBottomTab === 'gitlens' ? 'flex' : 'none' }}>GITLENS</div>
     </div>
   );

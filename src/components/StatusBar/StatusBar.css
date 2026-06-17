@@ -279,6 +279,27 @@
   text-align: center;
 }
 
+/* 系统资源监控 */
+.status-bar__system {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #858585;
+  font-size: 11px;
+}
+
+.status-bar__system-item {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  cursor: default;
+  transition: color 0.15s ease;
+}
+
+.status-bar__system-item:hover {
+  color: #cccccc;
+}
+
 /* 语言选择器 */
 .status-bar__lang {
   position: relative;

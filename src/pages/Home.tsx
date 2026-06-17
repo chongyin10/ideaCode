@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { FolderOpen, Search, Clock, X, Folder } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '../store/hooks';
 import type { OpenedFile, EditorSnapshot } from '../store/slices/workspaceSlice';
@@ -36,18 +37,19 @@ import './Home.css';
 const DAY_MS = 24 * 60 * 60 * 1000;
 const pad = (n: number) => n.toString().padStart(2, '0');
 
-function formatTime(timestamp: number): string {
+const formatTime = (timestamp: number, translate: (key: string, options?: Record<string, unknown>) => string): string => {
   const date = new Date(timestamp);
   const now = new Date();
   const diff = now.getTime() - date.getTime();
+  const time = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
   if (diff < DAY_MS && date.getDate() === now.getDate()) {
-    return `今天 ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    return translate('home.time.today', { time });
   }
   if (diff < 2 * DAY_MS) {
-    return `昨天 ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    return translate('home.time.yesterday', { time });
   }
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-}
+};
 
 /* ─── Hebbian 协同文件学习 ─── */
 
@@ -82,6 +84,7 @@ function recordCooccurrence(fileA: string, fileB: string) {
 /* ─── 主组件 ─── */
 
 function Home() {
+  const { t } = useTranslation();
   const dispatch = useAppDispatch();
   const workspace = useAppSelector((state) => state.workspace);
   const { openedFiles, recentProjects, editorGroups, activeGroupIndex, allFilePaths, mirrorContent, splitPhase, editorSnapshots: snapshots, missingFileIds } = workspace;
@@ -521,7 +524,7 @@ function Home() {
               <div className="no-active-file">
                 <button className="open-folder-btn secondary" onClick={handleOpenQuickOpen}>
                   <Search size={16} strokeWidth={1.5} />
-                  快速打开文件 (Ctrl+P)
+                  {t('home.openQuickOpen')}
                 </button>
               </div>
             )}
@@ -529,7 +532,7 @@ function Home() {
         </>
       );
     },
-    [dispatch, handleCloseTab, handleEditorChange, handleOpenQuickOpen, splitView, getPanelContent, rootPath, gitStatus, handleTabReady, handleOpenFileByPath, loadingFiles, missingFileIdsSet]
+    [dispatch, handleCloseTab, handleEditorChange, handleOpenQuickOpen, splitView, getPanelContent, rootPath, gitStatus, handleTabReady, handleOpenFileByPath, loadingFiles, missingFileIdsSet, t]
   );
 
   return (
@@ -540,8 +543,8 @@ function Home() {
 
       {closeConfirm && (
         <ConfirmDialog
-          title="文件有未保存的更改"
-          message="是否保存对当前文件的更改？"
+          title={t('home.unsavedChanges.title')}
+          message={t('home.unsavedChanges.message')}
           onResult={handleCloseConfirm}
         />
       )}
@@ -554,20 +557,20 @@ function Home() {
         <GitSetupPanel />
       ) : allFileIds.length === 0 ? (
         <div className="welcome-screen">
-          <h2>欢迎使用 IDEACODE</h2>
-          <p>基于 Monaco Editor 的轻量级 IDE</p>
+          <h2>{t('home.welcome.title')}</h2>
+          <p>{t('home.welcome.subtitle')}</p>
           <div className="welcome-actions">
             <button className="open-folder-btn" onClick={handleOpenFolder}>
-              <FolderOpen size={16} strokeWidth={1.5} /> 打开文件夹
+              <FolderOpen size={16} strokeWidth={1.5} /> {t('home.welcome.openFolder')}
             </button>
             <button className="open-folder-btn secondary" onClick={handleOpenQuickOpen}>
-              <Search size={16} strokeWidth={1.5} /> 快速打开文件 (Ctrl+P)
+              <Search size={16} strokeWidth={1.5} /> {t('home.welcome.openQuickOpen')}
             </button>
           </div>
           {recentProjects.length > 0 && (
             <div className="recent-projects">
               <div className="recent-projects__header">
-                <Clock size={14} strokeWidth={1.5} /> <span>最近打开的项目</span>
+                <Clock size={14} strokeWidth={1.5} /> <span>{t('home.recentProjects.title')}</span>
               </div>
               <div className="recent-projects__list">
                 {recentProjects.map((project) => (
@@ -579,8 +582,8 @@ function Home() {
                       <span className="recent-project-item__path">{project.path}</span>
                     </div>
                     <div className="recent-project-item__meta">
-                      <span className="recent-project-item__time">{formatTime(project.timestamp)}</span>
-                      <button className="recent-project-item__remove" onClick={(e) => handleRemoveRecent(e, project.path)} title="从历史记录中移除">
+                      <span className="recent-project-item__time">{formatTime(project.timestamp, t)}</span>
+                      <button className="recent-project-item__remove" onClick={(e) => handleRemoveRecent(e, project.path)} title={t('home.recentProjects.removeTooltip')}>
                         <X size={12} strokeWidth={1.5} />
                       </button>
                     </div>
@@ -590,9 +593,9 @@ function Home() {
             </div>
           )}
           <div className="shortcuts">
-            <div className="shortcut"><span>快速打开文件</span> <kbd>Ctrl+P</kbd></div>
-            <div className="shortcut"><span>分屏编辑</span> <kbd>点击 Columns 图标</kbd></div>
-            <div className="shortcut"><span>切换 Tab (MRU)</span> <kbd>Ctrl+Tab</kbd></div>
+            <div className="shortcut"><span>{t('home.shortcuts.openFile')}</span> <kbd>Ctrl+P</kbd></div>
+            <div className="shortcut"><span>{t('home.shortcuts.splitView')}</span> <kbd>{t('home.shortcuts.splitViewKey')}</kbd></div>
+            <div className="shortcut"><span>{t('home.shortcuts.switchTab')}</span> <kbd>Ctrl+Tab</kbd></div>
           </div>
         </div>
       ) : (
@@ -625,7 +628,7 @@ function Home() {
           </div>
           {splitView && (
             <div className="editor-split__toolbar">
-              <button className="editor-split__toolbar-btn" onClick={() => dispatch(equalizeGroupRatios())} title="均匀分布列宽">
+              <button className="editor-split__toolbar-btn" onClick={() => dispatch(equalizeGroupRatios())} title={t('home.split.equalizeWidths')}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                   <line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="18" x2="21" y2="18" />
                 </svg>

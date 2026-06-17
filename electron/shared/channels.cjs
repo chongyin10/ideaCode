@@ -122,6 +122,9 @@ const Channels = {
 
   /* ─── 右侧面板 resize 状态 ─── */
   RIGHT_PANEL_RESIZE_STATE: 'rightPanel:resizeState',
+
+  /* ─── 系统资源监控 ─── */
+  SYSTEM_STATS: 'system:stats',
 };
 
 module.exports = { Channels };

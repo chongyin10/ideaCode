@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   FilePlus,
   FolderPlus,
@@ -138,6 +139,7 @@ const FolderIcon = () => (
 );
 
 const ExplorerContent = () => {
+  const { t } = useTranslation();
   const dispatch = useAppDispatch();
 
   const rootSource = useAppSelector((state) => state.workspace.rootSource);
@@ -303,7 +305,7 @@ const ExplorerContent = () => {
   const handleCreateConfirm = useCallback(async (parentSource: FileSource, type: 'file' | 'folder', name: string) => {
     const alreadyExists = await exists(parentSource, name);
     if (alreadyExists) {
-      alert(`名称 "${name}" 已被占用，请更换名称后重试`);
+      alert(t('explorer.errors.nameExists', { name }));
       throw new Error(`名称 "${name}" 已被占用`);
     }
     try {
@@ -323,10 +325,10 @@ const ExplorerContent = () => {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error('[Explorer] 创建失败:', msg);
-      alert('创建失败，请检查名称是否合法或路径是否存在');
+      alert(t('explorer.errors.createFailed'));
       throw err;
     }
-  }, [rootSource, dispatch, notifyChange]);
+  }, [rootSource, dispatch, notifyChange, t]);
 
   const handleCreateCancel = useCallback(() => {
     setPendingCreate(null);
@@ -347,7 +349,7 @@ const ExplorerContent = () => {
     }
     const alreadyExists = await exists(parentSource, newName);
     if (alreadyExists) {
-      alert(`名称 "${newName}" 已被占用，请更换名称后重试`);
+      alert(t('explorer.errors.nameExists', { name: newName }));
       throw new Error(`名称 "${newName}" 已被占用`);
     }
     try {
@@ -360,10 +362,10 @@ const ExplorerContent = () => {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error('[Explorer] 重命名失败:', msg);
-      alert('重命名失败，请检查名称是否合法');
+      alert(t('explorer.errors.renameFailed'));
       throw err;
     }
-  }, [dispatch, notifyChange]);
+  }, [dispatch, notifyChange, t]);
 
   const handleRenameCancel = useCallback(() => {
     setPendingRename(null);
@@ -445,7 +447,7 @@ const ExplorerContent = () => {
     const items: MenuItem[] = [
       {
         id: 'new-file',
-        label: '新建文件',
+        label: t('explorer.contextMenu.newFile'),
         icon: <FilePlus size={14} strokeWidth={1.5} />,
         group: '1_new',
         order: 1,
@@ -454,7 +456,7 @@ const ExplorerContent = () => {
       },
       {
         id: 'new-folder',
-        label: '新建文件夹',
+        label: t('explorer.contextMenu.newFolder'),
         icon: <FolderPlus size={14} strokeWidth={1.5} />,
         group: '1_new',
         order: 2,
@@ -467,7 +469,7 @@ const ExplorerContent = () => {
       items.push(
         {
           id: 'reveal',
-          label: '在磁盘中打开',
+          label: t('explorer.contextMenu.revealInExplorer'),
           icon: <FolderOpenIcon size={14} strokeWidth={1.5} />,
           group: '1_new',
           order: 3,
@@ -478,13 +480,13 @@ const ExplorerContent = () => {
                 await revealInExplorer(targetEntry.source);
               }
             } catch (err) {
-              alert(`打开失败: ${err instanceof Error ? err.message : String(err)}`);
+              alert(t('explorer.errors.revealFailed', { message: err instanceof Error ? err.message : String(err) }));
             }
           }),
         },
         {
           id: 'find-in-files',
-          label: '在文件中查找',
+          label: t('explorer.contextMenu.findInFiles'),
           icon: <Search size={14} strokeWidth={1.5} />,
           group: '2_search',
           order: 4,
@@ -493,7 +495,7 @@ const ExplorerContent = () => {
         },
         {
           id: 'cut',
-          label: '剪切',
+          label: t('cut'),
           icon: <Scissors size={14} strokeWidth={1.5} />,
           group: '3_edit',
           order: 5,
@@ -512,7 +514,7 @@ const ExplorerContent = () => {
         },
         {
           id: 'copy',
-          label: '复制',
+          label: t('copy'),
           icon: <Copy size={14} strokeWidth={1.5} />,
           group: '3_edit',
           order: 6,
@@ -531,7 +533,7 @@ const ExplorerContent = () => {
         },
         {
           id: 'paste',
-          label: '粘贴',
+          label: t('paste'),
           icon: <ClipboardPaste size={14} strokeWidth={1.5} />,
           group: '3_edit',
           order: 7,
@@ -540,7 +542,7 @@ const ExplorerContent = () => {
         },
         {
           id: 'copy-path',
-          label: '复制路径',
+          label: t('explorer.contextMenu.copyPath'),
           icon: <Link size={14} strokeWidth={1.5} />,
           group: '4_path',
           order: 8,
@@ -553,7 +555,7 @@ const ExplorerContent = () => {
         },
         {
           id: 'copy-relative-path',
-          label: '复制相对路径',
+          label: t('explorer.contextMenu.copyRelativePath'),
           icon: <Link size={14} strokeWidth={1.5} />,
           group: '4_path',
           order: 9,
@@ -567,7 +569,7 @@ const ExplorerContent = () => {
         },
         {
           id: 'rename',
-          label: '重命名',
+          label: t('rename'),
           icon: <FileSignature size={14} strokeWidth={1.5} />,
           group: '5_file',
           order: 10,
@@ -576,21 +578,24 @@ const ExplorerContent = () => {
         },
         {
           id: 'delete',
-          label: '删除',
+          label: t('delete'),
           icon: <Trash2 size={14} strokeWidth={1.5} />,
           group: '5_file',
           order: 11,
           disabled: activeTargets.length === 0,
           onClick: wrapWithClickTracking('delete', async () => {
-            const names = activeTargets.map((t) => t.entry.name).join('", "');
-            if (!window.confirm(`确定要删除 "${names}" 吗？`)) return;
+            const names = activeTargets.map((target) => target.entry.name).join('", "');
+            if (!window.confirm(t('explorer.confirm.delete', { names }))) return;
             const parentSources = new Set<FileSource>();
-            for (const t of activeTargets) {
+            for (const target of activeTargets) {
               try {
-                await deleteEntry(t.parentSource, t.entry.name, t.entry.kind);
-                parentSources.add(t.parentSource);
+                await deleteEntry(target.parentSource, target.entry.name, target.entry.kind);
+                parentSources.add(target.parentSource);
               } catch (err) {
-                alert(`删除 "${t.entry.name}" 失败: ${err instanceof Error ? err.message : String(err)}`);
+                alert(t('explorer.errors.deleteFailed', {
+                  name: target.entry.name,
+                  message: err instanceof Error ? err.message : String(err),
+                }));
               }
             }
             for (const ps of parentSources) {
@@ -641,7 +646,7 @@ const ExplorerContent = () => {
     });
 
     return items;
-  }, [contextMenu, dispatch, rootSource, startCreate, startRename, handleFindInFiles, handlePaste, notifyChange, selectedEntries, wrapWithClickTracking]);
+  }, [contextMenu, dispatch, rootSource, startCreate, startRename, handleFindInFiles, handlePaste, notifyChange, selectedEntries, wrapWithClickTracking, t]);
 
   const stableOnOpenFile = useCallback((entry: FileEntry) => {
     dispatch(closeDiffView());
@@ -678,13 +683,13 @@ const ExplorerContent = () => {
           )}
         </span>
         <InlineInput
-          placeholder={pendingCreate.type === 'file' ? '请输入文件名' : '请输入文件夹名'}
+          placeholder={pendingCreate.type === 'file' ? t('explorer.inputPlaceholder.fileName') : t('explorer.inputPlaceholder.folderName')}
           onConfirm={(name) => handleCreateConfirm(rootSource, pendingCreate.type, name)}
           onCancel={handleCreateCancel}
         />
       </div>
     );
-  }, [pendingCreate, rootSource, handleCreateConfirm, handleCreateCancel]);
+  }, [pendingCreate, rootSource, handleCreateConfirm, handleCreateCancel, t]);
 
   return (
     <div className="folder-tree" onContextMenu={handleBlankContextMenu}>
@@ -692,15 +697,15 @@ const ExplorerContent = () => {
       {!rootSource && (
         <div className="side-panel__actions">
           <div className="explorer-empty">
-            <p className="explorer-empty__text">尚未打开文件夹</p>
+            <p className="explorer-empty__text">{t('explorer.empty.title')}</p>
             <div className="explorer-empty__btns">
               <button className="explorer-empty__btn" onClick={handleOpenFolder}>
                 <FolderOpenIcon size={14} strokeWidth={1.5} />
-                打开文件夹
+                {t('explorer.empty.openFolder')}
               </button>
               <button className="explorer-empty__btn" onClick={() => dispatch(setShowCloneForm(true))}>
                 <Download size={14} strokeWidth={1.5} />
-                克隆仓库
+                {t('explorer.empty.cloneRepo')}
               </button>
             </div>
           </div>
@@ -720,13 +725,13 @@ const ExplorerContent = () => {
                 strokeWidth={1.5}
                 className={openEditorsExpanded ? 'explorer-rotated' : ''}
               />
-              <span className="explorer-section__title">打开的编辑器</span>
+              <span className="explorer-section__title">{t('explorer.sections.openEditors')}</span>
             </div>
             {openEditorsExpanded && (
               <div className="explorer-section__content" style={{ maxHeight: OPEN_EDITORS_MAX_HEIGHT }}>
                 {openedFiles.length === 0 && (
                   <div className="explorer-open-editor explorer-open-editor--empty">
-                    没有打开的编辑器
+                    {t('explorer.empty.noOpenEditors')}
                   </div>
                 )}
                 {openedFiles.map((file) => {
@@ -767,28 +772,28 @@ const ExplorerContent = () => {
                 <span className="explorer-section__tools">
                   <button
                     className="explorer-header__icon"
-                    title="新建文件"
+                    title={t('explorer.header.newFile')}
                     onClick={(e) => { e.stopPropagation(); startCreate(rootSource, 'file'); }}
                   >
                     <FilePlus size={14} strokeWidth={1.5} />
                   </button>
                   <button
                     className="explorer-header__icon"
-                    title="新建文件夹"
+                    title={t('explorer.header.newFolder')}
                     onClick={(e) => { e.stopPropagation(); startCreate(rootSource, 'folder'); }}
                   >
                     <FolderPlus size={14} strokeWidth={1.5} />
                   </button>
                   <button
                     className="explorer-header__icon"
-                    title="刷新"
+                    title={t('explorer.header.refresh')}
                     onClick={(e) => { e.stopPropagation(); dispatch(refreshDirectory(rootSource)); }}
                   >
                     <RefreshCw size={14} strokeWidth={1.5} />
                   </button>
                   <button
                     className="explorer-header__icon"
-                    title="折叠所有"
+                    title={t('explorer.header.collapseAll')}
                     onClick={(e) => { e.stopPropagation(); dispatch(clearExpandPaths()); }}
                   >
                     <ChevronsDownUp size={14} strokeWidth={1.5} />
@@ -798,7 +803,7 @@ const ExplorerContent = () => {
               {projectExpanded && (
                 <div className="explorer-section__content">
                   {entries.length === 0 ? (
-                    <div className="explorer-open-editor--empty">暂无文件</div>
+                    <div className="explorer-open-editor--empty">{t('explorer.empty.noFiles')}</div>
                   ) : (
                     <>
                       {entries.map((entry) => (
@@ -851,11 +856,11 @@ const ExplorerContent = () => {
                   strokeWidth={1.5}
                   className={timelineExpanded ? 'explorer-rotated' : ''}
                 />
-                <span className="explorer-section__title">时间线</span>
+                <span className="explorer-section__title">{t('explorer.sections.timeline')}</span>
               </div>
               {timelineExpanded && (
                 <div className="explorer-section__content" style={{ height: heights.timeline }}>
-                  <div className="explorer-timeline--empty">时间线功能即将推出</div>
+                  <div className="explorer-timeline--empty">{t('explorer.empty.timelineComingSoon')}</div>
                 </div>
               )}
             </div>
