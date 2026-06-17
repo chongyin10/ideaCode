@@ -26,6 +26,7 @@ const Channels = {
   FS_RENAME: 'fs:rename',
   FS_COPY: 'fs:copy',
   FS_REVEAL: 'fs:reveal',
+  FS_CHANGE: 'fs:change',
 
   /* ─── 窗口管理 ─── */
   WINDOW_CREATE: 'window:create',

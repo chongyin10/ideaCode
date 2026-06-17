@@ -132,7 +132,7 @@ function registerFsHandlers() {
             win.webContents.send(Channels.GIT_STATUS_CHANGED, { cwd: gitRoot });
           }
         });
-      }, 300)
+      }, 150)
     );
   }
 

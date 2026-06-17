@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { GitBranch, AlertCircle, XCircle, FileText, ChevronDown, Check, Plus, Search, Cpu, MemoryStick, Monitor } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import { setFileLanguage } from '../../store/slices/workspaceSlice';
-import { openBottomTab } from '../../store/slices/layoutSlice';
+import { openBottomTab, setStatusBarOverlayHeight } from '../../store/slices/layoutSlice';
 import { checkoutBranch, createBranch, refreshBranches } from '../../store/slices/gitSlice';
 import { isPath } from '../../services/fileService';
 import type { SystemStats } from '../../types/electron';
@@ -61,6 +61,8 @@ const StatusBar = () => {
   const [langOpen, setLangOpen] = useState(false);
   const [systemStats, setSystemStats] = useState<SystemStats | null>(null);
   const [branchOpen, setBranchOpen] = useState(false);
+  const DROPDOWN_HEIGHT_LANG = 200;
+  const DROPDOWN_HEIGHT_BRANCH = 320;
   const [branchVisible, setBranchVisible] = useState(false);
   const [branchPhase, setBranchPhase] = useState<'entering' | 'stable' | 'exiting'>('entering');
   const [branchQuery, setBranchQuery] = useState('');
@@ -130,6 +132,12 @@ const StatusBar = () => {
       dispatch(refreshBranches());
     }
   }, [branchOpen, dispatch]);
+
+  // 状态栏下拉展开时通知底部面板预留空间，避免被终端 BrowserView 遮挡
+  useEffect(() => {
+    const overlayHeight = Math.max(branchVisible ? DROPDOWN_HEIGHT_BRANCH : 0, langOpen ? DROPDOWN_HEIGHT_LANG : 0);
+    dispatch(setStatusBarOverlayHeight(overlayHeight));
+  }, [branchVisible, langOpen, dispatch]);
 
   // 订阅主进程广播的系统资源监控数据
   useEffect(() => {

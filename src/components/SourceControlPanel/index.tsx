@@ -103,53 +103,72 @@ const SourceControlPanel = () => {
   // #7 自适应轮询: 空闲期指数退避
   const idleRef = useRef(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
-    const scheduleNext = () => {
-      const base = 3000;
-      const max = 120000;
-      const delay = Math.min(base * Math.pow(2, idleRef.current), max);
-      timerRef.current = setTimeout(() => {
-        if (rootPath) {
-          dispatch(refreshGitStatus());
-          dispatch(refreshBranch());
-        }
-        idleRef.current++;
-        scheduleNext();
-      }, delay);
-    };
-    if (rootPath) {
-      idleRef.current = 0;
-      dispatch(refreshGitStatus());
-      dispatch(refreshBranch());
+  const POLL_BASE = 3000;
+  const POLL_MAX = 30000; // 最大轮询间隔从 120s 缩短到 30s，避免长期不更新
+
+  const scheduleNext = useCallback(() => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    const delay = Math.min(POLL_BASE * Math.pow(2, idleRef.current), POLL_MAX);
+    timerRef.current = setTimeout(() => {
+      if (rootPath) {
+        dispatch(refreshGitStatus());
+        dispatch(refreshBranch());
+      }
+      idleRef.current++;
       scheduleNext();
-    }
-    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+    }, delay);
   }, [dispatch, rootPath]);
 
-  /** 重置空闲计数器（操作后立即刷新） */
+  /** 重置空闲计数器并立即刷新（操作/事件后调用） */
   const resetPolling = useCallback(() => {
     idleRef.current = 0;
-    if (timerRef.current) clearTimeout(timerRef.current);
-    dispatch(refreshGitStatus());
-    dispatch(refreshBranch());
-  }, [dispatch]);
+    scheduleNext();
+    if (rootPath) {
+      dispatch(refreshGitStatus());
+      dispatch(refreshBranch());
+    }
+  }, [dispatch, rootPath, scheduleNext]);
 
-  // 监听终端 git 命令，自动刷新状态
+  useEffect(() => {
+    if (!rootPath) return;
+    resetPolling();
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  }, [rootPath, resetPolling]);
+
+  // 监听终端 git 命令 / .git 目录变更通知，自动刷新状态
   const gitChangeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     const api = window.electronAPI;
     if (!api?.git?.onStatusChanged) return;
     return api.git.onStatusChanged(() => {
       if (!rootPath) return;
-      // 立即刷新一次，同时延迟再刷新一次，确保 git 命令已执行完成
+      // 立即刷新 + 延迟兜底刷新，覆盖命令执行中的状态
       resetPolling();
       if (gitChangeTimerRef.current) clearTimeout(gitChangeTimerRef.current);
       gitChangeTimerRef.current = setTimeout(() => {
         gitChangeTimerRef.current = null;
         resetPolling();
-      }, 500);
+      }, 300);
     });
   }, [dispatch, rootPath, resetPolling]);
+
+  // 监听 .git 目录文件变更，确保外部/终端命令完成后尽快同步
+  useEffect(() => {
+    if (!rootPath || !window.electronAPI?.fs?.watch) return;
+    const gitDir = `${rootPath.replace(/\/$/, '')}/.git`;
+    let mounted = true;
+    window.electronAPI.fs.watch(gitDir)
+      .then((result) => {
+        if (!mounted && !result.alreadyWatching) {
+          window.electronAPI?.fs?.unwatch(gitDir).catch(() => {});
+        }
+      })
+      .catch(() => {});
+    return () => {
+      mounted = false;
+      window.electronAPI?.fs?.unwatch(gitDir).catch(() => {});
+    };
+  }, [rootPath]);
 
   // #9 赫布排序应用于条目
   const stagedEntries = useMemo(() => sortByHebbian(
