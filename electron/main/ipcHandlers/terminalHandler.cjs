@@ -10,7 +10,7 @@
  * 6. 广播模式 — 输入同步到多个终端
  */
 
-const { ipcMain } = require('electron');
+const { ipcMain, BrowserWindow } = require('electron');
 const { Channels } = require('../../shared/channels.cjs');
 const os = require('os');
 const path = require('path');
@@ -61,11 +61,13 @@ const terminals = new Map();
 let nextTerminalId = 1;
 
 class TerminalProcess {
-  constructor(id, ptyProcess, shellLaunchConfig, webContents) {
+  constructor(id, ptyProcess, shellLaunchConfig, ownerWindow, ownerWebContents, viewWebContents) {
     this.id = id;
     this.pty = ptyProcess;
     this.config = shellLaunchConfig;
-    this.webContents = webContents;
+    this.ownerWindow = ownerWindow;
+    this.ownerWebContents = ownerWebContents;
+    this.viewWebContents = viewWebContents;
     this.paused = false;
     /** 未确认的字符数（已发送到渲染但未被 ACK） */
     this.unackedChars = 0;
@@ -100,8 +102,8 @@ class TerminalProcess {
       // 匹配常见会修改 git index/working tree 的命令
       if (/^git\b/.test(trimmed)) {
         try {
-          if (this.webContents && !this.webContents.isDestroyed()) {
-            this.webContents.send(Channels.GIT_STATUS_CHANGED, { cwd: this.config.cwd });
+          if (this.ownerWebContents && !this.ownerWebContents.isDestroyed()) {
+            this.ownerWebContents.send(Channels.GIT_STATUS_CHANGED, { cwd: this.config.cwd });
           }
         } catch (e) {
           console.warn('[TerminalHandler] 发送 GIT_STATUS_CHANGED 失败:', e.message);
@@ -222,23 +224,25 @@ function getDefaultShell() {
  * @param {string} cwd - 工作目录
  * @param {number} cols - 列数
  * @param {number} rows - 行数
- * @param {import('electron').WebContents} webContents - 渲染进程引用
+ * @param {import('electron').BrowserWindow} ownerWindow - 所属主窗口
+ * @param {import('electron').WebContents} ownerWebContents - 主窗口 React 渲染进程
+ * @param {object} [terminalViewManager] - BrowserView 管理器
  */
-async function createTerminalProcess(config, cwd, cols, rows, webContents) {
+async function createTerminalProcess(config, cwd, cols, rows, ownerWindow, ownerWebContents, terminalViewManager) {
   if (!ptyModule) {
     // 无 node-pty 时的降级处理：返回模拟终端
     const id = nextTerminalId++;
-    const mockProcess = new TerminalProcess(id, null, config, webContents);
+    const mockProcess = new TerminalProcess(id, null, config, ownerWindow, ownerWebContents, ownerWebContents);
     terminals.set(id, mockProcess);
     // 发送模拟就绪事件
-    webContents.send(Channels.TERMINAL_OUTPUT, {
+    ownerWebContents.send(Channels.TERMINAL_OUTPUT, {
       id,
       type: 'ready',
       pid: -1,
       cwd: cwd || process.cwd(),
     });
     // 发送欢迎信息
-    webContents.send(Channels.TERMINAL_OUTPUT, {
+    ownerWebContents.send(Channels.TERMINAL_OUTPUT, {
       id,
       type: 'data',
       data: '\x1b[32m●\x1b[0m 终端模拟模式 — node-pty 未安装\r\n' +
@@ -267,6 +271,17 @@ async function createTerminalProcess(config, cwd, cols, rows, webContents) {
 
   const id = nextTerminalId++;
 
+  // 先创建 BrowserView，等待加载完成后再启动 PTY，确保输出不丢失
+  let viewWebContents = ownerWebContents;
+  if (terminalViewManager && ownerWindow) {
+    try {
+      const view = await terminalViewManager.createView(ownerWindow, id);
+      viewWebContents = view.webContents;
+    } catch (e) {
+      console.error(`[TerminalHandler] 为终端 ${id} 创建 BrowserView 失败，回退到主窗口渲染:`, e.message);
+    }
+  }
+
   // 尝试主 shell，失败后使用常见 fallback
   const fallbackShells = ['/bin/zsh', '/bin/bash', '/bin/sh'];
   const shellsToTry = new Set([
@@ -291,13 +306,13 @@ async function createTerminalProcess(config, cwd, cols, rows, webContents) {
         env: env,
       });
 
-      const termProcess = new TerminalProcess(id, ptyProcess, config, webContents);
+      const termProcess = new TerminalProcess(id, ptyProcess, config, ownerWindow, ownerWebContents, viewWebContents);
       terminals.set(id, termProcess);
 
       // PID 流控初始化
       pidControllers.set(id, new PIDControl(0.5, 0.1, 0.05, HIGH_WATERMARK * 0.6));
 
-      // --- PTY 数据事件 → PID 流控转发到渲染进程 ---
+      // --- PTY 数据事件 → 转发到对应 BrowserView ---
       ptyProcess.onData((data) => {
         if (termProcess.exited) return;
 
@@ -316,7 +331,10 @@ async function createTerminalProcess(config, cwd, cols, rows, webContents) {
           try { if (typeof ptyProcess.resume === 'function') ptyProcess.resume(); } catch {}
         }
 
-        webContents.send(Channels.TERMINAL_OUTPUT, {
+        const target = termProcess.viewWebContents && !termProcess.viewWebContents.isDestroyed()
+          ? termProcess.viewWebContents
+          : termProcess.ownerWebContents;
+        target.send(Channels.TERMINAL_OUTPUT, {
           id,
           type: 'data',
           data: data,
@@ -327,7 +345,7 @@ async function createTerminalProcess(config, cwd, cols, rows, webContents) {
       ptyProcess.onExit(({ exitCode, signal }) => {
         termProcess.exited = true;
         termProcess.exitCode = exitCode;
-        webContents.send(Channels.TERMINAL_OUTPUT, {
+        ownerWebContents.send(Channels.TERMINAL_OUTPUT, {
           id,
           type: 'exit',
           exitCode,
@@ -335,8 +353,8 @@ async function createTerminalProcess(config, cwd, cols, rows, webContents) {
         });
       });
 
-      // 发送就绪事件
-      webContents.send(Channels.TERMINAL_OUTPUT, {
+      // 发送就绪事件（主窗口 UI 更新用）
+      ownerWebContents.send(Channels.TERMINAL_OUTPUT, {
         id,
         type: 'ready',
         pid: ptyProcess.pid,
@@ -350,13 +368,21 @@ async function createTerminalProcess(config, cwd, cols, rows, webContents) {
     }
   }
 
+  // 启动失败：清理已创建的 BrowserView
+  if (terminalViewManager && ownerWindow) {
+    terminalViewManager.destroyView(ownerWindow, id);
+  }
+
   throw new Error(`创建终端进程失败: ${lastError?.message || '无可用 shell'}`);
 }
 
 /**
  * 销毁终端进程
+ * @param {object} options
+ * @param {number} options.id
+ * @param {object} [terminalViewManager]
  */
-function disposeTerminalProcess(id) {
+function disposeTerminalProcess({ id, terminalViewManager }) {
   const term = terminals.get(id);
   if (!term) return;
 
@@ -364,6 +390,11 @@ function disposeTerminalProcess(id) {
   try {
     if (term.pty) { term.pty.kill(); }
   } catch (e) { /* 进程可能已经退出 */ }
+
+  if (terminalViewManager && term.ownerWindow) {
+    terminalViewManager.destroyView(term.ownerWindow, id);
+  }
+
   terminals.delete(id);
 }
 
@@ -503,8 +534,10 @@ function broadcastInput(senderId, data, targetIds) {
 
 /**
  * 注册所有终端相关 IPC 处理器
+ * @param {object} [terminalViewManager]
+ * @param {object} [broadcastHelpers]
  */
-function registerTerminalHandlers() {
+function registerTerminalHandlers(terminalViewManager, broadcastHelpers) {
   // --- 终端生命周期 ---
   ipcMain.handle(Channels.TERMINAL_CREATE, async (event, payload) => {
     // 兼容两种调用格式：{ config, cwd, cols, rows } 或直接将配置对象作为 payload
@@ -512,8 +545,9 @@ function registerTerminalHandlers() {
     const cwd = payload?.cwd ?? config.cwd;
     const cols = payload?.cols ?? config.cols;
     const rows = payload?.rows ?? config.rows;
+    const ownerWindow = BrowserWindow.fromWebContents(event.sender);
     try {
-      const id = await createTerminalProcess(config, cwd, cols, rows, event.sender);
+      const id = await createTerminalProcess(config, cwd, cols, rows, ownerWindow, event.sender, terminalViewManager);
       return { success: true, id };
     } catch (error) {
       return { success: false, error: error.message };
@@ -521,12 +555,21 @@ function registerTerminalHandlers() {
   });
 
   ipcMain.handle(Channels.TERMINAL_DISPOSE, async (_event, { id }) => {
-    disposeTerminalProcess(id);
+    disposeTerminalProcess({ id, terminalViewManager });
     return { success: true };
   });
 
   ipcMain.handle(Channels.TERMINAL_INPUT, async (_event, { id, data }) => {
+    const term = terminals.get(id);
     sendInput(id, data);
+    // 广播模式：同窗口其他终端同步输入
+    if (term && broadcastHelpers && term.ownerWindow && broadcastHelpers.isBroadcastEnabled(term.ownerWindow)) {
+      for (const [otherId, other] of terminals) {
+        if (otherId !== id && other.ownerWindow === term.ownerWindow) {
+          sendInput(otherId, data);
+        }
+      }
+    }
     return { success: true };
   });
 

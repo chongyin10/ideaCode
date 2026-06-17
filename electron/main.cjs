@@ -1,5 +1,6 @@
 const { app } = require('electron');
 const { WindowManager } = require('./main/windowManager.cjs');
+const { TerminalViewManager } = require('./main/terminalViewManager.cjs');
 const { TrayManager } = require('./main/tray.cjs');
 const { LifecycleManager } = require('./main/lifecycle.cjs');
 const { ExtensionHostManager } = require('./main/extensionHost.cjs');
@@ -45,13 +46,14 @@ const { registerIpcHandlers } = require('./main/ipcHandlers/index.cjs');
 
 // 1. 创建核心管理器
 const windowManager = new WindowManager();
+const terminalViewManager = new TerminalViewManager();
 const trayManager = new TrayManager(windowManager);
 const lifecycleManager = new LifecycleManager(windowManager, trayManager);
 const extensionHostManager = new ExtensionHostManager(windowManager);
 const historyManager = new HistoryManager();
 
 // 2. 注册 IPC 处理器（必须在 app ready 之前完成）
-registerIpcHandlers({ windowManager, extensionHostManager, historyManager });
+registerIpcHandlers({ windowManager, terminalViewManager, extensionHostManager, historyManager });
 
 // 3. 应用生命周期初始化
 const canStart = lifecycleManager.init();
@@ -63,6 +65,9 @@ app.whenReady().then(() => {
 
   // 创建系统托盘
   trayManager.createTray();
+
+  // 把 terminalViewManager 交给 WindowManager，用于窗口关闭时清理
+  windowManager.setTerminalViewManager(terminalViewManager);
 
   // 创建首个窗口
   windowManager.createWindow();

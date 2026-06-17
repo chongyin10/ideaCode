@@ -102,6 +102,16 @@ const Channels = {
   TERMINAL_BROADCAST: 'terminal:broadcast',
   TERMINAL_SEND_SIGNAL: 'terminal:sendSignal',
   TERMINAL_CLEAR: 'terminal:clear',
+
+  /* ─── 终端 BrowserView 管理 ─── */
+  TERMINAL_VIEW_CREATE: 'terminal:view:create',
+  TERMINAL_VIEW_DESTROY: 'terminal:view:destroy',
+  TERMINAL_VIEW_SET_BOUNDS: 'terminal:view:setBounds',
+  TERMINAL_VIEW_FOCUS: 'terminal:view:focus',
+  TERMINAL_VIEW_READY: 'terminal:view:ready',
+  TERMINAL_VIEW_SET_BROADCAST: 'terminal:view:setBroadcast',
+  TERMINAL_VIEW_FIND: 'terminal:view:find',
+  TERMINAL_VIEW_CLEAR_SELECTION: 'terminal:view:clearSelection',
 };
 
 /**
@@ -246,6 +256,18 @@ const electronAPI = {
     broadcast: (senderId, data, targetIds) => ipcRenderer.invoke(Channels.TERMINAL_BROADCAST, { senderId, data, targetIds }),
     onOutput: (callback) => onChannel(Channels.TERMINAL_OUTPUT, callback),
     onExit: (callback) => onChannel(Channels.TERMINAL_EXIT, callback),
+  },
+
+  /** 终端 BrowserView 管理 — 主窗口调用 */
+  terminalView: {
+    create: (options) => ipcRenderer.invoke(Channels.TERMINAL_VIEW_CREATE, options),
+    destroy: (terminalId) => ipcRenderer.invoke(Channels.TERMINAL_VIEW_DESTROY, { terminalId }),
+    setBounds: (terminalId, bounds) => ipcRenderer.invoke(Channels.TERMINAL_VIEW_SET_BOUNDS, { terminalId, bounds }),
+    focus: (terminalId) => ipcRenderer.invoke(Channels.TERMINAL_VIEW_FOCUS, { terminalId }),
+    ready: (terminalId) => ipcRenderer.send(Channels.TERMINAL_VIEW_READY, { terminalId }),
+    setBroadcast: (enabled) => ipcRenderer.invoke(Channels.TERMINAL_VIEW_SET_BROADCAST, { enabled }),
+    onFind: (callback) => onChannel(Channels.TERMINAL_VIEW_FIND, callback),
+    onClearSelection: (callback) => onChannel(Channels.TERMINAL_VIEW_CLEAR_SELECTION, callback),
   },
 };
 

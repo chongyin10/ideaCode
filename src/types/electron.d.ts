@@ -138,6 +138,18 @@ export interface TerminalLayoutResult {
   error?: string;
 }
 
+export interface TerminalViewBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  visible: boolean;
+}
+
+export interface TerminalViewCreateOptions {
+  terminalId: number;
+}
+
 /* ─── Electron API 接口（由 preload 脚本注入） ─── */
 
 export interface ElectronAPI {
@@ -270,6 +282,18 @@ export interface ElectronAPI {
     broadcast: (senderId: number, data: string, targetIds: number[]) => Promise<{ success: boolean }>;
     onOutput: (callback: (data: TerminalOutputEvent) => void) => () => void;
     onExit: (callback: (data: TerminalOutputEvent) => void) => () => void;
+  };
+
+  /** 终端 BrowserView 管理 */
+  terminalView: {
+    create: (options: TerminalViewCreateOptions) => Promise<{ success: boolean; error?: string }>;
+    destroy: (terminalId: number) => Promise<{ success: boolean }>;
+    setBounds: (terminalId: number, bounds: TerminalViewBounds) => Promise<{ success: boolean }>;
+    focus: (terminalId: number) => Promise<{ success: boolean }>;
+    ready: (terminalId: number) => void;
+    setBroadcast: (enabled: boolean) => Promise<{ success: boolean }>;
+    onFind: (callback: (data: { term: string; previous?: boolean }) => void) => () => void;
+    onClearSelection: (callback: () => void) => () => void;
   };
 }
 

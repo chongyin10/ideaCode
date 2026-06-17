@@ -108,6 +108,16 @@ const Channels = {
   TERMINAL_BROADCAST: 'terminal:broadcast',
   TERMINAL_SEND_SIGNAL: 'terminal:sendSignal',
   TERMINAL_CLEAR: 'terminal:clear',
+
+  /* ─── 终端 BrowserView 管理 ─── */
+  TERMINAL_VIEW_CREATE: 'terminal:view:create',
+  TERMINAL_VIEW_DESTROY: 'terminal:view:destroy',
+  TERMINAL_VIEW_SET_BOUNDS: 'terminal:view:setBounds',
+  TERMINAL_VIEW_FOCUS: 'terminal:view:focus',
+  TERMINAL_VIEW_READY: 'terminal:view:ready',
+  TERMINAL_VIEW_SET_BROADCAST: 'terminal:view:setBroadcast',
+  TERMINAL_VIEW_FIND: 'terminal:view:find',
+  TERMINAL_VIEW_CLEAR_SELECTION: 'terminal:view:clearSelection',
 };
 
 module.exports = { Channels };

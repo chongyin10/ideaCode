@@ -172,12 +172,12 @@ const terminalSlice = createSlice({
   initialState,
   reducers: {
     /* — 终端 Tab 生命周期 — */
-    addTab(state, action: PayloadAction<{ name?: string; profile?: TerminalProfile; isEditor?: boolean }>) {
-      const { name, profile, isEditor } = action.payload;
-      const id = nextTabId();
+    addTab(state, action: PayloadAction<{ id?: string; name?: string; profile?: TerminalProfile; isEditor?: boolean; processId?: number }>) {
+      const { id: providedId, name, profile, isEditor, processId } = action.payload;
+      const id = providedId || nextTabId();
       const tab: TerminalTab = {
         id,
-        processId: null,
+        processId: processId ?? null,
         name: name || profile?.name || '终端',
         profile,
         ready: false,
