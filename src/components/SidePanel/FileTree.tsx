@@ -8,6 +8,13 @@ import type { FileClipboardItem } from '../../services/fileClipboard';
 import InlineInput from '../InlineInput';
 import { FileIcon, ClosedFolderIcon, DefaultFileIcon } from './FileTree.icons';
 
+/* ─── 拖拽移动：模块级状态（跨递归 FileTree 节点共享） ─── */
+interface DragState {
+  entry: FileEntry;
+  parentSource: FileSource;
+}
+let currentDrag: DragState | null = null;
+
 export interface PendingCreate {
   parentSource: FileSource;
   type: 'file' | 'folder';
@@ -58,6 +65,13 @@ interface FileTreeProps {
   expandedDirs?: string[];
   /** 展开/折叠目录的回调 */
   onToggleExpand?: (path: string, expand: boolean) => void;
+  /** 拖拽移动文件/文件夹 */
+  onMoveFile?: (
+    dragEntry: FileEntry,
+    dragParentSource: FileSource,
+    dropEntry: FileEntry | null,
+    dropParentSource: FileSource,
+  ) => void;
 }
 
 /**
@@ -92,9 +106,15 @@ const FileTree = memo(({
   expandPaths,
   expandedDirs,
   onToggleExpand,
+  onMoveFile,
 }: FileTreeProps) => {
   const { t } = useTranslation();
   const [children, setChildren] = useState<FileEntry[]>([]);
+
+  // ── 拖拽高亮状态 ──
+  const [isDragOver, setIsDragOver] = useState(false);
+  const onMoveFileRef = useRef(onMoveFile);
+  onMoveFileRef.current = onMoveFile;
 
   // 计算当前 entry 的相对路径（用于 Git 状态查询 + 自动展开匹配）
   const entryRelPath = relativePath ? `${relativePath}/${entry.name}` : entry.name;
@@ -285,13 +305,62 @@ const FileTree = memo(({
     [onContextMenu, entry, parentSource]
   );
 
+  // ── 拖拽移动事件 ──
+  const handleDragStart = useCallback((e: React.DragEvent) => {
+    currentDrag = { entry, parentSource };
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', entry.name);
+  }, [entry, parentSource]);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    if (!currentDrag) return;
+    // 不能拖到自己身上
+    if (isSameSource(currentDrag.entry.source, entry.source)) return;
+    // 文件夹不能拖到自己的子目录（路径前缀检测）
+    if (
+      currentDrag.entry.kind === 'directory' &&
+      typeof entry.source === 'string' &&
+      typeof currentDrag.entry.source === 'string' &&
+      entry.source.startsWith(currentDrag.entry.source + '/')
+    ) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'move';
+    setIsDragOver(true);
+  }, [entry]);
+
+  const handleDragLeave = useCallback(() => {
+    setIsDragOver(false);
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    if (!currentDrag) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+    // 调用移动回调
+    onMoveFileRef.current?.(currentDrag.entry, currentDrag.parentSource, entry, parentSource);
+    currentDrag = null;
+  }, [entry, parentSource]);
+
+  const handleDragEnd = useCallback(() => {
+    currentDrag = null;
+    setIsDragOver(false);
+  }, []);
+
   return (
     <div className="tree-row" onContextMenu={handleContextMenu} data-name={entry.name}>
       {/* 享元缩进引导线 */}
       {indentGuides}
       <div
-        className={`tree-item ${isActive ? 'active' : ''} ${isSelected ? 'selected' : ''} ${isCut ? 'is-cut' : ''}`}
+        className={`tree-item ${isActive ? 'active' : ''} ${isSelected ? 'selected' : ''} ${isCut ? 'is-cut' : ''} ${isDragOver ? 'drag-over' : ''}`}
         style={{ paddingLeft: 12 + level * 12 }}
+        draggable
+        onDragStart={handleDragStart}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        onDragEnd={handleDragEnd}
         onClick={handleClick}
       >
         <span className={`tree-item__chevron ${expanded ? 'expanded' : ''}`} >
@@ -368,6 +437,7 @@ const FileTree = memo(({
             expandPaths={expandPaths}
             expandedDirs={expandedDirs}
             onToggleExpand={onToggleExpand}
+            onMoveFile={onMoveFile}
           />
         ))}
     </div>
@@ -375,5 +445,16 @@ const FileTree = memo(({
 });
 
 FileTree.displayName = 'FileTree';
+
+/** 拖拽辅助：供 ExplorerContent 获取当前拖拽状态（拖到空白区域时） */
+export function getCurrentDrag(): DragState | null {
+  return currentDrag;
+}
+export function currentDragExists(): boolean {
+  return currentDrag !== null;
+}
+export function clearCurrentDrag(): void {
+  currentDrag = null;
+}
 
 export default FileTree;

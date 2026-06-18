@@ -56,7 +56,7 @@ import {
   setFileClipboard,
   clearFileClipboard,
 } from '../../services/fileClipboard';
-import FileTree, { type PendingCreate, type PendingRename, type LastOperation } from './FileTree';
+import FileTree, { type PendingCreate, type PendingRename, type LastOperation, getCurrentDrag, currentDragExists, clearCurrentDrag } from './FileTree';
 import ContextMenu, { type MenuItem } from '../ContextMenu';
 import InlineInput from '../InlineInput';
 import { getMenuManager, contributionToMenuItem } from '../../plugin/menuManager';
@@ -370,6 +370,77 @@ const ExplorerContent = () => {
   const handleRenameCancel = useCallback(() => {
     setPendingRename(null);
   }, []);
+
+  // ─── 拖拽移动文件/文件夹 ───
+
+  const handleMoveFile = useCallback(async (
+    dragEntry: FileEntry,
+    dragParentSource: FileSource,
+    dropEntry: FileEntry | null, // null = 放到根目录
+    dropParentSource: FileSource,
+  ) => {
+    if (!rootSource) return;
+    const isElectronMode = isElectron();
+
+    // 计算源路径和目标路径
+    let oldPath: string;
+    let destDir: string;
+
+    if (isElectronMode && isPath(dragParentSource)) {
+      oldPath = dragParentSource + '/' + dragEntry.name;
+    } else {
+      return; // 浏览器模式暂不支持
+    }
+
+    if (dropEntry && dropEntry.kind === 'directory') {
+      // 拖到文件夹上 → 放入该文件夹
+      destDir = isPath(dropEntry.source) ? dropEntry.source : oldPath;
+    } else if (dropEntry && dropEntry.kind === 'file') {
+      // 拖到文件上 → 放到同级目录
+      destDir = isPath(dropParentSource) ? dropParentSource : oldPath;
+    } else {
+      // 拖到空白 → 放到根目录
+      destDir = isPath(rootSource) ? rootSource : oldPath;
+    }
+
+    const newPath = destDir + '/' + dragEntry.name;
+
+    // 防止移动到自身
+    if (oldPath === newPath) return;
+
+    // 防止把文件夹移到自己的子目录（路径前缀检测 — Trie 思想）
+    if (dragEntry.kind === 'directory' && newPath.startsWith(oldPath + '/')) {
+      alert(t('explorer.errors.cannotMoveIntoSelf'));
+      return;
+    }
+
+    // 同名冲突检测
+    if (destDir !== (isPath(dragParentSource) ? dragParentSource : '')) {
+      const conflict = await exists(destDir, dragEntry.name);
+      if (conflict) {
+        alert(t('explorer.errors.nameExists', { name: dragEntry.name }));
+        return;
+      }
+    }
+
+    try {
+      const success = await window.electronAPI!.fs.rename(oldPath, newPath);
+      if (!success) throw new Error('移动失败');
+
+      // 通知源目录和目标目录刷新
+      notifyChange(dragParentSource, destDir);
+      dispatch(refreshGitStatus());
+      dispatch(refreshGitSliceStatus());
+      dispatch(refreshAllFilePaths());
+      if (isSameSource(destDir as FileSource, rootSource)) {
+        dispatch(refreshDirectory(rootSource));
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('[Explorer] 移动失败:', msg);
+      alert(t('explorer.errors.moveFailed'));
+    }
+  }, [rootSource, dispatch, notifyChange, t]);
 
   // ─── 粘贴操作（批量，含同名冲突处理）───
 
@@ -801,7 +872,21 @@ const ExplorerContent = () => {
                 </span>
               </div>
               {projectExpanded && (
-                <div className="explorer-section__content">
+                <div
+                  className="explorer-section__content"
+                  onDragOver={(e) => {
+                    // 拖拽到空白区域也允许放置（移到根目录）
+                    if (currentDragExists()) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }
+                  }}
+                  onDrop={(e) => {
+                    const drag = getCurrentDrag();
+                    if (drag) {
+                      e.preventDefault();
+                      handleMoveFile(drag.entry, drag.parentSource, null, rootSource);
+                      clearCurrentDrag();
+                    }
+                  }}
+                >
                   {entries.length === 0 ? (
                     <div className="explorer-open-editor--empty">{t('explorer.empty.noFiles')}</div>
                   ) : (
@@ -823,6 +908,7 @@ const ExplorerContent = () => {
                           pendingRename={pendingRename}
                           onRenameConfirm={handleRenameConfirm}
                           onRenameCancel={handleRenameCancel}
+                          onMoveFile={handleMoveFile}
                           lastOperation={lastOperation}
                           clipboardItems={clipboardState?.items}
                           selectedEntries={selectedEntries.map((s) => s.entry)}

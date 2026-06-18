@@ -169,6 +169,8 @@
       "nameExists": "名稱 \"{{name}}\" 已被占用，請更換名稱後重試",
       "createFailed": "建立失敗，請檢查名稱是否合法或路徑是否存在",
       "renameFailed": "重新命名失敗，請檢查名稱是否合法",
+      "moveFailed": "移動失敗，請檢查目標路徑權限",
+      "cannotMoveIntoSelf": "不能將資料夾移動到自身的子目錄中",
       "revealFailed": "開啟失敗: {{message}}",
       "deleteFailed": "刪除 \"{{name}}\" 失敗: {{message}}"
     },

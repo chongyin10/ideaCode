@@ -41,6 +41,57 @@ const RightPanel = () => {
   const panelRef = useRef<HTMLDivElement>(null);
   const preMaximizeWidthRef = useRef(DEFAULT_WIDTH);
 
+  // ── tab 拖拽重排状态 ──
+  const [draggingTabId, setDraggingTabId] = useState<string | null>(null);
+  const [dragOverTabId, setDragOverTabId] = useState<string | null>(null);
+  const [dragOverPos, setDragOverPos] = useState<'before' | 'after'>('after');
+  const draggingTabIdRef = useRef<string | null>(null);
+  draggingTabIdRef.current = draggingTabId;
+
+  const handleTabDragStart = useCallback((e: React.DragEvent, tabId: string) => {
+    setDraggingTabId(tabId);
+    draggingTabIdRef.current = tabId;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', tabId);
+  }, []);
+
+  const handleTabDragOver = useCallback((e: React.DragEvent, tabId: string) => {
+    if (!draggingTabIdRef.current || draggingTabIdRef.current === tabId) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const midX = rect.left + rect.width / 2;
+    setDragOverTabId(tabId);
+    setDragOverPos(e.clientX < midX ? 'before' : 'after');
+  }, []);
+
+  const handleTabDrop = useCallback((e: React.DragEvent, tabId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const fromId = draggingTabIdRef.current;
+    if (fromId && fromId !== tabId) {
+      setTabs((prev) => {
+        const fromIdx = prev.findIndex(t => t.id === fromId);
+        const toIdx = prev.findIndex(t => t.id === tabId);
+        if (fromIdx === -1 || toIdx === -1) return prev;
+        const moved = prev.splice(fromIdx, 1)[0];
+        const newToIdx = prev.findIndex(t => t.id === tabId);
+        const insertIdx = dragOverPos === 'after' ? newToIdx + 1 : newToIdx;
+        prev.splice(insertIdx, 0, moved);
+        return [...prev];
+      });
+    }
+    setDraggingTabId(null);
+    setDragOverTabId(null);
+    draggingTabIdRef.current = null;
+  }, [dragOverPos]);
+
+  const handleTabDragEnd = useCallback(() => {
+    setDraggingTabId(null);
+    setDragOverTabId(null);
+    draggingTabIdRef.current = null;
+  }, []);
+
   const activeTab = useMemo(
     () => tabs.find((tab) => tab.id === activeId) || tabs[tabs.length - 1],
     [tabs, activeId]
@@ -141,7 +192,12 @@ const RightPanel = () => {
           {tabs.map((tab) => (
             <div
               key={tab.id}
-              className={`right-panel__tab ${tab.id === activeId ? 'active' : ''}`}
+              className={`right-panel__tab ${tab.id === activeId ? 'active' : ''} ${draggingTabId === tab.id ? 'right-panel__tab--dragging' : ''} ${dragOverTabId === tab.id ? `right-panel__tab--drag-over right-panel__tab--drag-${dragOverPos}` : ''}`}
+              draggable
+              onDragStart={(e) => handleTabDragStart(e, tab.id)}
+              onDragOver={(e) => handleTabDragOver(e, tab.id)}
+              onDrop={(e) => handleTabDrop(e, tab.id)}
+              onDragEnd={handleTabDragEnd}
               onClick={() => setActiveId(tab.id)}
             >
               <span className="right-panel__tab-name">{tab.name}</span>

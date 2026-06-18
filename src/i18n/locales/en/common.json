@@ -169,6 +169,8 @@
       "nameExists": "Name \"{{name}}\" is already taken, please choose another",
       "createFailed": "Create failed. Please check if the name is valid or the path exists",
       "renameFailed": "Rename failed. Please check if the name is valid",
+      "moveFailed": "Move failed. Please check target path permissions",
+      "cannotMoveIntoSelf": "Cannot move a folder into its own subdirectory",
       "revealFailed": "Reveal failed: {{message}}",
       "deleteFailed": "Delete \"{{name}}\" failed: {{message}}"
     },

@@ -501,6 +501,21 @@
   background-color: #2a2d2e;
 }
 
+/* 拖拽悬停高亮 */
+.tree-item.drag-over {
+  background-color: rgba(0, 122, 204, 0.15);
+  outline: 1px dashed #007acc;
+  outline-offset: -1px;
+}
+
+.tree-item[draggable="true"] {
+  cursor: default;
+}
+
+.tree-item[draggable="true"]:active {
+  cursor: grabbing;
+}
+
 .tree-item__label {
   overflow: hidden;
   text-overflow: ellipsis;
