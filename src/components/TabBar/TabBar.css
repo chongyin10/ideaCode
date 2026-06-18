@@ -215,3 +215,68 @@
   color: #4a9eff;
   animation: tabSpin 1s linear infinite;
 }
+
+/* ═══════════════════════════════════════════════════
+   拖拽重排样式
+   ═══════════════════════════════════════════════════ */
+
+/* 被拖拽的 tab：半透明 + 缩小，表示"已抓起" */
+.tab-bar__item--dragging {
+  opacity: 0.35;
+  transform: scale(0.95);
+  cursor: grabbing;
+}
+
+/* 拖拽悬停目标：插入指示线（伪元素） */
+.tab-bar__item--drag-over {
+  position: relative;
+}
+
+/* 左侧插入指示线 */
+.tab-bar__item--drag-over.tab-bar__item--drag-left::before {
+  content: '';
+  position: absolute;
+  left: -1px;
+  top: 2px;
+  bottom: 2px;
+  width: 2px;
+  background: #4a9eff;
+  border-radius: 1px;
+  box-shadow: 0 0 6px rgba(74, 158, 255, 0.6);
+  animation: tabDropPulse 0.6s ease-in-out infinite alternate;
+  z-index: 2;
+}
+
+/* 右侧插入指示线 */
+.tab-bar__item--drag-over.tab-bar__item--drag-right::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 2px;
+  bottom: 2px;
+  width: 2px;
+  background: #4a9eff;
+  border-radius: 1px;
+  box-shadow: 0 0 6px rgba(74, 158, 255, 0.6);
+  animation: tabDropPulse 0.6s ease-in-out infinite alternate;
+  z-index: 2;
+}
+
+/* active tab 的底部蓝线在拖拽时让位给插入线，避免重叠 */
+.tab-bar__item--drag-over.active::after {
+  display: none;
+}
+
+@keyframes tabDropPulse {
+  from { opacity: 0.5; }
+  to   { opacity: 1; }
+}
+
+/* 可拖拽的 tab 默认光标 */
+.tab-bar__item[draggable="true"] {
+  cursor: grab;
+}
+
+.tab-bar__item[draggable="true"]:active {
+  cursor: grabbing;
+}

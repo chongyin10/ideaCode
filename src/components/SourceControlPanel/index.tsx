@@ -3,7 +3,6 @@ import { useTranslation } from 'react-i18next';
 import {
   Plus, Minus, Check, RefreshCw, GitBranch, GitPullRequest,
   ChevronRight, Download, Loader2, Ellipsis, Undo2, FileText,
-  Inbox,
 } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import { openFile, openDiffView } from '../../store/slices/workspaceSlice';
@@ -182,6 +181,23 @@ const SourceControlPanel = () => {
   const untrackedEntries = useMemo(() =>
     Object.entries(untracked).map(([p, c]) => ({ path: p, code: c })), [untracked]);
 
+  // ── 自动折叠/展开 ──
+  // 没有数据 → 自动折叠（不展开内容）
+  // 有数据   → 自动展开（显示内容）
+  // 用户手动折叠后，若数据未变不会强制重新展开
+  useEffect(() => {
+    setStagedOpen(stagedEntries.length > 0);
+  }, [stagedEntries.length]);
+  useEffect(() => {
+    setChangesOpen(changesEntries.length > 0);
+  }, [changesEntries.length]);
+  useEffect(() => {
+    setMergeOpen(mergeEntries.length > 0);
+  }, [mergeEntries.length]);
+  useEffect(() => {
+    setUntrackedOpen(untrackedEntries.length > 0);
+  }, [untrackedEntries.length]);
+
   const handleStage = useCallback((f: string) => {
     boostHebbian(f);
     dispatch(stageFiles([f])).then(() => resetPolling());
@@ -289,26 +305,30 @@ const SourceControlPanel = () => {
     return () => ro.disconnect();
   }, [computeHeights]);
 
-  /** 渲染文件分组 */
+  /** 渲染文件分组（标题始终显示，空分组折叠内容） */
   const renderSection = useCallback(
     (title: string, entries: { path: string; code: string }[], open: boolean,
      setOpen: (v: boolean) => void, _hAction: string,
      headerBtns: { label: string; icon: React.ElementType<{ size?: number | string; strokeWidth?: number | string }>; handler: () => void }[],
-     itemBtns: { icon: React.ElementType<{ size?: number | string; strokeWidth?: number | string }>; handler: (p: string) => void; title: string }[]) => (
-      <div className="scm-section">
-        <div className="scm-section__header" onClick={() => setOpen(!open)}>
-          <ChevronRight size={12} strokeWidth={1.5} className={open ? 'scm-rotated' : ''} />
+     itemBtns: { icon: React.ElementType<{ size?: number | string; strokeWidth?: number | string }>; handler: (p: string) => void; title: string }[]) => {
+      const isEmpty = entries.length === 0;
+      return (
+      <div className={`scm-section ${isEmpty ? 'scm-section--empty' : ''}`}>
+        <div className="scm-section__header" onClick={() => { if (!isEmpty) setOpen(!open); }}>
+          <ChevronRight size={12} strokeWidth={1.5} className={open && !isEmpty ? 'scm-rotated' : ''} />
           <span className="scm-section__title">{title}</span>
           <span className="scm-section__badge">{entries.length}</span>
-          <span className="scm-section__actions">
-            {headerBtns.map((b, i) => (
-              <button key={i} onClick={e => { e.stopPropagation(); b.handler(); }} title={b.label}>
-                <b.icon size={12} strokeWidth={1.5} />
-              </button>
-            ))}
-          </span>
+          {!isEmpty && (
+            <span className="scm-section__actions">
+              {headerBtns.map((b, i) => (
+                <button key={i} onClick={e => { e.stopPropagation(); b.handler(); }} title={b.label}>
+                  <b.icon size={12} strokeWidth={1.5} />
+                </button>
+              ))}
+            </span>
+          )}
         </div>
-        {open && (
+        {open && !isEmpty && (
           <div className="scm-section__content">
             {entries.map(({ path, code }) => (
               <div key={path} className={`scm-item ${statusClass(code)}`} title={path} onClick={() => handleOpenFile(path)}>
@@ -324,16 +344,11 @@ const SourceControlPanel = () => {
                 </span>
               </div>
             ))}
-            {entries.length === 0 && (
-              <div className="scm-empty">
-                <Inbox size={28} strokeWidth={1.5} className="scm-empty__icon" />
-                <span>{t('sourceControlPanel.empty', { title })}</span>
-              </div>
-            )}
           </div>
         )}
       </div>
-    ), [handleOpenFile, t]
+    );
+    }, [handleOpenFile, t]
   );
 
   if (!rootPath) {

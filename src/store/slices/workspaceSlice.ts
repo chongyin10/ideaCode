@@ -669,6 +669,31 @@ const workspaceSlice = createSlice({
       for (const g of state.editorGroups) g.ratio = 1;
     },
 
+    /**
+     * 拖拽重排 tab 顺序
+     * @param payload { fromId, toId, position }
+     *   position='before': 将 fromId 插入到 toId 之前
+     *   position='after':  将 fromId 插入到 toId 之后
+     */
+    reorderTab: (state, action) => {
+      const { fromId, toId, position = 'before' } = action.payload as {
+        fromId: string; toId: string; position?: 'before' | 'after';
+      };
+      if (fromId === toId) return;
+      const group = activeGroup(state);
+      const fromIdx = group.fileIds.indexOf(fromId);
+      const toIdx = group.fileIds.indexOf(toId);
+      if (fromIdx === -1 || toIdx === -1) return;
+
+      // 先移除 fromId
+      group.fileIds.splice(fromIdx, 1);
+
+      // 移除后 toIdx 可能偏移，重新定位 toId
+      const newToIdx = group.fileIds.indexOf(toId);
+      const insertIdx = position === 'after' ? newToIdx + 1 : newToIdx;
+      group.fileIds.splice(insertIdx, 0, fromId);
+    },
+
     /** 打开 Git Diff 视图 */
     openDiffView: (state, action) => {
       state.diffView = action.payload as DiffView;
@@ -801,7 +826,7 @@ export const {
   closeFile, activateFile, navigateTabHistory, setFileContent, setMirrorFileContent, markFileSaved,
   pinPreviewFile, setSearchHighlight, clearSearchHighlight, setClipboard,
   clearClipboard, setPendingSearchQuery, expandToFile, clearExpandPaths,
-  toggleExpandDir, toggleSplitView, collapseAllGroups, setActiveGroup, saveEditorSnapshot, setGroupRatio, equalizeGroupRatios,
+  toggleExpandDir, toggleSplitView, collapseAllGroups, setActiveGroup, saveEditorSnapshot, setGroupRatio, equalizeGroupRatios, reorderTab,
   openDiffView, closeDiffView, updateDiffView, setFileLanguage,
   setSettingsVisible, closeSettings, setMissingFileIds,
 } = workspaceSlice.actions;

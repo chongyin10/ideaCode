@@ -20,6 +20,7 @@ import {
   saveEditorSnapshot,
   setGroupRatio,
   equalizeGroupRatios,
+  reorderTab,
 } from '../store/slices/workspaceSlice';
 
 import { openDirectory, warmupFileCache } from '../services/fileService';
@@ -665,6 +666,7 @@ function Home() {
             onClose={(id) => handleCloseTab(id, groupIndex)}
             onContextMenu={(e, id) => handleTabContextMenu(e, id, groupIndex)}
             onPin={() => dispatch(pinPreviewFile())}
+            onReorder={(fromId, toId, position) => dispatch(reorderTab({ fromId, toId, position }))}
             onSplitView={() => dispatch(toggleSplitView())}
             splitActive={splitView}
             focused={focused}

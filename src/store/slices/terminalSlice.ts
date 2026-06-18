@@ -354,6 +354,54 @@ const terminalSlice = createSlice({
       }
     },
 
+    /**
+     * 拖拽重排终端 tab 顺序（仅改变侧边栏显示顺序，不改变分屏布局）
+     * @param payload { fromId, toId, position } 将 fromId 对应的终端移到 toId 的 before/after
+     *
+     * 策略：按 group 粒度重排。每个非拆分终端是一个独立 group，重排 groups 数组顺序即可。
+     * 拆分终端（同 group 多 pane）作为整体移动，不拆散。
+     */
+    reorderTerminalTab(state, action: PayloadAction<{
+      fromId: string; toId: string; position: 'before' | 'after';
+    }>) {
+      const { fromId, toId, position } = action.payload;
+      if (fromId === toId) return;
+
+      // 查找 from / to 所在的 group 索引
+      const groups = state.panelLayout.groups;
+      let fromGroupIdx = -1;
+      let toGroupIdx = -1;
+
+      for (let i = 0; i < groups.length; i++) {
+        if (groups[i].panes.some(p => p.terminalId === fromId)) fromGroupIdx = i;
+        if (groups[i].panes.some(p => p.terminalId === toId)) toGroupIdx = i;
+      }
+
+      // 情况 1：都在面板组中 → 重排 groups 数组顺序
+      if (fromGroupIdx !== -1 && toGroupIdx !== -1) {
+        if (fromGroupIdx === toGroupIdx) return; // 同组不操作
+        const movedGroup = groups.splice(fromGroupIdx, 1)[0];
+        // 移除后 toGroupIdx 可能偏移
+        const newToIdx = groups.findIndex(g => g.panes.some(p => p.terminalId === toId));
+        const insertIdx = position === 'after' ? newToIdx + 1 : newToIdx;
+        groups.splice(insertIdx, 0, movedGroup);
+        return;
+      }
+
+      // 情况 2：都在 editorTerminals 中 → 重排编辑器终端顺序
+      const fromInEditor = state.editorTerminals.includes(fromId);
+      const toInEditor = state.editorTerminals.includes(toId);
+      if (fromInEditor && toInEditor) {
+        state.editorTerminals = state.editorTerminals.filter(id => id !== fromId);
+        const newToIdx = state.editorTerminals.indexOf(toId);
+        const insertIdx = position === 'after' ? newToIdx + 1 : newToIdx;
+        state.editorTerminals.splice(insertIdx, 0, fromId);
+        return;
+      }
+
+      // 跨组/跨区域拖拽：不支持（会改变分屏布局）
+    },
+
     moveToEditor(state, action: PayloadAction<string>) {
       const id = action.payload;
       const tab = state.tabs[id];
@@ -438,6 +486,7 @@ export const {
   setTabProcessId, setTabReady, setTabExited, setTabCwd, renameTab,
   setPanelVisible, togglePanel, setPanelHeight, toggleMaximize, setSidebarWidth,
   setActiveGroup, splitPane, closePane, setActivePane,
+  reorderTerminalTab,
   moveToEditor, moveToPanel,
   setProfiles,
   addBookmark, removeBookmark,

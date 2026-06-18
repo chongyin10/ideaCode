@@ -64,3 +64,58 @@
   box-shadow: 0 0 0 1px #1e1e1e;
   pointer-events: none;
 }
+
+/* ═══════════════════════════════════════════════════
+   拖拽重排样式
+   ═══════════════════════════════════════════════════ */
+
+/* 拖拽中：grabbing 光标，悬停时保持 pointer（点击切换面板） */
+.activity-bar__item[draggable="true"]:active {
+  cursor: grabbing;
+}
+
+/* 被拖拽的图标：半透明 + 缩小 */
+.activity-bar__item--dragging {
+  opacity: 0.3;
+  transform: scale(0.9);
+}
+
+/* 拖拽悬停目标：插入指示线 */
+.activity-bar__item--drag-over {
+  position: relative;
+}
+
+/* 上方插入指示线 */
+.activity-bar__item--drag-over.activity-bar__item--drag-before::before {
+  content: '';
+  position: absolute;
+  top: -2px;
+  left: 4px;
+  right: 4px;
+  height: 2px;
+  background: #4a9eff;
+  border-radius: 1px;
+  box-shadow: 0 0 6px rgba(74, 158, 255, 0.6);
+  animation: activityDropPulse 0.6s ease-in-out infinite alternate;
+  z-index: 2;
+}
+
+/* 下方插入指示线 */
+.activity-bar__item--drag-over.activity-bar__item--drag-after::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  left: 4px;
+  right: 4px;
+  height: 2px;
+  background: #4a9eff;
+  border-radius: 1px;
+  box-shadow: 0 0 6px rgba(74, 158, 255, 0.6);
+  animation: activityDropPulse 0.6s ease-in-out infinite alternate;
+  z-index: 2;
+}
+
+@keyframes activityDropPulse {
+  from { opacity: 0.5; }
+  to   { opacity: 1; }
+}

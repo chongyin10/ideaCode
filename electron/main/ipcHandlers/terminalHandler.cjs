@@ -52,6 +52,60 @@ class PIDControl {
   }
 }
 
+// ============ zsh compinit 断链清理 ============
+
+/**
+ * 清理 Homebrew zsh 补全目录中的断裂符号链接。
+ *
+ * 问题: Homebrew 更新/卸载软件包后，/opt/homebrew/share/zsh/site-functions/ 下的
+ * 补全文件 (如 _brew_services) 可能变成指向已不存在目标的断裂符号链接。
+ * zsh compinit 启动时会尝试读取这些文件，触发:
+ *   compinit:527: no such file or directory: .../_brew_services
+ *
+ * 此函数遍历常见补全目录，删除所有断裂的符号链接。
+ * 幂等操作，可安全重复调用。每次终端创建时调用一次。
+ */
+const _brokenLinkCleanupDone = new Set(); // 已清理过的目录，避免重复 I/O
+function cleanupBrokenZshCompletions() {
+  // 常见补全目录 (Homebrew Apple Silicon / Intel + 系统级)
+  const completionDirs = [
+    '/opt/homebrew/share/zsh/site-functions',
+    '/usr/local/share/zsh/site-functions',
+  ];
+
+  for (const dir of completionDirs) {
+    if (_brokenLinkCleanupDone.has(dir)) continue;
+
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      // 目录不存在或无权限，跳过
+      _brokenLinkCleanupDone.add(dir); // 标记已尝试，避免反复 stat
+      continue;
+    }
+
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) {
+        const fullPath = path.join(dir, entry.name);
+        try {
+          // fs.statSync 会跟随符号链接；如果目标不存在则抛 ENOENT
+          fs.statSync(fullPath);
+        } catch {
+          // 断裂符号链接 → 删除
+          try {
+            fs.unlinkSync(fullPath);
+          } catch {
+            // 删除失败（权限等）忽略，后续靠 ZSH_DISABLE_COMPFIX 抑制警告
+          }
+        }
+      }
+    }
+
+    _brokenLinkCleanupDone.add(dir);
+  }
+}
+
 // 每个终端实例附带 PID 控制器
 const pidControllers = new Map();
 
@@ -259,6 +313,19 @@ async function createTerminalProcess(config, cwd, cols, rows, ownerWindow, owner
   const shellPath = config.executable || shellConfig.path;
   const shellArgs = config.args || shellConfig.args || [];
   const env = { ...process.env, ...(config.env || {}) };
+
+  // ── 修复 zsh compinit 警告 ──
+  // Homebrew 的 _brew_services 等补全文件偶尔会变成断裂符号链接，
+  // 导致 zsh compinit 在启动时报:
+  //   compinit:527: no such file or directory: /opt/homebrew/share/zsh/site-functions/_brew_services
+  // 此处主动清理断裂的符号链接，并设置 ZSH_DISABLE_COMPFIX 抑制残余警告。
+  cleanupBrokenZshCompletions();
+
+  // 抑制 zsh compinit 的 " insecure directories" / 缺失文件警告
+  // (不影响补全功能本身，仅跳过 compfix 安全检查)
+  if (env.ZSH_DISABLE_COMPFIX === undefined) {
+    env.ZSH_DISABLE_COMPFIX = 'true';
+  }
 
   // 校验工作目录：不存在则回退到进程当前目录
   let workDir = cwd || config.cwd || process.cwd();

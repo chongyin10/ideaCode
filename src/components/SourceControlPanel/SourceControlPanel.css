@@ -140,6 +140,15 @@
 
 .scm-section__header:hover { color: #ccc; }
 
+/* 空分组：标题栏保持可见但折叠，不可点击展开 */
+.scm-section--empty .scm-section__header {
+  cursor: default;
+  opacity: 0.55;
+}
+.scm-section--empty .scm-section__header:hover {
+  color: #969696;
+}
+
 .scm-section__title { text-transform: uppercase; }
 
 .scm-section__badge {

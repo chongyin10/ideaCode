@@ -19,7 +19,7 @@ import {
   addTab, removeTab, setTabProcessId, setTabReady, setTabExited,
   setPanelVisible, setPanelHeight, toggleMaximize as toggleMaximizeAction,
   setSidebarWidth, splitPane, setActivePane, setActiveGroup,
-  removeBookmark, renameTab,
+  removeBookmark, renameTab, reorderTerminalTab,
   setBroadcastMode, setProfiles,
   TerminalTab,
 } from '../../store/slices/terminalSlice';
@@ -121,6 +121,39 @@ const BottomPanel = () => {
   const [editingName, setEditingName] = useState('');
   const panelRef = useRef<HTMLDivElement>(null);
   const terminalRefs = useRef<Map<string, TerminalInstanceHandle>>(new Map());
+
+  // ── 终端 tab 拖拽重排状态 ──
+  const [draggingTabId, setDraggingTabId] = useState<string | null>(null);
+  const [dragOverTabId, setDragOverTabId] = useState<string | null>(null);
+  const [dragOverPos, setDragOverPos] = useState<'before' | 'after'>('after');
+  const draggingTabIdRef = useRef<string | null>(null);
+  draggingTabIdRef.current = draggingTabId;
+
+  const handleTabDragStart = useCallback((e: React.DragEvent, tabId: string) => {
+    setDraggingTabId(tabId);
+    draggingTabIdRef.current = tabId;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', tabId);
+  }, []);
+
+  const handleTabDrop = useCallback((e: React.DragEvent, tabId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!draggingTabIdRef.current) return;
+    const fromId = draggingTabIdRef.current;
+    if (fromId !== tabId) {
+      dispatch(reorderTerminalTab({ fromId, toId: tabId, position: dragOverPos }));
+    }
+    setDraggingTabId(null);
+    setDragOverTabId(null);
+    draggingTabIdRef.current = null;
+  }, [dispatch, dragOverPos]);
+
+  const handleTabDragEnd = useCallback(() => {
+    setDraggingTabId(null);
+    setDragOverTabId(null);
+    draggingTabIdRef.current = null;
+  }, []);
 
   /* ─── 稳定引用 ─── */
   const terminalStateRef = useRef(terminal);
@@ -510,12 +543,55 @@ const BottomPanel = () => {
           {/* 侧边栏 */}
           <div className="terminal-sidebar" style={{ width: terminal.sidebarWidth }}>
             <div className="terminal-sidebar__resize-handle" onMouseDown={startResizeSidebar} />
-            <div className="terminal-sidebar__tabs">
+            <div
+              className={`terminal-sidebar__tabs ${draggingTabId ? 'terminal-sidebar__tabs--dragging' : ''}`}
+              onDragOver={(e) => {
+                if (!draggingTabIdRef.current) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                // 计算最近的 tab 作为悬停目标（间隙也归属最近的 tab）
+                const container = e.currentTarget;
+                const children = Array.from(container.querySelectorAll<HTMLElement>('[data-tab-id]'));
+                let bestId: string | null = null;
+                let bestDist = Infinity;
+                for (const child of children) {
+                  const rect = child.getBoundingClientRect();
+                  const midY = rect.top + rect.height / 2;
+                  const dist = Math.abs(e.clientY - midY);
+                  if (dist < bestDist) { bestDist = dist; bestId = child.dataset.tabId || null; }
+                }
+                if (bestId && bestId !== draggingTabIdRef.current) {
+                  const targetChild = children.find(c => c.dataset.tabId === bestId);
+                  if (targetChild) {
+                    const rect = targetChild.getBoundingClientRect();
+                    const midY = rect.top + rect.height / 2;
+                    setDragOverTabId(bestId);
+                    setDragOverPos(e.clientY < midY ? 'before' : 'after');
+                  }
+                } else if (bestId === draggingTabIdRef.current) {
+                  setDragOverTabId(null);
+                }
+              }}
+              onDrop={(e) => {
+                if (dragOverTabId && draggingTabIdRef.current) {
+                  handleTabDrop(e, dragOverTabId);
+                } else {
+                  e.preventDefault();
+                  setDraggingTabId(null);
+                  setDragOverTabId(null);
+                  draggingTabIdRef.current = null;
+                }
+              }}
+            >
               <div className="terminal-sidebar__section-title">{t('bottomPanel.terminals')}</div>
               {allTabs.map(tab => (
                 <div
                   key={tab.id}
-                  className={`terminal-tab ${tab.id === activeTabIdMemo ? 'active' : ''} ${tab.exited ? 'exited' : ''}`}
+                  data-tab-id={tab.id}
+                  className={`terminal-tab ${tab.id === activeTabIdMemo ? 'active' : ''} ${tab.exited ? 'exited' : ''} ${draggingTabId === tab.id ? 'terminal-tab--dragging' : ''} ${dragOverTabId === tab.id ? `terminal-tab--drag-over terminal-tab--drag-${dragOverPos}` : ''}`}
+                  draggable
+                  onDragStart={(e) => handleTabDragStart(e, tab.id)}
+                  onDragEnd={handleTabDragEnd}
                   onClick={() => {
                     handleSwitchTab(tab.id);
                     terminalRefs.current.get(tab.id)?.focus();

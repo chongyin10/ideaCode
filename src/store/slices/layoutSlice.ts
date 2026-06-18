@@ -7,10 +7,15 @@ export const DEFAULT_SIDEBAR_WIDTH = 260;
 export const MIN_SIDEBAR_WIDTH = 150;
 export const MAX_SIDEBAR_WIDTH = 600;
 
+/** ActivityBar 面板默认顺序 */
+export const DEFAULT_PANEL_ORDER: PanelId[] = ['explorer', 'search', 'git', 'debug', 'extensions'];
+
 interface LayoutState {
   sidePanelVisible: boolean;
   sidePanelWidth: number;
   activePanel: PanelId;
+  /** ActivityBar 面板顺序（可拖拽重排） */
+  panelOrder: PanelId[];
   rightPanelVisible: boolean;
   bottomPanelVisible: boolean;
   activeBottomTab: BottomTabId;
@@ -20,6 +25,7 @@ const initialState: LayoutState = {
   sidePanelVisible: true,
   sidePanelWidth: DEFAULT_SIDEBAR_WIDTH,
   activePanel: 'explorer',
+  panelOrder: [...DEFAULT_PANEL_ORDER],
   rightPanelVisible: false,
   bottomPanelVisible: false,
   activeBottomTab: 'terminal',
@@ -76,6 +82,24 @@ const layoutSlice = createSlice({
       state.activeBottomTab = action.payload as BottomTabId;
       state.bottomPanelVisible = true;
     },
+    /**
+     * 拖拽重排 ActivityBar 面板顺序
+     * @param payload { fromId, toId, position } 将 fromId 移到 toId 的 before/after
+     */
+    reorderPanel: (state, action) => {
+      const { fromId, toId, position = 'before' } = action.payload as {
+        fromId: PanelId; toId: PanelId; position?: 'before' | 'after';
+      };
+      if (fromId === toId) return;
+      const order = state.panelOrder;
+      const fromIdx = order.indexOf(fromId);
+      const toIdx = order.indexOf(toId);
+      if (fromIdx === -1 || toIdx === -1) return;
+      order.splice(fromIdx, 1);
+      const newToIdx = order.indexOf(toId);
+      const insertIdx = position === 'after' ? newToIdx + 1 : newToIdx;
+      order.splice(insertIdx, 0, fromId);
+    },
   },
 });
 
@@ -89,5 +113,6 @@ export const {
   setBottomPanelVisible,
   switchBottomTab,
   openBottomTab,
+  reorderPanel,
 } = layoutSlice.actions;
 export default layoutSlice.reducer;
