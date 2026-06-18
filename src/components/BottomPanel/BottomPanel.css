@@ -93,6 +93,46 @@
   color: #ffffff;
 }
 
+/* 拖拽重排样式 */
+.bottom-panel__tab[draggable="true"]:active {
+  cursor: grabbing;
+}
+
+.bottom-panel__tab--dragging {
+  opacity: 0.3;
+  transform: scale(0.95);
+}
+
+.bottom-panel__tab--drag-over {
+  position: relative;
+}
+
+.bottom-panel__tab--drag-over.bottom-panel__tab--drag-before::before {
+  content: '';
+  position: absolute;
+  left: -1px;
+  top: 2px;
+  bottom: 2px;
+  width: 2px;
+  background: #007acc;
+  border-radius: 1px;
+  box-shadow: 0 0 6px rgba(0, 122, 204, 0.6);
+  z-index: 2;
+}
+
+.bottom-panel__tab--drag-over.bottom-panel__tab--drag-after::after {
+  content: '';
+  position: absolute;
+  right: -1px;
+  top: 2px;
+  bottom: 2px;
+  width: 2px;
+  background: #007acc;
+  border-radius: 1px;
+  box-shadow: 0 0 6px rgba(0, 122, 204, 0.6);
+  z-index: 2;
+}
+
 .bottom-panel__tab-icon {
   flex-shrink: 0;
 }

@@ -231,7 +231,7 @@ export function chebyshevAcceleratedIteration(
   const n = x0.length;
   let xPrev = new Float64Array(n);
   let xCurr = x0.slice();
-  let xNext = new Float64Array(n);
+  const xNext = new Float64Array(n);
 
   const delta = (lambdaMax - lambdaMin) / 2;
   const gamma = (lambdaMax + lambdaMin) / 2;

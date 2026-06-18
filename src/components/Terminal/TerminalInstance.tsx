@@ -19,6 +19,14 @@ export interface TerminalInstanceHandle {
   find: (term: string) => Promise<boolean>;
   findPrevious: (term: string) => Promise<boolean>;
   clearSelection: () => void;
+  /** 获取选中文本（无选中返回空串） */
+  getSelection: () => string;
+  /** 是否有选中文本 */
+  hasSelection: () => boolean;
+  /** 选中全部内容 */
+  selectAll: () => void;
+  /** 粘贴剪贴板内容到终端 */
+  paste: () => void;
 }
 
 interface TerminalInstanceProps {
@@ -26,10 +34,12 @@ interface TerminalInstanceProps {
   className?: string;
   style?: React.CSSProperties;
   active?: boolean;
+  /** 右键菜单回调，返回是否已有选中内容 */
+  onContextMenu?: (e: { x: number; y: number; hasSelection: boolean }) => void;
 }
 
 export const TerminalInstance = forwardRef<TerminalInstanceHandle, TerminalInstanceProps>(
-  function TerminalInstance({ terminalId, className = '', style, active = true }, ref) {
+  function TerminalInstance({ terminalId, className = '', style, active = true, onContextMenu }, ref) {
     const containerRef = useRef<HTMLDivElement>(null);
     const terminalRef = useRef<Terminal | null>(null);
     const fitAddonRef = useRef<FitAddon | null>(null);
@@ -67,6 +77,23 @@ export const TerminalInstance = forwardRef<TerminalInstanceHandle, TerminalInsta
       },
       clearSelection: () => {
         terminalRef.current?.clearSelection();
+      },
+      getSelection: () => {
+        return terminalRef.current?.getSelection() ?? '';
+      },
+      hasSelection: () => {
+        return terminalRef.current?.hasSelection() ?? false;
+      },
+      selectAll: () => {
+        terminalRef.current?.selectAll();
+      },
+      paste: () => {
+        navigator.clipboard.readText().then((text) => {
+          const pid = processIdRef.current;
+          if (pid != null) {
+            sendInput(pid, text);
+          }
+        }).catch(() => {});
       },
     }));
 
@@ -167,6 +194,8 @@ export const TerminalInstance = forwardRef<TerminalInstanceHandle, TerminalInsta
     activeRef.current = active;
     const gpuRef = useRef(gpuAcceleration);
     gpuRef.current = gpuAcceleration;
+    const onContextMenuRef = useRef(onContextMenu);
+    onContextMenuRef.current = onContextMenu;
 
     // 订阅 PTY 输出
     useEffect(() => {
@@ -254,17 +283,8 @@ export const TerminalInstance = forwardRef<TerminalInstanceHandle, TerminalInsta
       e.preventDefault();
       const terminal = terminalRef.current;
       if (!terminal) return;
-      if (terminal.hasSelection()) {
-        navigator.clipboard.writeText(terminal.getSelection()).catch(() => {});
-        terminal.clearSelection();
-      } else {
-        navigator.clipboard.readText().then((text) => {
-          const pid = processIdRef.current;
-          if (pid != null) {
-            sendInput(pid, text);
-          }
-        }).catch(() => {});
-      }
+      // 通过回调通知父组件显示自定义右键菜单
+      onContextMenuRef.current?.({ x: e.clientX, y: e.clientY, hasSelection: terminal.hasSelection() });
     }
 
     function scheduleFit() {

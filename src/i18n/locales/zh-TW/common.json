@@ -59,6 +59,7 @@
     "copy": "複製（暫不可用）",
     "paste": "貼上（暫不可用）",
     "clear": "清除畫面",
+    "selectAll": "全選",
     "maximize": "最大化",
     "restore": "還原",
     "closePanel": "關閉面板",
@@ -80,6 +81,7 @@
     "maximize": "全螢幕",
     "restore": "還原",
     "closeTab": "關閉目前標籤",
+    "closePanel": "關閉面板",
     "placeholder": "{{name}} 面板",
     "defaultTabName": "標籤 {{index}}"
   },

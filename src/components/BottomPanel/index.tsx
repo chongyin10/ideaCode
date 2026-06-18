@@ -14,7 +14,7 @@ import {
   AlertCircle, PanelTopOpen, Bug, Plug, GitBranch, Pencil,
 } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
-import { toggleBottomPanel, setBottomPanelVisible, switchBottomTab, type BottomTabId } from '../../store/slices/layoutSlice';
+import { toggleBottomPanel, setBottomPanelVisible, switchBottomTab, reorderBottomTab, type BottomTabId } from '../../store/slices/layoutSlice';
 import {
   addTab, removeTab, setTabProcessId, setTabReady, setTabExited,
   setPanelVisible, setPanelHeight, toggleMaximize as toggleMaximizeAction,
@@ -31,6 +31,7 @@ import {
 } from '../../services/terminalManager';
 import { notifyPanelResizeStart, notifyPanelResizeEnd } from '../../services/panelResizeNotifier';
 import TerminalInstance, { type TerminalInstanceHandle } from '../Terminal/TerminalInstance';
+import ContextMenu, { type MenuItem } from '../ContextMenu';
 import type { TerminalOutputEvent, TerminalProfile } from '../../types/electron';
 import './BottomPanel.css';
 
@@ -49,10 +50,10 @@ const useBottomTabs = (): BottomTab[] => {
   const { t } = useTranslation();
   return useMemo(
     () => [
-      { id: 'terminal', name: t('bottomPanel.terminal'), icon: Terminal },
       { id: 'problems', name: t('bottomPanel.problems'), icon: AlertCircle },
       { id: 'output', name: t('bottomPanel.output'), icon: PanelTopOpen },
       { id: 'debug-console', name: t('bottomPanel.debugConsole'), icon: Bug },
+      { id: 'terminal', name: t('bottomPanel.terminal'), icon: Terminal },
       { id: 'ports', name: t('bottomPanel.ports'), icon: Plug },
       { id: 'gitlens', name: t('bottomPanel.gitlens'), icon: GitBranch },
     ],
@@ -63,10 +64,23 @@ const useBottomTabs = (): BottomTab[] => {
 const BottomPanel = () => {
   const { t } = useTranslation();
   const dispatch = useAppDispatch();
-  const bottomTabs = useBottomTabs();
-  const { bottomPanelVisible, activeBottomTab } = useAppSelector((s) => s.layout);
+  const allBottomTabs = useBottomTabs();
+  const { bottomPanelVisible, activeBottomTab, bottomTabOrder } = useAppSelector((s) => s.layout);
   const terminal = useAppSelector((s) => s.terminal);
   const rootSource = useAppSelector((s) => s.workspace.rootSource);
+
+  // 按 bottomTabOrder 排序的 tab 列表
+  const bottomTabs = useMemo(() => {
+    const tabMap = new Map(allBottomTabs.map(t => [t.id, t]));
+    return bottomTabOrder.map(id => tabMap.get(id)).filter((t): t is BottomTab => !!t);
+  }, [allBottomTabs, bottomTabOrder]);
+
+  // ── 底部 tab 拖拽重排状态 ──
+  const [draggingBottomTab, setDraggingBottomTab] = useState<BottomTabId | null>(null);
+  const [dragOverBottomTab, setDragOverBottomTab] = useState<BottomTabId | null>(null);
+  const [dragOverBottomPos, setDragOverBottomPos] = useState<'before' | 'after'>('after');
+  const draggingBottomTabRef = useRef<BottomTabId | null>(null);
+  draggingBottomTabRef.current = draggingBottomTab;
 
   /* ─── 派生数据 ─── */
   const activeGroup = useMemo(() => {
@@ -155,6 +169,13 @@ const BottomPanel = () => {
     draggingTabIdRef.current = null;
   }, []);
 
+  // ── 终端右键菜单 ──
+  const [terminalContextMenu, setTerminalContextMenu] = useState<{ x: number; y: number; tabId: string; hasSelection: boolean } | null>(null);
+
+  const handleTerminalContextMenu = useCallback((e: { x: number; y: number; hasSelection: boolean }, tabId: string) => {
+    setTerminalContextMenu({ x: e.x, y: e.y, tabId, hasSelection: e.hasSelection });
+  }, []);
+
   /* ─── 稳定引用 ─── */
   const terminalStateRef = useRef(terminal);
   terminalStateRef.current = terminal;
@@ -236,6 +257,65 @@ const BottomPanel = () => {
     }
   }, [dispatch]);
 
+  const terminalContextItems = useMemo<MenuItem[]>(() => {
+    if (!terminalContextMenu) return [];
+    const tabId = terminalContextMenu.tabId;
+    const termRef = terminalRefs.current.get(tabId);
+    const hasSel = terminalContextMenu.hasSelection;
+    return [
+      {
+        id: 'new-terminal',
+        label: t('bottomPanel.newTerminal'),
+        icon: <Plus size={14} strokeWidth={1.5} />,
+        group: 'terminal',
+        onClick: () => handleCreateTab(),
+      },
+      {
+        id: 'copy',
+        label: t('bottomPanel.copy'),
+        icon: <Copy size={14} strokeWidth={1.5} />,
+        group: 'edit',
+        disabled: !hasSel,
+        onClick: () => {
+          const sel = termRef?.getSelection() ?? '';
+          if (sel) {
+            navigator.clipboard.writeText(sel).catch(() => {});
+            termRef?.clearSelection();
+          }
+        },
+      },
+      {
+        id: 'paste',
+        label: t('bottomPanel.paste'),
+        icon: <ClipboardPaste size={14} strokeWidth={1.5} />,
+        group: 'edit',
+        onClick: () => {
+          termRef?.paste();
+        },
+      },
+      {
+        id: 'select-all',
+        label: t('bottomPanel.selectAll'),
+        icon: <PanelTopOpen size={14} strokeWidth={1.5} />,
+        group: 'edit',
+        onClick: () => {
+          termRef?.selectAll();
+        },
+      },
+      {
+        id: 'clear',
+        label: t('bottomPanel.clear'),
+        icon: <Trash2 size={14} strokeWidth={1.5} />,
+        group: 'edit',
+        onClick: () => {
+          const state = terminalStateRef.current;
+          const tab = state.tabs[tabId];
+          if (tab?.processId && tab.processId > 0) clearTerminal(tab.processId);
+        },
+      },
+    ];
+  }, [terminalContextMenu, t, handleCreateTab]);
+
   const handleCloseTab = useCallback((tabId: string) => {
     const tab = terminalStateRef.current.tabs[tabId];
     if (tab?.processId) {
@@ -301,6 +381,43 @@ const BottomPanel = () => {
   const handleSwitchBottomTab = useCallback((tabId: BottomTabId) => {
     dispatch(switchBottomTab(tabId));
   }, [dispatch]);
+
+  // ── 底部 tab 拖拽重排 ──
+  const handleBottomTabDragStart = useCallback((e: React.DragEvent, tabId: BottomTabId) => {
+    setDraggingBottomTab(tabId);
+    draggingBottomTabRef.current = tabId;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', tabId);
+  }, []);
+
+  const handleBottomTabDragOver = useCallback((e: React.DragEvent, tabId: BottomTabId) => {
+    if (!draggingBottomTabRef.current || draggingBottomTabRef.current === tabId) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const midX = rect.left + rect.width / 2;
+    setDragOverBottomTab(tabId);
+    setDragOverBottomPos(e.clientX < midX ? 'before' : 'after');
+  }, []);
+
+  const handleBottomTabDrop = useCallback((e: React.DragEvent, tabId: BottomTabId) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!draggingBottomTabRef.current) return;
+    const fromId = draggingBottomTabRef.current;
+    if (fromId !== tabId) {
+      dispatch(reorderBottomTab({ fromId, toId: tabId, position: dragOverBottomPos }));
+    }
+    setDraggingBottomTab(null);
+    setDragOverBottomTab(null);
+    draggingBottomTabRef.current = null;
+  }, [dispatch, dragOverBottomPos]);
+
+  const handleBottomTabDragEnd = useCallback(() => {
+    setDraggingBottomTab(null);
+    setDragOverBottomTab(null);
+    draggingBottomTabRef.current = null;
+  }, []);
 
   /* ─── 面板尺寸 ─── */
   const panelHeightRef = useRef(terminal.panelHeight);
@@ -434,7 +551,12 @@ const BottomPanel = () => {
             return (
               <div
                 key={tab.id}
-                className={`bottom-panel__tab ${tab.id === activeBottomTab ? 'active' : ''}`}
+                className={`bottom-panel__tab ${tab.id === activeBottomTab ? 'active' : ''} ${draggingBottomTab === tab.id ? 'bottom-panel__tab--dragging' : ''} ${dragOverBottomTab === tab.id ? `bottom-panel__tab--drag-over bottom-panel__tab--drag-${dragOverBottomPos}` : ''}`}
+                draggable
+                onDragStart={(e) => handleBottomTabDragStart(e, tab.id)}
+                onDragOver={(e) => handleBottomTabDragOver(e, tab.id)}
+                onDrop={(e) => handleBottomTabDrop(e, tab.id)}
+                onDragEnd={handleBottomTabDragEnd}
                 onClick={() => handleSwitchBottomTab(tab.id)}
                 title={tab.name}
               >
@@ -530,6 +652,7 @@ const BottomPanel = () => {
                 className={`terminal-pane ${pane.active ? 'terminal-pane--active' : 'terminal-pane--hidden'}`}
                 style={pane.active ? { flex: pane.relativeSize } : undefined}
                 active={pane.active}
+                onContextMenu={(e) => handleTerminalContextMenu(e, pane.id)}
               />
             ))}
             {!activeTabIdMemo && allTabs.length === 0 && (
@@ -669,6 +792,17 @@ const BottomPanel = () => {
       <div className="bottom-panel__placeholder" style={{ display: activeBottomTab === 'debug-console' ? 'flex' : 'none' }}>{t('bottomPanel.debugConsolePanel')}</div>
       <div className="bottom-panel__placeholder" style={{ display: activeBottomTab === 'ports' ? 'flex' : 'none' }}>{t('bottomPanel.portsPanel')}</div>
       <div className="bottom-panel__placeholder" style={{ display: activeBottomTab === 'gitlens' ? 'flex' : 'none' }}>GITLENS</div>
+
+      {/* 终端右键菜单 */}
+      {terminalContextMenu && (
+        <ContextMenu
+          items={terminalContextItems}
+          x={terminalContextMenu.x}
+          y={terminalContextMenu.y}
+          visible={!!terminalContextMenu}
+          onClose={() => setTerminalContextMenu(null)}
+        />
+      )}
     </div>
   );
 };

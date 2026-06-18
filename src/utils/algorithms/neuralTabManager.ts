@@ -245,7 +245,7 @@ export class BCMTabManager {
 
     // STDP: 记录 from→to 的时序脉冲，更新突触权重
     if (this.config.enableSTDP && fromId) {
-      this.applySTDP(fromId, toId, Date.now());
+      this.applySTDP(fromId, toId);
     }
 
     this.updateWeights();
@@ -348,7 +348,7 @@ export class BCMTabManager {
    *
    * 捕捉 Tab 切换的方向性: A→B 频繁但 B→A 罕见会增强 A→B 突触。
    */
-  private applySTDP(fromId: string, toId: string, _now: number): void {
+  private applySTDP(fromId: string, toId: string): void {
     const { stdpAPlus, stdpAMinus, stdpTauPlus, stdpTauMinus } = this.config;
     const key = `${fromId}::${toId}`;
     const reverseKey = `${toId}::${fromId}`;

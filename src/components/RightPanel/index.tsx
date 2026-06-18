@@ -2,7 +2,7 @@ import { useState, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Plus, X, Maximize2, Minimize2 } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
-import { toggleRightPanel } from '../../store/slices/layoutSlice';
+import { toggleRightPanel, setRightPanelMaximized } from '../../store/slices/layoutSlice';
 import { notifyPanelResizeStart, notifyPanelResizeEnd } from '../../services/panelResizeNotifier';
 import './RightPanel.css';
 
@@ -20,7 +20,7 @@ const MAX_WIDTH_RATIO = 0.85;
 const RightPanel = () => {
   const { t } = useTranslation();
   const dispatch = useAppDispatch();
-  const { rightPanelVisible } = useAppSelector((state) => state.layout);
+  const { rightPanelVisible, rightPanelMaximized } = useAppSelector((state) => state.layout);
 
   const createTab = useCallback(
     (name?: string): RightPanelTab => {
@@ -36,7 +36,7 @@ const RightPanel = () => {
   const [tabs, setTabs] = useState<RightPanelTab[]>(() => [createTab('KIMI CODE')]);
   const [activeId, setActiveId] = useState<string>(tabs[0].id);
   const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH);
-  const [isMaximized, setIsMaximized] = useState(false);
+  const isMaximized = rightPanelMaximized;
   const [isResizing, setIsResizing] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
   const preMaximizeWidthRef = useRef(DEFAULT_WIDTH);
@@ -52,35 +52,39 @@ const RightPanel = () => {
     setActiveId(newTab.id);
   }, [createTab]);
 
-  const closeActiveTab = useCallback(() => {
-    // 只有一个标签时，直接收缩整个右侧面板
-    if (tabs.length === 1) {
-      dispatch(toggleRightPanel());
-      return;
-    }
+  const closeTab = useCallback(
+    (tabId: string) => {
+      setTabs((prev) => {
+        // 只有一个标签时，直接收缩整个右侧面板
+        if (prev.length === 1) {
+          dispatch(toggleRightPanel());
+          return prev;
+        }
 
-    setTabs((prev) => {
-      const idx = prev.findIndex((tab) => tab.id === activeId);
-      if (idx === -1) return prev;
+        const idx = prev.findIndex((tab) => tab.id === tabId);
+        if (idx === -1) return prev;
 
-      const next = prev.filter((tab) => tab.id !== activeId);
-      const nextActive = prev[idx - 1] || next[0];
-      setActiveId(nextActive.id);
-      return next;
-    });
-  }, [activeId, dispatch, tabs.length]);
+        const next = prev.filter((tab) => tab.id !== tabId);
+        // 如果关闭的是当前活跃 tab，自动切换到相邻 tab
+        if (tabId === activeId) {
+          const nextActive = prev[idx - 1] || next[0];
+          setActiveId(nextActive.id);
+        }
+        return next;
+      });
+    },
+    [activeId, dispatch]
+  );
 
   const toggleMaximize = useCallback(() => {
-    setIsMaximized((prev) => {
-      const next = !prev;
-      if (next) {
-        preMaximizeWidthRef.current = panelWidth;
-      } else {
-        setPanelWidth(preMaximizeWidthRef.current);
-      }
-      return next;
-    });
-  }, [panelWidth]);
+    if (!isMaximized) {
+      preMaximizeWidthRef.current = panelWidth;
+      dispatch(setRightPanelMaximized(true));
+    } else {
+      setPanelWidth(preMaximizeWidthRef.current);
+      dispatch(setRightPanelMaximized(false));
+    }
+  }, [dispatch, isMaximized, panelWidth]);
 
   const startResize = useCallback(
     (e: React.MouseEvent) => {
@@ -96,7 +100,7 @@ const RightPanel = () => {
         const nextWidth = Math.max(MIN_WIDTH, Math.min(maxWidth, startWidth + delta));
         setPanelWidth(nextWidth);
         if (isMaximized) {
-          setIsMaximized(false);
+          dispatch(setRightPanelMaximized(false));
         }
       };
 
@@ -114,12 +118,12 @@ const RightPanel = () => {
       document.addEventListener('mousemove', handleMouseMove);
       document.addEventListener('mouseup', handleMouseUp);
     },
-    [panelWidth, isMaximized]
+    [panelWidth, isMaximized, dispatch]
   );
 
   const panelStyle = useMemo(() => {
     if (!rightPanelVisible) return undefined;
-    if (isMaximized) return { width: '100%' };
+    if (isMaximized) return undefined; // 最大化样式由 CSS .is-maximized 控制
     return { width: panelWidth };
   }, [rightPanelVisible, isMaximized, panelWidth]);
 
@@ -141,6 +145,16 @@ const RightPanel = () => {
               onClick={() => setActiveId(tab.id)}
             >
               <span className="right-panel__tab-name">{tab.name}</span>
+              <button
+                className="right-panel__tab-close"
+                title={t('rightPanel.closeTab')}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  closeTab(tab.id);
+                }}
+              >
+                <X size={10} strokeWidth={1.5} />
+              </button>
             </div>
           ))}
         </div>
@@ -165,8 +179,8 @@ const RightPanel = () => {
           </button>
           <button
             className="right-panel__action-btn"
-            onClick={closeActiveTab}
-            title={t('rightPanel.closeTab')}
+            onClick={() => dispatch(toggleRightPanel())}
+            title={t('rightPanel.closePanel')}
           >
             <X size={12} strokeWidth={1.5} />
           </button>

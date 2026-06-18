@@ -23,6 +23,16 @@
   min-width: 0;
 }
 
+/* 右侧面板最大化时：隐藏 SidePanel 和主区域，仅保留 ActivityBar */
+.app-layout__body:has(.right-panel.is-maximized) .side-panel {
+  display: none;
+}
+.app-layout__body:has(.right-panel.is-maximized) .app-layout__main {
+  flex: 0 0 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
 .app-layout__content {
   flex: 1;
   display: flex;

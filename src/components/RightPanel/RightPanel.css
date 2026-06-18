@@ -8,6 +8,7 @@
   display: flex;
   flex-direction: column;
   border-left: none;
+  box-sizing: border-box;
   /* 禁用宽度动画：右侧面板展开/拖拽时终端只收到一次 resize，避免 xterm 频繁重排出错 */
   transition: opacity 0.2s ease;
 }
@@ -22,6 +23,14 @@
 
 .right-panel.is-resizing {
   transition: none;
+}
+
+/* 最大化时：填满 ActivityBar+SidePanel 之外的全部空间 */
+.right-panel.is-maximized {
+  flex: 1 !important;
+  width: auto !important;
+  z-index: 50;
+  box-shadow: -4px 0 24px rgba(0, 0, 0, 0.5);
 }
 
 .right-panel__resize-handle {
@@ -81,10 +90,11 @@
 
 .right-panel__tab {
   height: 24px;
-  padding: 0 10px;
+  padding: 0 8px 0 10px;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: space-between;
+  gap: 6px;
   font-size: 11px;
   color: #858585;
   white-space: nowrap;
@@ -112,6 +122,37 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
+}
+
+.right-panel__tab-close {
+  width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 0;
+  background: none;
+  border: none;
+  color: #858585;
+  cursor: pointer;
+  border-radius: 3px;
+  opacity: 0;
+  transition:
+    opacity 0.12s ease,
+    color 0.12s ease,
+    background-color 0.12s ease;
+}
+
+.right-panel__tab:hover .right-panel__tab-close,
+.right-panel__tab.active .right-panel__tab-close {
+  opacity: 1;
+}
+
+.right-panel__tab-close:hover {
+  color: #ffcc00;
+  background-color: rgba(255, 204, 0, 0.15);
 }
 
 .right-panel__actions {

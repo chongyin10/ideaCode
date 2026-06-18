@@ -59,6 +59,7 @@
     "copy": "Copy (N/A)",
     "paste": "Paste (N/A)",
     "clear": "Clear",
+    "selectAll": "Select All",
     "maximize": "Maximize",
     "restore": "Restore",
     "closePanel": "Close Panel",
@@ -80,6 +81,7 @@
     "maximize": "Maximize",
     "restore": "Restore",
     "closeTab": "Close Current Tab",
+    "closePanel": "Close Panel",
     "placeholder": "{{name}} Panel",
     "defaultTabName": "Tab {{index}}"
   },
