@@ -7,6 +7,8 @@ import {
   X, ArrowLeftRight, ArrowUp, ArrowDown, ArrowRightLeft,
 } from 'lucide-react';
 import type * as Monaco from 'monaco-editor';
+import { beforeMount } from '../MonacoEditor/index';
+import { ensureLanguage } from '../../services/languageLoader';
 import './DiffEditorPanel.css';
 
 const DiffEditorPanel = () => {
@@ -20,8 +22,45 @@ const DiffEditorPanel = () => {
     (editor: Monaco.editor.IStandaloneDiffEditor, monaco: typeof Monaco) => {
       editorRef.current = editor;
       monacoRef.current = monaco;
+
+      const language = diffView?.language;
+      if (!language) return;
+
+      // 按需加载语言语法 contribution（非内置语言如 css/html/json/python 等需要加载）
+      // TypeScript/Javascript 已在 main.tsx 预注册；这里也调用一次确保就绪。
+      ensureLanguage(language).then(() => {
+        const ed = editorRef.current;
+        const mc = monacoRef.current;
+        if (!ed || !mc) return;
+
+        // 确保 original / modified 两个 model 的语言正确，并强制刷新 tokenization，
+        // 解决首次打开时 worker 尚未就绪导致无高亮的问题。
+        const originalModel = ed.getOriginalEditor().getModel();
+        const modifiedModel = ed.getModifiedEditor().getModel();
+
+        const forceTokenization = (model: Monaco.editor.ITextModel | null) => {
+          if (!model) return;
+          if (model.getLanguageId() !== language) {
+            mc.editor.setModelLanguage(model, language);
+          }
+          try {
+            (model as unknown as { tokenization: { resetTokenization(): void } }).tokenization.resetTokenization();
+          } catch { /* 忽略 */ }
+        };
+
+        forceTokenization(originalModel);
+        forceTokenization(modifiedModel);
+
+        // 200ms 后重试一次，确保 worker 已就绪后重新 tokenize
+        setTimeout(() => {
+          const ed2 = editorRef.current;
+          if (!ed2) return;
+          forceTokenization(ed2.getOriginalEditor().getModel());
+          forceTokenization(ed2.getModifiedEditor().getModel());
+        }, 200);
+      }).catch(() => {});
     },
-    []
+    [diffView]
   );
 
   /* ── 工具方法 ── */
@@ -33,8 +72,8 @@ const DiffEditorPanel = () => {
       const monaco = monacoRef.current;
       if (!editor || !monaco || !diffView) return;
       editor.setModel({
-        original: monaco.editor.createModel(original, diffView.language),
-        modified: monaco.editor.createModel(modified, diffView.language),
+        original: monaco.editor.createModel(original, diffView.language, monaco.Uri.parse(`gitdiff-original://${diffView.filePath}`)),
+        modified: monaco.editor.createModel(modified, diffView.language, monaco.Uri.parse(`gitdiff-modified://${diffView.filePath}`)),
       });
     },
     [diffView]
@@ -106,7 +145,10 @@ const DiffEditorPanel = () => {
           language={diffView.language}
           original={diffView.original}
           modified={diffView.modified}
-          theme="vs-dark"
+          originalModelPath={`gitdiff-original://${diffView.filePath}`}
+          modifiedModelPath={`gitdiff-modified://${diffView.filePath}`}
+          theme="ideacode-dark"
+          beforeMount={beforeMount}
           onMount={handleMount}
           options={{
             readOnly: true,

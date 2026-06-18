@@ -151,6 +151,263 @@ function backtrackMyers(
   }));
 }
 
+/* ─── Patience Diff (锚点算法) ─── */
+
+/**
+ * Patience Diff
+ *
+ * 核心思想: 找出两边都唯一出现的行作为"锚点"（数学不动点），
+ * 在锚点之间递归做 Myers。对代码移动场景鲁棒性远好于纯 Myers。
+ *
+ * 锚点条件: hash(line) 在两边各出现恰好 1 次
+ *
+ * 时间复杂度: 平均 O(n log n)，最坏 O(n²) (退化为 Myers)
+ */
+export function patienceDiff(oldLines: string[], newLines: string[]): DiffChunk[] {
+  // 找出两边的唯一行作为锚点
+  const oldCounts = new Map<string, number>();
+  const newCounts = new Map<string, number>();
+
+  for (const line of oldLines) oldCounts.set(line, (oldCounts.get(line) || 0) + 1);
+  for (const line of newLines) newCounts.set(line, (newCounts.get(line) || 0) + 1);
+
+  // 锚点: 两边都唯一出现
+  const anchors: Array<{ oldIdx: number; newIdx: number; content: string }> = [];
+  for (let oi = 0, ni = 0; oi < oldLines.length && ni < newLines.length; ) {
+    const oldLine = oldLines[oi];
+    if (oldCounts.get(oldLine) === 1 && newCounts.get(oldLine) === 1) {
+      // 找到 newLines 中对应位置
+      let foundNi = -1;
+      for (let j = ni; j < newLines.length; j++) {
+        if (newLines[j] === oldLine) { foundNi = j; break; }
+      }
+      if (foundNi >= 0) {
+        anchors.push({ oldIdx: oi, newIdx: foundNi, content: oldLine });
+        oi = foundNi < oi ? oi + 1 : oi; // 确保 oi 前进
+      }
+    }
+    oi++;
+  }
+
+  // 重新计算锚点: 使用更精确的 LCS 方式找共同唯一行
+  const preciseAnchors: Array<{ oldIdx: number; newIdx: number }> = [];
+  {
+    const oldUnique = new Map<string, number>();
+    const newUnique = new Map<string, number>();
+    for (let i = 0; i < oldLines.length; i++) {
+      if (oldCounts.get(oldLines[i]) === 1) oldUnique.set(oldLines[i], i);
+    }
+    for (let i = 0; i < newLines.length; i++) {
+      if (newCounts.get(newLines[i]) === 1) newUnique.set(newLines[i], i);
+    }
+    // 共同唯一行，按 oldIdx 排序
+    const common = Array.from(oldUnique.entries())
+      .filter(([line]) => newUnique.has(line))
+      .map(([line, oldIdx]) => ({ oldIdx, newIdx: newUnique.get(line)!, content: line }))
+      .sort((a, b) => a.oldIdx - b.oldIdx);
+
+    // 筛选 newIdx 也递增的锚点 (LIS)
+    for (const anchor of common) {
+      const last = preciseAnchors[preciseAnchors.length - 1];
+      if (!last || anchor.newIdx > last.newIdx) {
+        preciseAnchors.push({ oldIdx: anchor.oldIdx, newIdx: anchor.newIdx });
+      }
+    }
+  }
+
+  // 在锚点之间递归做 Myers
+  const result: DiffChunk[] = [];
+  let prevOldEnd = -1;
+  let prevNewEnd = -1;
+
+  for (const anchor of preciseAnchors) {
+    // 锚点之间的区间做 Myers
+    const oldSlice = oldLines.slice(prevOldEnd + 1, anchor.oldIdx);
+    const newSlice = newLines.slice(prevNewEnd + 1, anchor.newIdx);
+    if (oldSlice.length > 0 || newSlice.length > 0) {
+      const subChunks = myersDiff(oldSlice, newSlice);
+      // 调整行号
+      for (const chunk of subChunks) {
+        result.push({
+          ...chunk,
+          oldLine: chunk.oldLine !== null ? chunk.oldLine + prevOldEnd + 1 : null,
+          newLine: chunk.newLine !== null ? chunk.newLine + prevNewEnd + 1 : null,
+        });
+      }
+    }
+
+    // 锚点本身
+    result.push({
+      type: 'equal',
+      oldLine: anchor.oldIdx + 1,
+      newLine: anchor.newIdx + 1,
+      content: oldLines[anchor.oldIdx],
+    });
+
+    prevOldEnd = anchor.oldIdx;
+    prevNewEnd = anchor.newIdx;
+  }
+
+  // 最后一个锚点之后的尾部
+  const oldTail = oldLines.slice(prevOldEnd + 1);
+  const newTail = newLines.slice(prevNewEnd + 1);
+  if (oldTail.length > 0 || newTail.length > 0) {
+    const subChunks = myersDiff(oldTail, newTail);
+    for (const chunk of subChunks) {
+      result.push({
+        ...chunk,
+        oldLine: chunk.oldLine !== null ? chunk.oldLine + prevOldEnd + 1 : null,
+        newLine: chunk.newLine !== null ? chunk.newLine + prevNewEnd + 1 : null,
+      });
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Patience Diff 主入口
+ */
+export function computePatienceDiff(oldText: string, newText: string): DiffResult {
+  const oldLines = oldText.split('\n');
+  const newLines = newText.split('\n');
+  if (oldLines[oldLines.length - 1] === '') oldLines.pop();
+  if (newLines[newLines.length - 1] === '') newLines.pop();
+
+  const chunks = patienceDiff(oldLines, newLines);
+  const compressed = compressChunks(chunks);
+
+  const stats = {
+    insertions: chunks.filter((c) => c.type === 'insert').length,
+    deletions: chunks.filter((c) => c.type === 'delete').length,
+    unchanged: chunks.filter((c) => c.type === 'equal').length,
+  };
+
+  return { chunks: compressed, stats };
+}
+
+/* ─── GumTree 风格 AST 语义差异 (基于 token 结构) ─── */
+
+/**
+ * 结构化差异 (GumTree 启发)
+ *
+ * 由于无法直接获取 AST (需要 tsserver)，使用 token 结构近似:
+ * 1. 对每行代码做结构化分词 (标识符/关键字/标点/字符串/数字)
+ * 2. 计算行的结构指纹 (token 类型序列的哈希)
+ * 3. 结构指纹相同的行视为"移动"而非"增删"
+ *
+ * 输出 Move/Update/Insert/Delete 四类操作
+ */
+export interface SemanticDiffChunk {
+  type: 'equal' | 'insert' | 'delete' | 'move' | 'update';
+  oldLine: number | null;
+  newLine: number | null;
+  content: string;
+  /** 结构指纹 (用于 move 检测) */
+  structuralHash?: number;
+}
+
+/**
+ * 计算行的结构指纹
+ * 将 token 替换为类型代号后哈希，忽略变量名差异
+ */
+function structuralHash(line: string): number {
+  const tokens = tokenizeLine(line);
+  let hash = 0;
+  for (const token of tokens) {
+    let typeCode = 0;
+    if (/^\s+$/.test(token)) typeCode = 1;        // 空白
+    else if (/^[a-zA-Z_$]/.test(token)) {          // 标识符/关键字
+      // 关键字保持，变量名统一为 ID
+      typeCode = KEYWORDS.has(token) ? 2 : 3;
+    }
+    else if (/^[0-9]/.test(token)) typeCode = 4;   // 数字
+    else if (token.startsWith('"') || token.startsWith("'") || token.startsWith('`')) typeCode = 5; // 字符串
+    else typeCode = 6;                              // 标点
+
+    hash = Math.imul(hash * 31 + typeCode, 0x9e3779b9) >>> 0;
+  }
+  return hash;
+}
+
+const KEYWORDS = new Set([
+  'function', 'const', 'let', 'var', 'if', 'else', 'for', 'while', 'return',
+  'class', 'extends', 'import', 'export', 'from', 'default', 'async', 'await',
+  'try', 'catch', 'finally', 'throw', 'new', 'typeof', 'instanceof', 'in', 'of',
+  'this', 'super', 'static', 'get', 'set', 'public', 'private', 'protected',
+  'interface', 'type', 'enum', 'namespace', 'declare', 'abstract', 'readonly',
+  'def', 'elif', 'pass', 'lambda', 'with', 'as', 'yield', 'raise', 'None', 'True', 'False',
+]);
+
+/**
+ * 语义差异比较
+ *
+ * 1. 先用 Patience Diff 做行级匹配
+ * 2. 对 delete+insert 对检测结构指纹，相同则为 move
+ * 3. 对 update 行做 token 级差异
+ */
+export function semanticDiff(oldText: string, newText: string): SemanticDiffChunk[] {
+  const oldLines = oldText.split('\n');
+  const newLines = newText.split('\n');
+  if (oldLines[oldLines.length - 1] === '') oldLines.pop();
+  if (newLines[newLines.length - 1] === '') newLines.pop();
+
+  const baseChunks = patienceDiff(oldLines, newLines);
+  const result: SemanticDiffChunk[] = [];
+
+  // 计算所有行的结构指纹
+  const oldHashes = oldLines.map(structuralHash);
+  const newHashes = newLines.map(structuralHash);
+
+  // 已删除行的指纹集合 (用于 move 检测)
+  const deletedByHash = new Map<number, DiffChunk[]>();
+  const insertedByHash = new Map<number, DiffChunk[]>();
+
+  for (const chunk of baseChunks) {
+    if (chunk.type === 'delete') {
+      const hash = chunk.oldLine !== null ? oldHashes[chunk.oldLine - 1] : 0;
+      if (!deletedByHash.has(hash)) deletedByHash.set(hash, []);
+      deletedByHash.get(hash)!.push(chunk);
+    } else if (chunk.type === 'insert') {
+      const hash = chunk.newLine !== null ? newHashes[chunk.newLine - 1] : 0;
+      if (!insertedByHash.has(hash)) insertedByHash.set(hash, []);
+      insertedByHash.get(hash)!.push(chunk);
+    }
+  }
+
+  // 合并: delete+insert 同指纹 → move
+  const usedDeletes = new Set<DiffChunk>();
+  const usedInserts = new Set<DiffChunk>();
+
+  for (const chunk of baseChunks) {
+    if (chunk.type === 'delete') {
+      const hash = chunk.oldLine !== null ? oldHashes[chunk.oldLine - 1] : 0;
+      const matchingInserts = insertedByHash.get(hash);
+      if (matchingInserts && matchingInserts.length > 0 && !usedDeletes.has(chunk)) {
+        const ins = matchingInserts.find((i) => !usedInserts.has(i));
+        if (ins) {
+          usedDeletes.add(chunk);
+          usedInserts.add(ins);
+          result.push({
+            type: 'move',
+            oldLine: chunk.oldLine,
+            newLine: ins.newLine,
+            content: ins.content,
+            structuralHash: hash,
+          });
+          continue;
+        }
+      }
+    }
+    if (chunk.type === 'insert' && usedInserts.has(chunk)) continue;
+    if (chunk.type === 'delete' && usedDeletes.has(chunk)) continue;
+
+    result.push({ ...chunk, structuralHash: undefined });
+  }
+
+  return result;
+}
+
 export function computeDiff(oldText: string, newText: string): DiffResult {
   const oldLines = oldText.split('\n');
   const newLines = newText.split('\n');

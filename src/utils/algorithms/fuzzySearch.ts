@@ -18,7 +18,8 @@
  * ============================================================================
  */
 
-import { LRUCache } from './lruCache';
+import { TFIDFCalculator } from './mathUtils';
+import { ARCCache } from './arcCache';
 
 export interface FuzzyResult {
   target: string;
@@ -277,13 +278,43 @@ export function fuzzySearch(query: string, targets: string[]): FuzzyResult[] {
   return results.sort((a, b) => b.score - a.score);
 }
 
-/* ─── 带 LRU 缓存的模糊搜索引擎 ─── */
+/* ─── 带 ARC 缓存的模糊搜索引擎 (TF-IDF + BM25 加权) ─── */
 
+/**
+ * FuzzySearchEngine 增强版
+ *
+ * 数学优化:
+ * 1. TF-IDF 字符加权: 稀有字符匹配得分更高
+ *    IDF(c) = log(N / df(c))
+ * 2. BM25 饱和函数: 防止长文件名虚高分
+ *    score = IDF · (f·(k₁+1)) / (f + k₁·(1-b+b·|d|/avgdl))
+ * 3. ARC 缓存: 自适应替换缓存，抗扫描型访问
+ *    竞争比 ≤ 2 (vs LRU 无保证)
+ */
 export class FuzzySearchEngine {
-  private cache: LRUCache<string, FuzzyResult[]>;
+  private cache: ARCCache<string, FuzzyResult[]>;
+  private tfidfCalc: TFIDFCalculator;
+  private avgDocLen = 10;
+  private corpusIndexed = false;
 
   constructor(cacheSize = 100) {
-    this.cache = new LRUCache<string, FuzzyResult[]>(cacheSize);
+    this.cache = new ARCCache<string, FuzzyResult[]>(cacheSize);
+    this.tfidfCalc = new TFIDFCalculator();
+  }
+
+  /**
+   * 索引语料库 (计算 IDF)
+   * 在搜索前调用，传入所有可能的目标字符串
+   */
+  indexCorpus(targets: string[]): void {
+    this.tfidfCalc = new TFIDFCalculator();
+    let totalLen = 0;
+    for (const target of targets) {
+      this.tfidfCalc.indexDocument(target);
+      totalLen += target.length;
+    }
+    this.avgDocLen = targets.length > 0 ? totalLen / targets.length : 10;
+    this.corpusIndexed = true;
   }
 
   private makeKey(query: string, targets: string[]): string {
@@ -296,10 +327,15 @@ export class FuzzySearchEngine {
 
     const cached = this.cache.get(key);
     if (cached) {
-      return cached.value;
+      return cached;
     }
 
-    const results = fuzzySearch(query, targets);
+    // 首次搜索时自动索引语料库
+    if (!this.corpusIndexed) {
+      this.indexCorpus(targets);
+    }
+
+    const results = fuzzySearchWithBM25(query, targets, this.tfidfCalc, this.avgDocLen);
     this.cache.set(key, results);
 
     return results;
@@ -307,9 +343,150 @@ export class FuzzySearchEngine {
 
   clearCache() {
     this.cache.clear();
+    this.corpusIndexed = false;
   }
 
   getStats() {
     return this.cache.getStats();
   }
+}
+
+/**
+ * TF-IDF + BM25 加权的模糊搜索
+ *
+ * 在原有 DP 评分基础上:
+ * - 每个匹配字符乘以其 IDF 权重 (稀有字符更值钱)
+ * - 最终分数通过 BM25 饱和函数归一化
+ */
+function fuzzySearchWithBM25(
+  query: string,
+  targets: string[],
+  tfidf: TFIDFCalculator,
+  avgDocLen: number,
+): FuzzyResult[] {
+  if (!query) {
+    return targets.map((t) => ({
+      target: t,
+      score: 0,
+      matches: new Array(t.length).fill(false),
+      isExact: false,
+    }));
+  }
+
+  const results: FuzzyResult[] = [];
+
+  for (const target of targets) {
+    const result = fuzzyScoreWithIDF(query, target, tfidf, avgDocLen);
+    if (result) {
+      results.push(result);
+    }
+  }
+
+  return results.sort((a, b) => b.score - a.score);
+}
+
+/**
+ * 带 IDF 加权的模糊评分
+ *
+ * 在 DP 状态转移中，匹配字符 c 的基础分从 1 变为 IDF(c)，
+ * 使稀有字符匹配获得更高分数。
+ */
+function fuzzyScoreWithIDF(
+  query: string,
+  target: string,
+  tfidf: TFIDFCalculator,
+  avgDocLen: number,
+): FuzzyResult | null {
+  if (!query || !target) return null;
+  if (query.length > target.length) return null;
+
+  if (query.toLowerCase() === target.toLowerCase()) {
+    return {
+      target,
+      score: Infinity,
+      matches: new Array(target.length).fill(true),
+      isExact: true,
+    };
+  }
+
+  const m = query.length;
+  const n = target.length;
+  const attnWeights = attentionWeights(m);
+
+  // DP 评分 (IDF 加权)
+  const prev = new Array(n).fill(Number.NEGATIVE_INFINITY);
+  const curr = new Array(n).fill(Number.NEGATIVE_INFINITY);
+  const matchMatrix: number[][] = [];
+
+  for (let i = 0; i < m; i++) {
+    const qch = query[i].toLowerCase();
+    // 查询字符的 IDF 权重 (信息论: 稀有字符匹配信息量大)
+    const idfWeight = tfidf.idf(qch);
+    let maxPrev = Number.NEGATIVE_INFINITY;
+
+    for (let j = i; j < n; j++) {
+      if (i > 0 && j > 0) {
+        maxPrev = Math.max(maxPrev, prev[j - 1]);
+      }
+
+      const tch = target[j].toLowerCase();
+
+      if (qch === tch) {
+        let score = 0;
+
+        // 基础匹配分 × 注意力权重 × IDF 权重
+        score += idfWeight * attnWeights[i];
+
+        if (i === 0 && j === 0) score += BONUS_PREFIX;
+        if (j === 0 || isSeparator(target[j - 1])) score += BONUS_WORD_START;
+        if (j > 0 && isUpper(target[j]) && !isUpper(target[j - 1])) score += BONUS_CAMEL_CASE;
+        if (i > 0 && j > 0 && prev[j - 1] > Number.NEGATIVE_INFINITY) score += BONUS_CONSECUTIVE;
+
+        if (i === 0) {
+          const leadingPenalty = Math.max(j * PENALTY_LEADING, PENALTY_MAX_LEADING);
+          curr[j] = score + leadingPenalty;
+        } else if (maxPrev > Number.NEGATIVE_INFINITY) {
+          curr[j] = score + maxPrev;
+        } else {
+          curr[j] = Number.NEGATIVE_INFINITY;
+        }
+
+        if (!matchMatrix[i]) matchMatrix[i] = [];
+        matchMatrix[i][j] = curr[j];
+      } else {
+        curr[j] = Number.NEGATIVE_INFINITY;
+      }
+    }
+
+    for (let j = 0; j < n; j++) {
+      prev[j] = curr[j];
+      curr[j] = Number.NEGATIVE_INFINITY;
+    }
+  }
+
+  if (matchMatrix.length === 0 || !matchMatrix[m - 1]) return null;
+
+  const lastRow = matchMatrix[m - 1];
+  let bestScore = Number.NEGATIVE_INFINITY;
+  for (let j = 0; j < n; j++) {
+    if (lastRow[j] > bestScore) bestScore = lastRow[j];
+  }
+
+  if (bestScore === Number.NEGATIVE_INFINITY) return null;
+
+  // BM25 饱和归一化: 防止长文件名虚高分
+  // f = 匹配字符频率 (query.length / target.length)
+  // |d| = target.length, avgdl = avgDocLen
+  const freq = m / Math.max(n, 1);
+  const bm25Saturation = TFIDFCalculator.bm25Saturation(freq, 1.2, 0.75, n, avgDocLen);
+  const normalized = normalizeScore(bestScore, m, n) * bm25Saturation;
+
+  const matches = backtrackMatches(query, target, matchMatrix);
+
+  return {
+    target,
+    score: normalized,
+    matches,
+    isExact: false,
+  };
 }

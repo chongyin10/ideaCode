@@ -21,7 +21,7 @@ import {
   setGroupRatio,
   equalizeGroupRatios,
 } from '../store/slices/workspaceSlice';
-import { setModalOverlayOpen } from '../store/slices/layoutSlice';
+
 import { openDirectory, warmupFileCache } from '../services/fileService';
 import TabBar from '../components/TabBar';
 import MonacoEditor from '../components/MonacoEditor';
@@ -122,10 +122,6 @@ function Home() {
   const [referencesModal, setReferencesModal] = useState<{ fileId: string; results: FileSearchResult[] } | null>(null);
   const [loadingFiles, setLoadingFiles] = useState<Set<string>>(new Set());
 
-  // 模态层/右键菜单打开时隐藏终端 BrowserView，避免 BrowserView 穿透覆盖上层 UI
-  useEffect(() => {
-    dispatch(setModalOverlayOpen(!!referencesModal || !!pendingClose || quickOpenVisible || !!contextMenu));
-  }, [dispatch, referencesModal, pendingClose, quickOpenVisible, contextMenu]);
   const loadingTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   // Tab 加载就绪回调（tsserver 返回诊断时）

@@ -60,14 +60,16 @@ const pidControllers = new Map();
 const terminals = new Map();
 let nextTerminalId = 1;
 
+/** 每个窗口是否启用广播模式 */
+const broadcastModeByWindow = new Map();
+
 class TerminalProcess {
-  constructor(id, ptyProcess, shellLaunchConfig, ownerWindow, ownerWebContents, viewWebContents) {
+  constructor(id, ptyProcess, shellLaunchConfig, ownerWindow, ownerWebContents) {
     this.id = id;
     this.pty = ptyProcess;
     this.config = shellLaunchConfig;
     this.ownerWindow = ownerWindow;
     this.ownerWebContents = ownerWebContents;
-    this.viewWebContents = viewWebContents;
     this.paused = false;
     /** 未确认的字符数（已发送到渲染但未被 ACK） */
     this.unackedChars = 0;
@@ -226,13 +228,12 @@ function getDefaultShell() {
  * @param {number} rows - 行数
  * @param {import('electron').BrowserWindow} ownerWindow - 所属主窗口
  * @param {import('electron').WebContents} ownerWebContents - 主窗口 React 渲染进程
- * @param {object} [terminalViewManager] - BrowserView 管理器
  */
-async function createTerminalProcess(config, cwd, cols, rows, ownerWindow, ownerWebContents, terminalViewManager) {
+async function createTerminalProcess(config, cwd, cols, rows, ownerWindow, ownerWebContents) {
   if (!ptyModule) {
     // 无 node-pty 时的降级处理：返回模拟终端
     const id = nextTerminalId++;
-    const mockProcess = new TerminalProcess(id, null, config, ownerWindow, ownerWebContents, ownerWebContents);
+    const mockProcess = new TerminalProcess(id, null, config, ownerWindow, ownerWebContents);
     terminals.set(id, mockProcess);
     // 发送模拟就绪事件
     ownerWebContents.send(Channels.TERMINAL_OUTPUT, {
@@ -271,16 +272,7 @@ async function createTerminalProcess(config, cwd, cols, rows, ownerWindow, owner
 
   const id = nextTerminalId++;
 
-  // 先创建 BrowserView，等待加载完成后再启动 PTY，确保输出不丢失
-  let viewWebContents = ownerWebContents;
-  if (terminalViewManager && ownerWindow) {
-    try {
-      const view = await terminalViewManager.createView(ownerWindow, id);
-      viewWebContents = view.webContents;
-    } catch (e) {
-      console.error(`[TerminalHandler] 为终端 ${id} 创建 BrowserView 失败，回退到主窗口渲染:`, e.message);
-    }
-  }
+  // 终端现在直接渲染在主窗口 DOM 中，无需再创建 BrowserView
 
   // 尝试主 shell，失败后使用常见 fallback
   const fallbackShells = ['/bin/zsh', '/bin/bash', '/bin/sh'];
@@ -306,7 +298,7 @@ async function createTerminalProcess(config, cwd, cols, rows, ownerWindow, owner
         env: env,
       });
 
-      const termProcess = new TerminalProcess(id, ptyProcess, config, ownerWindow, ownerWebContents, viewWebContents);
+      const termProcess = new TerminalProcess(id, ptyProcess, config, ownerWindow, ownerWebContents);
       terminals.set(id, termProcess);
 
       // PID 流控初始化
@@ -331,10 +323,7 @@ async function createTerminalProcess(config, cwd, cols, rows, ownerWindow, owner
           try { if (typeof ptyProcess.resume === 'function') ptyProcess.resume(); } catch {}
         }
 
-        const target = termProcess.viewWebContents && !termProcess.viewWebContents.isDestroyed()
-          ? termProcess.viewWebContents
-          : termProcess.ownerWebContents;
-        target.send(Channels.TERMINAL_OUTPUT, {
+        termProcess.ownerWebContents.send(Channels.TERMINAL_OUTPUT, {
           id,
           type: 'data',
           data: data,
@@ -368,11 +357,6 @@ async function createTerminalProcess(config, cwd, cols, rows, ownerWindow, owner
     }
   }
 
-  // 启动失败：清理已创建的 BrowserView
-  if (terminalViewManager && ownerWindow) {
-    terminalViewManager.destroyView(ownerWindow, id);
-  }
-
   throw new Error(`创建终端进程失败: ${lastError?.message || '无可用 shell'}`);
 }
 
@@ -380,9 +364,8 @@ async function createTerminalProcess(config, cwd, cols, rows, ownerWindow, owner
  * 销毁终端进程
  * @param {object} options
  * @param {number} options.id
- * @param {object} [terminalViewManager]
  */
-function disposeTerminalProcess({ id, terminalViewManager }) {
+function disposeTerminalProcess({ id }) {
   const term = terminals.get(id);
   if (!term) return;
 
@@ -390,10 +373,6 @@ function disposeTerminalProcess({ id, terminalViewManager }) {
   try {
     if (term.pty) { term.pty.kill(); }
   } catch (e) { /* 进程可能已经退出 */ }
-
-  if (terminalViewManager && term.ownerWindow) {
-    terminalViewManager.destroyView(term.ownerWindow, id);
-  }
 
   terminals.delete(id);
 }
@@ -534,10 +513,8 @@ function broadcastInput(senderId, data, targetIds) {
 
 /**
  * 注册所有终端相关 IPC 处理器
- * @param {object} [terminalViewManager]
- * @param {object} [broadcastHelpers]
  */
-function registerTerminalHandlers(terminalViewManager, broadcastHelpers) {
+function registerTerminalHandlers() {
   // --- 终端生命周期 ---
   ipcMain.handle(Channels.TERMINAL_CREATE, async (event, payload) => {
     // 兼容两种调用格式：{ config, cwd, cols, rows } 或直接将配置对象作为 payload
@@ -547,7 +524,7 @@ function registerTerminalHandlers(terminalViewManager, broadcastHelpers) {
     const rows = payload?.rows ?? config.rows;
     const ownerWindow = BrowserWindow.fromWebContents(event.sender);
     try {
-      const id = await createTerminalProcess(config, cwd, cols, rows, ownerWindow, event.sender, terminalViewManager);
+      const id = await createTerminalProcess(config, cwd, cols, rows, ownerWindow, event.sender);
       return { success: true, id };
     } catch (error) {
       return { success: false, error: error.message };
@@ -555,7 +532,7 @@ function registerTerminalHandlers(terminalViewManager, broadcastHelpers) {
   });
 
   ipcMain.handle(Channels.TERMINAL_DISPOSE, async (_event, { id }) => {
-    disposeTerminalProcess({ id, terminalViewManager });
+    disposeTerminalProcess({ id });
     return { success: true };
   });
 
@@ -563,7 +540,7 @@ function registerTerminalHandlers(terminalViewManager, broadcastHelpers) {
     const term = terminals.get(id);
     sendInput(id, data);
     // 广播模式：同窗口其他终端同步输入
-    if (term && broadcastHelpers && term.ownerWindow && broadcastHelpers.isBroadcastEnabled(term.ownerWindow)) {
+    if (term && term.ownerWindow && broadcastModeByWindow.get(term.ownerWindow)) {
       for (const [otherId, other] of terminals) {
         if (otherId !== id && other.ownerWindow === term.ownerWindow) {
           sendInput(otherId, data);
@@ -588,11 +565,8 @@ function registerTerminalHandlers(terminalViewManager, broadcastHelpers) {
     if (!term || term.exited) return { success: false };
     try {
       // 1. 直接向终端渲染进程发送清屏转义序列，清空屏幕和滚动缓冲区
-      const target = term.viewWebContents && !term.viewWebContents.isDestroyed()
-        ? term.viewWebContents
-        : term.ownerWebContents;
-      if (target && !target.isDestroyed()) {
-        target.send(Channels.TERMINAL_OUTPUT, {
+      if (term.ownerWebContents && !term.ownerWebContents.isDestroyed()) {
+        term.ownerWebContents.send(Channels.TERMINAL_OUTPUT, {
           id,
           type: 'data',
           data: '\x1b[2J\x1b[3J\x1b[H',
@@ -654,6 +628,15 @@ function registerTerminalHandlers(terminalViewManager, broadcastHelpers) {
   // --- 广播 ---
   ipcMain.handle(Channels.TERMINAL_BROADCAST, async (_event, { senderId, data, targetIds }) => {
     broadcastInput(senderId, data, targetIds);
+    return { success: true };
+  });
+
+  // 设置当前窗口的广播模式
+  ipcMain.handle(Channels.TERMINAL_SET_BROADCAST_MODE, async (event, { enabled }) => {
+    const ownerWindow = BrowserWindow.fromWebContents(event.sender);
+    if (ownerWindow) {
+      broadcastModeByWindow.set(ownerWindow, !!enabled);
+    }
     return { success: true };
   });
 

@@ -6,7 +6,6 @@ const { registerHistoryHandlers } = require('./historyHandler.cjs');
 const { registerGitHandlers } = require('./gitHandler.cjs');
 const { registerTsServerHandlers } = require('../lsp/tsserverManager.cjs');
 const { registerTerminalHandlers } = require('./terminalHandler.cjs');
-const { registerTerminalViewHandlers } = require('./terminalViewHandler.cjs');
 
 /**
  * 统一注册所有 IPC 处理器
@@ -14,18 +13,13 @@ const { registerTerminalViewHandlers } = require('./terminalViewHandler.cjs');
  * 在主进程启动早期调用，确保所有 IPC 通道在渲染进程连接前已就绪。
  */
 function registerIpcHandlers(deps = {}) {
-  const { windowManager, extensionHostManager, historyManager, terminalViewManager } = deps;
+  const { windowManager, extensionHostManager, historyManager } = deps;
 
   registerDialogHandlers();
   registerFsHandlers();
   registerGitHandlers();
   registerTsServerHandlers();
-
-  let broadcastHelpers;
-  if (terminalViewManager) {
-    broadcastHelpers = registerTerminalViewHandlers(terminalViewManager);
-  }
-  registerTerminalHandlers(terminalViewManager, broadcastHelpers);
+  registerTerminalHandlers();
 
   if (windowManager) {
     registerWindowHandlers(windowManager);

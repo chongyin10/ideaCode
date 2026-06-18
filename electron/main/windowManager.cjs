@@ -18,16 +18,6 @@ class WindowManager {
     this.windows = new Map();
     /** @type {number} */
     this.windowIdCounter = 0;
-    /** @type {import('./terminalViewManager.cjs').TerminalViewManager | null} */
-    this.terminalViewManager = null;
-  }
-
-  /**
-   * 设置 TerminalViewManager，用于窗口关闭时清理 BrowserView
-   * @param {import('./terminalViewManager.cjs').TerminalViewManager} manager
-   */
-  setTerminalViewManager(manager) {
-    this.terminalViewManager = manager;
   }
 
   /**
@@ -75,10 +65,6 @@ class WindowManager {
     // 窗口关闭时清理
     win.on('closed', () => {
       this.windows.delete(windowId);
-      // 清理该窗口下的所有终端 BrowserView
-      if (this.terminalViewManager) {
-        this.terminalViewManager.destroyWindowViews(win);
-      }
       // 通知其他窗口该窗口已关闭
       this.broadcastToOthers(windowId, Channels.WINDOW_STATE_CHANGED, {
         windowId,

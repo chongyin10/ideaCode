@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Plus, X, Maximize2, Minimize2 } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import { toggleRightPanel } from '../../store/slices/layoutSlice';
+import { notifyPanelResizeStart, notifyPanelResizeEnd } from '../../services/panelResizeNotifier';
 import './RightPanel.css';
 
 interface RightPanelTab {
@@ -81,15 +82,11 @@ const RightPanel = () => {
     });
   }, [panelWidth]);
 
-  const notifyResizeState = useCallback((state: 'start' | 'end') => {
-    window.electronAPI?.rightPanel?.setResizeState(state);
-  }, []);
-
   const startResize = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault();
       setIsResizing(true);
-      notifyResizeState('start');
+      notifyPanelResizeStart();
       const startX = e.clientX;
       const startWidth = panelRef.current?.offsetWidth ?? panelWidth;
       const maxWidth = window.innerWidth * MAX_WIDTH_RATIO;
@@ -105,7 +102,7 @@ const RightPanel = () => {
 
       const handleMouseUp = () => {
         setIsResizing(false);
-        notifyResizeState('end');
+        notifyPanelResizeEnd();
         document.removeEventListener('mousemove', handleMouseMove);
         document.removeEventListener('mouseup', handleMouseUp);
         document.body.style.cursor = '';
@@ -117,7 +114,7 @@ const RightPanel = () => {
       document.addEventListener('mousemove', handleMouseMove);
       document.addEventListener('mouseup', handleMouseUp);
     },
-    [panelWidth, isMaximized, notifyResizeState]
+    [panelWidth, isMaximized]
   );
 
   const panelStyle = useMemo(() => {

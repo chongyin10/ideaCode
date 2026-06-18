@@ -103,19 +103,7 @@ const Channels = {
   TERMINAL_SEND_SIGNAL: 'terminal:sendSignal',
   TERMINAL_CLEAR: 'terminal:clear',
 
-  /* ─── 终端 BrowserView 管理 ─── */
-  TERMINAL_VIEW_CREATE: 'terminal:view:create',
-  TERMINAL_VIEW_DESTROY: 'terminal:view:destroy',
-  TERMINAL_VIEW_SET_BOUNDS: 'terminal:view:setBounds',
-  TERMINAL_VIEW_FOCUS: 'terminal:view:focus',
-  TERMINAL_VIEW_READY: 'terminal:view:ready',
-  TERMINAL_VIEW_SET_BROADCAST: 'terminal:view:setBroadcast',
-  TERMINAL_VIEW_FIND: 'terminal:view:find',
-  TERMINAL_VIEW_CLEAR_SELECTION: 'terminal:view:clearSelection',
-  TERMINAL_VIEW_RESIZE_STATE: 'terminal:view:resizeState',
-
-  /* ─── 右侧面板 resize 状态 ─── */
-  RIGHT_PANEL_RESIZE_STATE: 'rightPanel:resizeState',
+  TERMINAL_SET_BROADCAST_MODE: 'terminal:setBroadcastMode',
 
   /* ─── 系统资源监控 ─── */
   SYSTEM_STATS: 'system:stats',
@@ -261,26 +249,9 @@ const electronAPI = {
     getLayout: () => ipcRenderer.invoke(Channels.TERMINAL_GET_LAYOUT),
     setLayout: (layout) => ipcRenderer.invoke(Channels.TERMINAL_SET_LAYOUT, layout),
     broadcast: (senderId, data, targetIds) => ipcRenderer.invoke(Channels.TERMINAL_BROADCAST, { senderId, data, targetIds }),
+    setBroadcastMode: (enabled) => ipcRenderer.invoke(Channels.TERMINAL_SET_BROADCAST_MODE, { enabled }),
     onOutput: (callback) => onChannel(Channels.TERMINAL_OUTPUT, callback),
     onExit: (callback) => onChannel(Channels.TERMINAL_EXIT, callback),
-  },
-
-  /** 终端 BrowserView 管理 — 主窗口调用 */
-  terminalView: {
-    create: (options) => ipcRenderer.invoke(Channels.TERMINAL_VIEW_CREATE, options),
-    destroy: (terminalId) => ipcRenderer.invoke(Channels.TERMINAL_VIEW_DESTROY, { terminalId }),
-    setBounds: (terminalId, bounds) => ipcRenderer.invoke(Channels.TERMINAL_VIEW_SET_BOUNDS, { terminalId, bounds }),
-    focus: (terminalId) => ipcRenderer.invoke(Channels.TERMINAL_VIEW_FOCUS, { terminalId }),
-    ready: (terminalId) => ipcRenderer.send(Channels.TERMINAL_VIEW_READY, { terminalId }),
-    setBroadcast: (enabled) => ipcRenderer.invoke(Channels.TERMINAL_VIEW_SET_BROADCAST, { enabled }),
-    onFind: (callback) => onChannel(Channels.TERMINAL_VIEW_FIND, callback),
-    onClearSelection: (callback) => onChannel(Channels.TERMINAL_VIEW_CLEAR_SELECTION, callback),
-    onResizeState: (callback) => onChannel(Channels.TERMINAL_VIEW_RESIZE_STATE, callback),
-  },
-
-  /** 右侧面板 resize 状态 — 主窗口调用 */
-  rightPanel: {
-    setResizeState: (state) => ipcRenderer.send(Channels.RIGHT_PANEL_RESIZE_STATE, state),
   },
 
   /** 系统资源监控 — 主进程广播 */

@@ -44,12 +44,14 @@ export type { MatchResult, SearchOptions } from './boyerMoore';
 
 export {
   computeDiff,
+  computePatienceDiff,
   formatUnifiedDiff,
   inlineDiff,
   diffToHtml,
   grammarAwareDiff,
+  semanticDiff,
 } from './diff';
-export type { DiffType, DiffChunk, DiffResult, GrammarDiffLine } from './diff';
+export type { DiffType, DiffChunk, DiffResult, GrammarDiffLine, SemanticDiffChunk } from './diff';
 
 export { InvertedIndex } from './invertedIndex';
 export type { IndexEntry, SearchHit } from './invertedIndex';
@@ -82,3 +84,25 @@ export type { FileTransitionStats } from './filePrediction';
 
 export { SearchBanditRanker } from './searchBandit';
 export type { BanditArm, BanditConfig, BanditStrategy } from './searchBandit';
+
+// ── 数学优化模块 ──
+export {
+  GaussianKDE,
+  goodTuringDiscount,
+  BetaBernoulli,
+  chebyshevAcceleratedIteration,
+  lyapunovStabilityCheck,
+  perronFrobeniusGap,
+  CSRMatrix,
+  nmf,
+  spectralClustering,
+  cpDecomposition,
+  TFIDFCalculator,
+} from './mathUtils';
+
+export { ARCCache } from './arcCache';
+
+export { FMIndex } from './fmIndex';
+
+export { FileCommunityDetector } from './fileCommunity';
+export type { FileCommunity, FileRelationGraph } from './fileCommunity';

@@ -1,8 +1,8 @@
 /**
- * BottomPanel — 终端面板（BrowserView 版）
+ * BottomPanel — 终端面板（DOM 版）
  *
- * 终端渲染已迁移到独立的 Electron BrowserView 进程。
- * 本组件只负责：tab UI、占位 div、布局边界同步、状态管理。
+ * 终端直接渲染在 React 主 DOM 中，不再使用独立的 BrowserView。
+ * 本组件负责：tab UI、终端实例挂载/切换、状态管理。
  */
 
 import { useState, useCallback, useMemo, useRef, useEffect, type ElementType } from 'react';
@@ -27,14 +27,11 @@ import { useTerminalFileTreeSync } from '../../services/terminalFileTreeSync';
 import {
   createTerminal, disposeTerminal,
   listProfiles, onTerminalOutput,
-  clearTerminal,
+  clearTerminal, setTerminalBroadcastMode,
 } from '../../services/terminalManager';
-import {
-  setTerminalViewBounds,
-  focusTerminalView,
-  setTerminalBroadcast,
-} from '../../services/terminalViewManager';
-import type { TerminalOutputEvent, TerminalProfile, TerminalViewBounds } from '../../types/electron';
+import { notifyPanelResizeStart, notifyPanelResizeEnd } from '../../services/panelResizeNotifier';
+import TerminalInstance, { type TerminalInstanceHandle } from '../Terminal/TerminalInstance';
+import type { TerminalOutputEvent, TerminalProfile } from '../../types/electron';
 import './BottomPanel.css';
 
 /* ─── 常量 ─── */
@@ -67,7 +64,7 @@ const BottomPanel = () => {
   const { t } = useTranslation();
   const dispatch = useAppDispatch();
   const bottomTabs = useBottomTabs();
-  const { bottomPanelVisible, activeBottomTab, statusBarOverlayHeight, modalOverlayOpen } = useAppSelector((s) => s.layout);
+  const { bottomPanelVisible, activeBottomTab } = useAppSelector((s) => s.layout);
   const terminal = useAppSelector((s) => s.terminal);
   const rootSource = useAppSelector((s) => s.workspace.rootSource);
 
@@ -103,6 +100,19 @@ const BottomPanel = () => {
     return tabs;
   }, [terminal.panelLayout.groups, terminal.tabs, terminal.editorTerminals]);
 
+  // 面板中所有终端 pane 的稳定列表：每个 TerminalInstance 在数组中位置不变，
+  // 只通过 active/style/className 切换显示/隐藏，避免切换 tab 时 React 移动/重挂实例。
+  const panelTabs = useMemo(() => {
+    const activeGroupId = terminal.panelLayout.activeGroupId;
+    return terminal.panelLayout.groups.flatMap((group) =>
+      group.panes.map((pane) => ({
+        id: pane.terminalId,
+        relativeSize: pane.relativeSize,
+        active: group.id === activeGroupId,
+      }))
+    );
+  }, [terminal.panelLayout.groups, terminal.panelLayout.activeGroupId]);
+
   /* ─── 本地状态 ─── */
   const [searchVisible, setSearchVisible] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -110,10 +120,7 @@ const BottomPanel = () => {
   const [editingTabId, setEditingTabId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
   const panelRef = useRef<HTMLDivElement>(null);
-
-  /* ─── 占位 div 引用与 ResizeObserver ─── */
-  const placeholderRefs = useRef<Map<string, HTMLDivElement>>(new Map());
-  const resizeObservers = useRef<Map<string, ResizeObserver>>(new Map());
+  const terminalRefs = useRef<Map<string, TerminalInstanceHandle>>(new Map());
 
   /* ─── 稳定引用 ─── */
   const terminalStateRef = useRef(terminal);
@@ -228,7 +235,6 @@ const BottomPanel = () => {
     if (!groupId) return;
     dispatch(splitPane({ groupId }));
 
-    // splitPane 会创建新的 tab，为其创建 PTY + BrowserView
     requestAnimationFrame(() => {
       const nextState = terminalStateRef.current;
       const group = nextState.panelLayout.groups.find(g => g.id === groupId);
@@ -270,6 +276,7 @@ const BottomPanel = () => {
   const startResizeHeight = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     setIsResizing(true);
+    notifyPanelResizeStart();
     const startY = e.clientY;
     const startHeight = panelHeightRef.current;
 
@@ -280,6 +287,7 @@ const BottomPanel = () => {
     };
     const handleMouseUp = () => {
       setIsResizing(false);
+      notifyPanelResizeEnd();
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
       document.body.style.cursor = '';
@@ -296,6 +304,7 @@ const BottomPanel = () => {
 
   const startResizeSidebar = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
+    notifyPanelResizeStart();
     const startX = e.clientX;
     const startWidth = sidebarWidthRef.current;
 
@@ -304,6 +313,7 @@ const BottomPanel = () => {
       dispatch(setSidebarWidth(Math.max(60, Math.min(400, startWidth + delta))));
     };
     const handleMouseUp = () => {
+      notifyPanelResizeEnd();
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
       document.body.style.cursor = '';
@@ -312,88 +322,6 @@ const BottomPanel = () => {
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', handleMouseUp);
   }, [dispatch]);
-
-  /* ─── BrowserView 边界同步 ─── */
-  const syncAllBounds = useCallback(() => {
-    const state = terminalStateRef.current;
-    const isTerminalTab = activeBottomTab === 'terminal';
-    const panelVisible = bottomPanelVisible || state.panelVisible;
-    const visibleTabIds = new Set<string>();
-
-    for (const [tabId, element] of placeholderRefs.current.entries()) {
-      const tab = state.tabs[tabId];
-      if (!tab || !tab.processId) continue;
-
-      const rect = element.getBoundingClientRect();
-      const visible = panelVisible && isTerminalTab && rect.width > 0 && rect.height > 0;
-      const overlayHeight = Math.min(statusBarOverlayHeight, rect.height);
-      const bounds: TerminalViewBounds = {
-        x: rect.x,
-        y: rect.y,
-        width: rect.width,
-        height: Math.max(0, rect.height - overlayHeight),
-        visible: visible && !modalOverlayOpen,
-      };
-      setTerminalViewBounds(tab.processId, bounds);
-      if (visible) visibleTabIds.add(tabId);
-    }
-
-    // 当前未渲染的 tab（例如非活跃 group）需要隐藏，避免 BrowserView 残留覆盖 UI
-    for (const tab of Object.values(state.tabs)) {
-      if (tab.processId && !visibleTabIds.has(tab.id)) {
-        setTerminalViewBounds(tab.processId, { x: 0, y: 0, width: 0, height: 0, visible: false });
-      }
-    }
-  }, [activeBottomTab, bottomPanelVisible, statusBarOverlayHeight, modalOverlayOpen]);
-
-  const observePlaceholder = useCallback((tabId: string, element: HTMLDivElement | null) => {
-    const existing = resizeObservers.current.get(tabId);
-    if (!element) {
-      if (existing) { existing.disconnect(); resizeObservers.current.delete(tabId); }
-      placeholderRefs.current.delete(tabId);
-      return;
-    }
-    if (placeholderRefs.current.get(tabId) === element) return;
-    if (existing) { existing.disconnect(); }
-
-    placeholderRefs.current.set(tabId, element);
-    const observer = new ResizeObserver(() => {
-      requestAnimationFrame(() => {
-        syncAllBounds();
-      });
-    });
-    observer.observe(element);
-    resizeObservers.current.set(tabId, observer);
-
-    // 初次同步
-    requestAnimationFrame(() => syncAllBounds());
-  }, [syncAllBounds]);
-
-  // 关键状态变化时全量同步（切换 tab、显隐面板、最大化等）
-  useEffect(() => {
-    syncAllBounds();
-    // CSS transition 结束后可能仍有一次最终尺寸，延迟兜底同步
-    const t = setTimeout(() => syncAllBounds(), 300);
-    return () => clearTimeout(t);
-  }, [activeTabIdMemo, activeBottomTab, bottomPanelVisible, terminal.panelVisible, terminal.isMaximized, terminal.panelHeight, terminal.sidebarWidth, statusBarOverlayHeight, modalOverlayOpen, syncAllBounds]);
-
-  // 窗口 resize 兜底
-  useEffect(() => {
-    const handleResize = () => syncAllBounds();
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, [syncAllBounds]);
-
-  // 组件卸载时隐藏所有 BrowserView（面板关闭）
-  useEffect(() => {
-    return () => {
-      for (const tab of Object.values(terminalStateRef.current.tabs)) {
-        if (tab.processId) {
-          setTerminalViewBounds(tab.processId, { x: 0, y: 0, width: 0, height: 0, visible: false });
-        }
-      }
-    };
-  }, []);
 
   /* ─── 快捷键 ─── */
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
@@ -406,14 +334,20 @@ const BottomPanel = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* ─── 搜索（Phase 2 再接入 BrowserView）─── */
+  /* ─── 搜索 ─── */
   const handleSearch = useCallback(async () => {
-    // TODO: 通过 terminalView.find 发送给当前 BrowserView
-  }, []);
+    const ref = activeTabIdRef.current ? terminalRefs.current.get(activeTabIdRef.current) : undefined;
+    if (ref && searchTerm) {
+      await ref.find(searchTerm);
+    }
+  }, [searchTerm]);
 
   const handleSearchPrev = useCallback(async () => {
-    // TODO
-  }, []);
+    const ref = activeTabIdRef.current ? terminalRefs.current.get(activeTabIdRef.current) : undefined;
+    if (ref && searchTerm) {
+      await ref.findPrevious(searchTerm);
+    }
+  }, [searchTerm]);
 
   const closeSearch = useCallback(() => {
     setSearchVisible(false); setSearchTerm('');
@@ -423,11 +357,11 @@ const BottomPanel = () => {
   const addCurrentBookmark = useCallback(() => {
     const tid = activeTabIdRef.current;
     if (!tid) return;
-    // TODO: 从 BrowserView 获取当前行号
+    // TODO: 从 xterm 获取当前行号
   }, []);
 
   const jumpToBookmark = useCallback((bookmarkLine: number) => {
-    // TODO: 发送 scrollToLine 给 BrowserView
+    // TODO: 滚动到指定行
     void bookmarkLine;
   }, []);
 
@@ -435,7 +369,7 @@ const BottomPanel = () => {
   const toggleBroadcast = useCallback(() => {
     const next = !terminalStateRef.current.broadcastMode;
     dispatch(setBroadcastMode(next));
-    setTerminalBroadcast(next);
+    setTerminalBroadcastMode(next);
   }, [dispatch]);
 
   /* ─── 清屏/最大化 ─── */
@@ -520,7 +454,7 @@ const BottomPanel = () => {
         </div>
       </div>
 
-      {/* 终端 Tab：占位 div，实际渲染在 BrowserView 中 */}
+      {/* 终端 Tab */}
       <div
         className="bottom-panel__tab-panel"
         style={{ display: activeBottomTab === 'terminal' ? 'flex' : 'none' }}
@@ -549,15 +483,20 @@ const BottomPanel = () => {
           </div>
         )}
 
-        {/* 终端内容区：只有占位 div */}
+        {/* 终端内容区 */}
         <div className="bottom-panel__content">
           <div className="terminal-content">
-            {activeGroup?.panes.map((pane) => (
-              <div
-                key={pane.terminalId}
-                ref={(el) => observePlaceholder(pane.terminalId, el)}
-                className="terminal-view-placeholder"
-                data-terminal-id={pane.terminalId}
+            {panelTabs.map((pane) => (
+              <TerminalInstance
+                key={pane.id}
+                ref={(el) => {
+                  if (el) terminalRefs.current.set(pane.id, el);
+                  else terminalRefs.current.delete(pane.id);
+                }}
+                terminalId={pane.id}
+                className={`terminal-pane ${pane.active ? 'terminal-pane--active' : 'terminal-pane--hidden'}`}
+                style={pane.active ? { flex: pane.relativeSize } : undefined}
+                active={pane.active}
               />
             ))}
             {!activeTabIdMemo && allTabs.length === 0 && (
@@ -579,8 +518,7 @@ const BottomPanel = () => {
                   className={`terminal-tab ${tab.id === activeTabIdMemo ? 'active' : ''} ${tab.exited ? 'exited' : ''}`}
                   onClick={() => {
                     handleSwitchTab(tab.id);
-                    const t = terminalStateRef.current.tabs[tab.id];
-                    if (t?.processId) focusTerminalView(t.processId);
+                    terminalRefs.current.get(tab.id)?.focus();
                   }}
                   title={tab.name}
                 >

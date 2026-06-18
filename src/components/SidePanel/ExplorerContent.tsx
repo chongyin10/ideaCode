@@ -31,7 +31,7 @@ import {
   activateFile,
 } from '../../store/slices/workspaceSlice';
 import { setShowCloneForm, refreshGitStatus as refreshGitSliceStatus } from '../../store/slices/gitSlice';
-import { switchPanel, setModalOverlayOpen } from '../../store/slices/layoutSlice';
+import { switchPanel } from '../../store/slices/layoutSlice';
 import { openDirectory } from '../../services/fileService';
 import type { FileEntry, FileSource } from '../../services/fileService';
 import type { GitStatusMap } from '../../types/electron';
@@ -283,11 +283,6 @@ const ExplorerContent = () => {
   const closeContextMenu = useCallback(() => {
     setContextMenu((prev) => ({ ...prev, visible: false }));
   }, []);
-
-  // 资源管理器右键菜单打开时隐藏终端 BrowserView，避免菜单被终端遮挡
-  useEffect(() => {
-    dispatch(setModalOverlayOpen(contextMenu.visible));
-  }, [dispatch, contextMenu.visible]);
 
   const handleBlankContextMenu = useCallback(
     (e: React.MouseEvent) => {

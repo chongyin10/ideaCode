@@ -4,10 +4,9 @@
  * 负责：
  * 1. 终端进程生命周期管理 (创建/销毁/输入/调整大小)
  * 2. Shell Profile 自动检测
- * 3. 流控 ACK 管理
- * 4. 持久化会话（终端布局保存/恢复）
- * 5. 广播输入同步
- * 6. AI 增强功能
+ * 3. 持久化会话（终端布局保存/恢复）
+ * 4. 广播输入同步
+ * 5. AI 增强功能
  */
 
 import type {
@@ -16,62 +15,9 @@ import type {
   TerminalOutputEvent,
   TerminalProfilesResult,
 } from '../types/electron';
-import { AdaptiveEWMA } from './terminalMath';
 import { AhoCorasick } from './terminalIndexes';
 
 const API = () => window.electronAPI?.terminal;
-
-/* ─── EWMA 自适应流控 (数学优化 #2) ─── */
-
-const ACK_BATCH = 5000;
-const pendingChars: Map<number, number> = new Map();
-/** 每个终端实例的 ACK 批量大小（EWMA 自适应） */
-const adaptiveBatchSize = new Map<number, AdaptiveEWMA>();
-
-let ackTimer: ReturnType<typeof setTimeout> | null = null;
-
-function scheduleAck() {
-  if (ackTimer) return;
-  ackTimer = setTimeout(() => {
-    ackTimer = null;
-    const api = API();
-    if (!api) return;
-    pendingChars.forEach((count, id) => {
-      if (count > 0) {
-        api.ack(id, count);
-        pendingChars.set(id, 0);
-      }
-    });
-  }, 100);
-}
-
-/** 获取自适应 ACK 批量大小 */
-function getBatchSize(id: number): number {
-  if (!adaptiveBatchSize.has(id)) {
-    adaptiveBatchSize.set(id, new AdaptiveEWMA(ACK_BATCH));
-  }
-  return adaptiveBatchSize.get(id)!.value;
-}
-
-function trackOutput(id: number, dataLength: number) {
-  const current = pendingChars.get(id) || 0;
-  pendingChars.set(id, current + dataLength);
-
-  const batch = getBatchSize(id);
-  if (current + dataLength >= batch) {
-    const api = API();
-    if (api) {
-      api.ack(id, current + dataLength);
-      pendingChars.set(id, 0);
-      // 反馈实际的批量大小到 EWMA
-      if (adaptiveBatchSize.has(id)) {
-        adaptiveBatchSize.get(id)!.add(current + dataLength);
-      }
-    }
-  } else {
-    scheduleAck();
-  }
-}
 
 /* ─── 终端创建/销毁 ─── */
 
@@ -88,8 +34,6 @@ export async function disposeTerminal(id: number): Promise<void> {
   if (api) {
     await api.dispose(id);
   }
-  pendingChars.delete(id);
-  adaptiveBatchSize.delete(id);
 }
 
 export async function sendInput(id: number, data: string): Promise<void> {
@@ -146,6 +90,13 @@ export async function broadcastInput(senderId: number, data: string, targetIds: 
   }
 }
 
+export async function setTerminalBroadcastMode(enabled: boolean): Promise<void> {
+  const api = API();
+  if (api) {
+    await api.setBroadcastMode(enabled);
+  }
+}
+
 /* ─── 持久化 ─── */
 
 export async function saveLayout(): Promise<void> {
@@ -171,9 +122,6 @@ export function onTerminalOutput(callback: TerminalEventCallback): () => void {
   if (!api) return () => {};
 
   return api.onOutput((event) => {
-    if (event.type === 'data' && event.data) {
-      trackOutput(event.id, event.data.length);
-    }
     callback(event);
   });
 }

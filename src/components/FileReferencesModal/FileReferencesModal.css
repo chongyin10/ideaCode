@@ -1,39 +1,239 @@
-.file-references-overlay {
+/* ═══════════════════════════════════════════════════
+   File References Modal
+   ═══════════════════════════════════════════════════ */
+
+/* ── 遮罩层 ── */
+.file-refs-overlay {
   position: fixed;
   top: 0;
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding-top: 100px;
+  padding-top: 90px;
   z-index: 1000;
-  animation: fadeIn 0.1s ease;
+  animation: frOverlayIn 0.2s ease both;
 }
 
-@keyframes fadeIn {
+/* 退出：遮罩淡出 */
+.file-refs-overlay.is-closing {
+  animation: frOverlayOut 0.22s ease forwards;
+  pointer-events: none;
+}
+
+@keyframes frOverlayIn {
   from { opacity: 0; }
-  to { opacity: 1; }
+  to   { opacity: 1; }
 }
 
-.file-references-panel {
-  width: 640px;
-  max-height: 520px;
-  background: #252526;
-  border-radius: 8px;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
+@keyframes frOverlayOut {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+
+/* ── 主面板 ── */
+.file-refs-panel {
+  width: 680px;
+  max-width: calc(100vw - 48px);
+  max-height: 580px;
+  background: #1e1e1e;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(0, 0, 0, 0.3);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  animation: slideDown 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  animation: frPanelIn 0.26s cubic-bezier(0.16, 1, 0.3, 1) both;
+  transform-origin: top center;
+  will-change: transform, opacity;
 }
 
-@keyframes slideDown {
+/* 退出：面板向上滑出 + 缩放 + 淡出 */
+.file-refs-panel.is-closing {
+  animation: frPanelOut 0.22s cubic-bezier(0.4, 0, 1, 1) forwards;
+  pointer-events: none;
+}
+
+@keyframes frPanelIn {
   from {
     opacity: 0;
-    transform: translateY(-12px);
+    transform: translateY(-24px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes frPanelOut {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-16px) scale(0.97);
+  }
+}
+
+/* ── 头部 ── */
+.file-refs-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  background: linear-gradient(180deg, #252526 0%, #1e1e1e 100%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  flex-shrink: 0;
+}
+
+.file-refs-header__left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.file-refs-header__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  background: rgba(86, 156, 214, 0.12);
+  color: #569cd6;
+  flex-shrink: 0;
+}
+
+.file-refs-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #e0e0e0;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+}
+
+/* 统计徽章 */
+.file-refs-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 4px;
+}
+
+.file-refs-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 12px;
+  line-height: 1.4;
+}
+
+.file-refs-badge--files {
+  color: #569cd6;
+  background: rgba(86, 156, 214, 0.1);
+  border: 1px solid rgba(86, 156, 214, 0.2);
+}
+
+.file-refs-badge--matches {
+  color: #ce9178;
+  background: rgba(206, 145, 120, 0.1);
+  border: 1px solid rgba(206, 145, 120, 0.2);
+}
+
+/* 关闭按钮 */
+.file-refs-close {
+  background: none;
+  border: none;
+  color: #858585;
+  cursor: pointer;
+  padding: 5px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.file-refs-close:hover {
+  color: #e0e0e0;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.file-refs-close:active {
+  transform: scale(0.92);
+}
+
+/* ── 列表区 ── */
+.file-refs-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+/* 自定义滚动条 */
+.file-refs-list::-webkit-scrollbar {
+  width: 8px;
+}
+.file-refs-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+.file-refs-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+.file-refs-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+/* ── 空状态 ── */
+.file-refs-empty {
+  padding: 56px 24px;
+  text-align: center;
+  color: #6a6a6a;
+  animation: frFadeIn 0.3s ease 0.1s both;
+}
+
+.file-refs-empty__icon {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 16px;
+  color: #4a4a4a;
+}
+
+.file-refs-empty__text {
+  font-size: 13px;
+  color: #858585;
+  margin: 0;
+}
+
+/* ── 文件卡片 ── */
+.file-refs-card {
+  padding: 0;
+  margin-bottom: 4px;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+  border: 1px solid transparent;
+  overflow: hidden;
+  /* 错峰入场动画：配合 inline style 的 animation-delay */
+  animation: frCardIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes frCardIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
   }
   to {
     opacity: 1;
@@ -41,135 +241,174 @@
   }
 }
 
-.file-references-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+.file-refs-card:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.06);
 }
 
-.file-references-title {
-  font-size: 14px;
-  font-weight: 500;
-  color: #cccccc;
+.file-refs-card:hover .file-refs-card__arrow {
+  opacity: 1;
+  transform: translateX(0);
 }
 
-.file-references-close {
-  background: none;
-  border: none;
-  color: #858585;
-  cursor: pointer;
-  padding: 4px;
-  border-radius: 4px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.15s ease;
-}
-
-.file-references-close:hover {
-  color: #cccccc;
-  background-color: rgba(255, 255, 255, 0.08);
-}
-
-.file-references-list {
-  flex: 1;
-  overflow-y: auto;
-  padding: 4px 0;
-}
-
-.file-references-empty {
-  padding: 32px 16px;
-  text-align: center;
-  color: #858585;
-  font-size: 13px;
-}
-
-.file-references-item {
-  padding: 8px 16px;
-  cursor: pointer;
-  transition: background 0.08s ease;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-}
-
-.file-references-item:hover {
-  background: #094771;
-}
-
-.file-references-item__file {
+/* 卡片头部 (文件行) */
+.file-refs-card__header {
   display: flex;
   align-items: center;
   gap: 8px;
+  padding: 9px 12px;
   font-size: 13px;
-  color: #d4d4d4;
 }
 
-.file-references-item__icon {
+.file-refs-card__icon {
   color: #858585;
   flex-shrink: 0;
   display: flex;
   align-items: center;
 }
 
-.file-references-item__path {
+.file-refs-card__name {
+  font-weight: 600;
+  color: #dcdcdc;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.file-refs-card__sep {
+  color: #4a4a4a;
+  flex-shrink: 0;
+}
+
+.file-refs-card__path {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: #858585;
+  font-size: 12px;
 }
 
-.file-references-item__count {
+.file-refs-card__count {
   flex-shrink: 0;
   font-size: 11px;
-  color: #858585;
-  background: rgba(255, 255, 255, 0.08);
-  padding: 1px 6px;
+  font-weight: 600;
+  color: #ce9178;
+  background: rgba(206, 145, 120, 0.1);
+  border: 1px solid rgba(206, 145, 120, 0.15);
+  padding: 1px 8px;
   border-radius: 10px;
+  min-width: 24px;
+  text-align: center;
 }
 
-.file-references-item__matches {
-  margin-top: 6px;
+.file-refs-card__arrow {
+  color: #6a6a6a;
+  flex-shrink: 0;
+  opacity: 0;
+  transform: translateX(-4px);
+  transition: all 0.15s ease;
+}
+
+/* 卡片匹配区 */
+.file-refs-card__matches {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding-left: 24px;
+  gap: 1px;
+  padding: 2px 12px 10px 36px;
+  border-top: 1px solid rgba(255, 255, 255, 0.03);
+  background: rgba(0, 0, 0, 0.15);
 }
 
-.file-references-item__more {
+.file-refs-card__more {
   font-size: 11px;
-  color: #858585;
-  padding-left: 4px;
+  color: #6a6a6a;
+  padding: 3px 4px;
+  font-style: italic;
 }
 
-.file-references-match {
+/* ── 匹配行 ── */
+.file-refs-match {
   display: flex;
   align-items: center;
   gap: 8px;
   font-size: 12px;
+  padding: 4px 6px;
+  border-radius: 4px;
   color: #b0b0b0;
+  transition: background 0.1s ease;
 }
 
-.file-references-match__line {
+.file-refs-match:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.file-refs-match__line {
   flex-shrink: 0;
-  min-width: 32px;
+  min-width: 36px;
   text-align: right;
-  color: #858585;
+  color: #6a9955;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 500;
 }
 
-.file-references-match__icon {
-  color: #858585;
+.file-refs-match__icon {
+  color: #4a4a4a;
   flex-shrink: 0;
   display: flex;
   align-items: center;
 }
 
-.file-references-match__text {
+.file-refs-match__text {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  color: #c8c8c8;
+  line-height: 1.5;
+}
+
+/* ── 底部状态栏 ── */
+.file-refs-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 18px;
+  background: #181818;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  flex-shrink: 0;
+}
+
+.file-refs-footer__text {
+  font-size: 11px;
+  color: #858585;
+}
+
+.file-refs-footer__hint {
+  font-size: 11px;
+  color: #6a6a6a;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.file-refs-footer__hint kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: #cccccc;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  line-height: 1.4;
+}
+
+/* ── 退出动画时禁用卡片的入场动画，避免冲突 ── */
+.file-refs-panel.is-closing .file-refs-card {
+  animation: none;
 }

@@ -228,7 +228,7 @@ const TSJS_LANGS = new Set(['typescript', 'javascript', 'typescriptreact', 'java
 })();
 
 /** 在 model 创建前配置 Monaco TypeScript/JavaScript 默认选项 */
-const beforeMount: Parameters<typeof Editor>[0]['beforeMount'] = (monaco) => {
+export const beforeMount: Parameters<typeof Editor>[0]['beforeMount'] = (monaco) => {
   const hasTsServer = typeof window !== 'undefined' && !!(window as unknown as { electronAPI?: { tsserver?: unknown } }).electronAPI?.tsserver;
 
   const tsDefaults = monaco.languages.typescript.typescriptDefaults;
@@ -352,7 +352,7 @@ const beforeMount: Parameters<typeof Editor>[0]['beforeMount'] = (monaco) => {
 };
 
 /** 将 settings 主题名映射到 Monaco 主题 id */
-function toMonacoTheme(theme: string): string {
+export function toMonacoTheme(theme: string): string {
   return theme === 'vs-dark' ? 'ideacode-dark' : theme;
 }
 

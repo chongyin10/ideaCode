@@ -79,6 +79,8 @@ loader.config({ monaco })
 // 基础语言（几乎总是需要）：TS/JS
 import 'monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution.js'
 import 'monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution.js'
+// 注册 TypeScript/Javascript 富语言支持（含 worker 通信），diff 编辑器需要它才能正确高亮
+import 'monaco-editor/esm/vs/language/typescript/monaco.contribution.js'
 
 // 页面空闲时预取 Worker 和常用语言
 if (typeof requestIdleCallback !== 'undefined') {

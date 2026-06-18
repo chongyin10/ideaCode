@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { GitBranch, AlertCircle, XCircle, FileText, ChevronDown, Check, Plus, Search, Cpu, MemoryStick, Monitor } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import { setFileLanguage } from '../../store/slices/workspaceSlice';
-import { openBottomTab, setStatusBarOverlayHeight } from '../../store/slices/layoutSlice';
+import { openBottomTab } from '../../store/slices/layoutSlice';
 import { checkoutBranch, createBranch, refreshBranches } from '../../store/slices/gitSlice';
 import { isPath } from '../../services/fileService';
 import type { SystemStats } from '../../types/electron';
@@ -61,8 +61,7 @@ const StatusBar = () => {
   const [langOpen, setLangOpen] = useState(false);
   const [systemStats, setSystemStats] = useState<SystemStats | null>(null);
   const [branchOpen, setBranchOpen] = useState(false);
-  const DROPDOWN_HEIGHT_LANG = 200;
-  const DROPDOWN_HEIGHT_BRANCH = 320;
+
   const [branchVisible, setBranchVisible] = useState(false);
   const [branchPhase, setBranchPhase] = useState<'entering' | 'stable' | 'exiting'>('entering');
   const [branchQuery, setBranchQuery] = useState('');
@@ -70,6 +69,7 @@ const StatusBar = () => {
   const [newBranchName, setNewBranchName] = useState('');
   const [newBranchStartPoint, setNewBranchStartPoint] = useState<string | undefined>(undefined);
   const branchRef = useRef<HTMLDivElement>(null);
+  const langRef = useRef<HTMLDivElement>(null);
 
   const activeFile = useMemo(
     () => openedFiles.find((f) => f.id === activeFileId),
@@ -126,6 +126,18 @@ const StatusBar = () => {
     return () => document.removeEventListener('mousedown', handleClick);
   }, [branchOpen]);
 
+  // 点击外部关闭语言选择器
+  useEffect(() => {
+    if (!langOpen) return;
+    const handleClick = (e: MouseEvent) => {
+      if (langRef.current && !langRef.current.contains(e.target as Node)) {
+        setLangOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [langOpen]);
+
   // 打开分支选择器时刷新分支列表
   useEffect(() => {
     if (branchOpen) {
@@ -133,11 +145,7 @@ const StatusBar = () => {
     }
   }, [branchOpen, dispatch]);
 
-  // 状态栏下拉展开时通知底部面板预留空间，避免被终端 BrowserView 遮挡
-  useEffect(() => {
-    const overlayHeight = Math.max(branchVisible ? DROPDOWN_HEIGHT_BRANCH : 0, langOpen ? DROPDOWN_HEIGHT_LANG : 0);
-    dispatch(setStatusBarOverlayHeight(overlayHeight));
-  }, [branchVisible, langOpen, dispatch]);
+
 
   // 订阅主进程广播的系统资源监控数据
   useEffect(() => {
@@ -345,7 +353,7 @@ const StatusBar = () => {
         <span>{t('statusBar.lineColumn', { line: 12, column: 34 })}</span>
         <span>{t('statusBar.encoding')}</span>
         {activeFile && (
-          <div className="status-bar__lang">
+          <div className="status-bar__lang" ref={langRef}>
             <button className="status-bar__lang-btn" onClick={() => setLangOpen(!langOpen)} title={t('statusBar.language')}>
               {LANG_DISPLAY[activeFile.language] || activeFile.language}
               <ChevronDown size={10} strokeWidth={1.5} />

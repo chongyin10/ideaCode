@@ -14,10 +14,6 @@ interface LayoutState {
   rightPanelVisible: boolean;
   bottomPanelVisible: boolean;
   activeBottomTab: BottomTabId;
-  /** 状态栏弹出层需要预留的高度（用于 BrowserView 终端避让） */
-  statusBarOverlayHeight: number;
-  /** 是否有模态层打开，打开时隐藏终端 BrowserView 避免层级穿透 */
-  modalOverlayOpen: boolean;
 }
 
 const initialState: LayoutState = {
@@ -27,8 +23,6 @@ const initialState: LayoutState = {
   rightPanelVisible: false,
   bottomPanelVisible: false,
   activeBottomTab: 'terminal',
-  statusBarOverlayHeight: 0,
-  modalOverlayOpen: false,
 };
 
 const layoutSlice = createSlice({
@@ -82,12 +76,6 @@ const layoutSlice = createSlice({
       state.activeBottomTab = action.payload as BottomTabId;
       state.bottomPanelVisible = true;
     },
-    setStatusBarOverlayHeight: (state, action) => {
-      state.statusBarOverlayHeight = action.payload as number;
-    },
-    setModalOverlayOpen: (state, action) => {
-      state.modalOverlayOpen = action.payload as boolean;
-    },
   },
 });
 
@@ -101,7 +89,5 @@ export const {
   setBottomPanelVisible,
   switchBottomTab,
   openBottomTab,
-  setStatusBarOverlayHeight,
-  setModalOverlayOpen,
 } = layoutSlice.actions;
 export default layoutSlice.reducer;

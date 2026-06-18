@@ -318,7 +318,160 @@ export class AhoCorasick {
 }
 
 /* ===========================================================
-   4. Bloom Filter — 预筛选
+   4b. Cuckoo Filter — 支持删除的概率过滤器
+   =========================================================== */
+
+/**
+ * 布谷鸟过滤器 (Cuckoo Filter, Fan et al. 2014)
+ *
+ * 相比 Bloom Filter 的优势：
+ * 1. 支持动态删除
+ * 2. 空间效率更高 (95% 填充率 vs 50%)
+ * 3. 查询性能相当
+ *
+ * 原理：
+ * - 每个元素计算指纹 f = fingerprint(item)
+ * - 两个候选桶: i1 = hash(item), i2 = i1 ⊕ hash(f)
+ * - 插入: 尝试放入 i1 或 i2，满则踢出(kick-out)到另一桶
+ * - 查找: 检查 i1 或 i2 是否含 f
+ * - 删除: 从 i1 或 i2 移除 f (Bloom 做不到)
+ *
+ * 误判率: ε ≈ 2b / 2^f  (b=桶大小, f=指纹位数)
+ * 每元素空间: ~ (log₂(1/ε) + 2) bits
+ */
+export class CuckooFilter {
+  private buckets: Uint16Array[]; // 每桶最多 4 个指纹 (16位)
+  private readonly bucketSize = 4;
+  private readonly fingerprintMask = 0xffff;
+  private readonly maxKicks = 500;
+  private count = 0;
+
+  constructor(private numBuckets = 1024) {
+    this.buckets = new Array(numBuckets);
+    for (let i = 0; i < numBuckets; i++) {
+      this.buckets[i] = new Uint16Array(this.bucketSize);
+    }
+  }
+
+  /** 添加元素 */
+  add(item: string): boolean {
+    const f = this.fingerprint(item);
+    if (f === 0) return false;
+    const i1 = this.hash(item) % this.numBuckets;
+    const i2 = (i1 ^ this.hashFingerprint(f)) % this.numBuckets;
+
+    if (this.insertToBucket(i1, f) || this.insertToBucket(i2, f)) {
+      this.count++;
+      return true;
+    }
+
+    // 踢出 (kick-out)
+    let i = Math.random() < 0.5 ? i1 : i2;
+    let currentF = f;
+    for (let n = 0; n < this.maxKicks; n++) {
+      const slot = Math.floor(Math.random() * this.bucketSize);
+      const temp = this.buckets[i][slot];
+      this.buckets[i][slot] = currentF;
+      currentF = temp;
+      i = (i ^ this.hashFingerprint(currentF)) % this.numBuckets;
+      if (this.insertToBucket(i, currentF)) {
+        this.count++;
+        return true;
+      }
+    }
+    // 踢出次数超限，过滤器已满
+    return false;
+  }
+
+  /** 检查可能包含 */
+  contains(item: string): boolean {
+    const f = this.fingerprint(item);
+    if (f === 0) return false;
+    const i1 = this.hash(item) % this.numBuckets;
+    const i2 = (i1 ^ this.hashFingerprint(f)) % this.numBuckets;
+    return this.bucketContains(i1, f) || this.bucketContains(i2, f);
+  }
+
+  /** 删除元素 (Bloom Filter 不支持) */
+  delete(item: string): boolean {
+    const f = this.fingerprint(item);
+    if (f === 0) return false;
+    const i1 = this.hash(item) % this.numBuckets;
+    const i2 = (i1 ^ this.hashFingerprint(f)) % this.numBuckets;
+
+    if (this.removeFromBucket(i1, f) || this.removeFromBucket(i2, f)) {
+      this.count--;
+      return true;
+    }
+    return false;
+  }
+
+  get size(): number { return this.count; }
+
+  clear(): void {
+    for (let i = 0; i < this.numBuckets; i++) {
+      this.buckets[i].fill(0);
+    }
+    this.count = 0;
+  }
+
+  private insertToBucket(idx: number, f: number): boolean {
+    const bucket = this.buckets[idx];
+    for (let i = 0; i < this.bucketSize; i++) {
+      if (bucket[i] === 0) {
+        bucket[i] = f;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private bucketContains(idx: number, f: number): boolean {
+    const bucket = this.buckets[idx];
+    for (let i = 0; i < this.bucketSize; i++) {
+      if (bucket[i] === f) return true;
+    }
+    return false;
+  }
+
+  private removeFromBucket(idx: number, f: number): boolean {
+    const bucket = this.buckets[idx];
+    for (let i = 0; i < this.bucketSize; i++) {
+      if (bucket[i] === f) {
+        bucket[i] = 0;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private fingerprint(item: string): number {
+    let h = 0;
+    for (let i = 0; i < item.length; i++) {
+      h = Math.imul(h ^ item.charCodeAt(i), 0x5bd1e995);
+      h ^= h >>> 15;
+    }
+    // 确保 fingerprint 非零 (0 表示空槽)
+    return (h & this.fingerprintMask) || 1;
+  }
+
+  private hash(item: string): number {
+    let h = 2166136261;
+    for (let i = 0; i < item.length; i++) {
+      h ^= item.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return h >>> 0;
+  }
+
+  private hashFingerprint(f: number): number {
+    // 部分键 Cuckoo hashing: hash(f) = (f * 0x9e3779b9) >>> 0
+    return (Math.imul(f, 0x9e3779b9)) >>> 0;
+  }
+}
+
+/* ===========================================================
+   4. Bloom Filter — 预筛选 (保留向后兼容)
    =========================================================== */
 
 export class BloomFilter {

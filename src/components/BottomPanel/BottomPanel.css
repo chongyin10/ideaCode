@@ -210,16 +210,32 @@
   position: relative;
 }
 
-.terminal-view-placeholder {
-  flex: 1;
-  min-height: 0;
+.terminal-pane {
   position: relative;
-  background: transparent;
+  min-height: 0;
+  overflow: hidden;
+  background: #1e1e1e;
 }
 
-/* 分屏时多个 placeholder 之间用细线分隔 */
-.terminal-view-placeholder + .terminal-view-placeholder {
+.terminal-pane--active {
+  height: 100%;
+  z-index: 1;
+}
+
+/* 分屏时多个 active pane 之间用细线分隔 */
+.terminal-pane--active + .terminal-pane--active {
   border-top: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+/* 非活跃终端实例：保留在 DOM 中继续接收 PTY 输出，但不可见、不交互。
+   使用 opacity:0 而非 visibility:hidden，并让元素覆盖在活跃实例上方；
+   pointer-events:none 保证事件穿透，这样 canvas/WebGL 上下文不会被浏览器回收，
+   切回时不会出现黑屏。 */
+.terminal-pane--hidden {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
 }
 
 /* ─── xterm.js 覆盖 ─── */

@@ -339,7 +339,12 @@
     },
     "referencesModal": {
       "title": "查找檔案引用",
-      "noResults": "未找到引用"
+      "noResults": "未找到引用",
+      "files": "檔案",
+      "matches": "匹配",
+      "moreMatches": "更多匹配",
+      "footer": "{{files}} 個檔案 · {{matches}} 處匹配",
+      "close": "關閉"
     }
   },
   "confirmDialog": {

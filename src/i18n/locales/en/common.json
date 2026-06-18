@@ -339,7 +339,12 @@
     },
     "referencesModal": {
       "title": "Find File References",
-      "noResults": "No references found"
+      "noResults": "No references found",
+      "files": "files",
+      "matches": "matches",
+      "moreMatches": "more matches",
+      "footer": "{{files}} files · {{matches}} matches",
+      "close": "close"
     }
   },
   "confirmDialog": {
