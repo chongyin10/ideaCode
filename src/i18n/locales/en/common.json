@@ -132,6 +132,26 @@
   "monacoEditor": {
     "loading": "Loading editor..."
   },
+  "editor": {
+    "contextMenu": {
+      "goToDefinition": "Go to Definition",
+      "goToTypeDefinition": "Go to Type Definition",
+      "goToSourceDefinition": "Go to Source Definition",
+      "goToImplementation": "Go to Implementation",
+      "goToReferences": "Go to References",
+      "findAllReferences": "Find All References",
+      "findAllImplementations": "Find All Implementations",
+      "renameSymbol": "Rename Symbol",
+      "formatDocument": "Format Document",
+      "cut": "Cut",
+      "copy": "Copy",
+      "paste": "Paste",
+      "toCamelCase": "To Camel Case",
+      "toUpperCase": "To Uppercase",
+      "toLowerCase": "To Lowercase",
+      "toTitleCase": "To Title Case"
+    }
+  },
   "activityBar": {
     "explorer": "Explorer",
     "search": "Search",

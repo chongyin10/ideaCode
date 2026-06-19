@@ -132,6 +132,26 @@
   "monacoEditor": {
     "loading": "正在加载编辑器..."
   },
+  "editor": {
+    "contextMenu": {
+      "goToDefinition": "转到定义",
+      "goToTypeDefinition": "转到类型定义",
+      "goToSourceDefinition": "转到源定义",
+      "goToImplementation": "转到实现",
+      "goToReferences": "转到引用",
+      "findAllReferences": "查看所有引用",
+      "findAllImplementations": "查看所有实现",
+      "renameSymbol": "重命名符号",
+      "formatDocument": "格式化文档",
+      "cut": "剪切",
+      "copy": "复制",
+      "paste": "粘贴",
+      "toCamelCase": "驼峰命名",
+      "toUpperCase": "全部转大写",
+      "toLowerCase": "全部转小写",
+      "toTitleCase": "首字母大写"
+    }
+  },
   "activityBar": {
     "explorer": "资源管理器",
     "search": "搜索",

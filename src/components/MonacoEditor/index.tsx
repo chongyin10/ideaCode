@@ -174,6 +174,44 @@ function buildJsxDecorations(
   return decs;
 }
 
+/** 选中文本大小写转换 */
+type CaseTransform = 'camel' | 'upper' | 'lower' | 'title';
+
+function toCamelCase(str: string): string {
+  return str
+    .replace(/[^a-zA-Z0-9]+(.)/g, (_, ch) => ch.toUpperCase())
+    .replace(/^[A-Z]/, (ch) => ch.toLowerCase());
+}
+
+function toTitleCase(str: string): string {
+  return str.replace(/\w\S*/g, (txt) =>
+    txt.charAt(0).toUpperCase() + txt.slice(1).toLowerCase(),
+  );
+}
+
+function transformSelection(editor: monaco.editor.ICodeEditor, mode: CaseTransform): void {
+  const selection = editor.getSelection();
+  if (!selection || selection.isEmpty()) return;
+  const model = editor.getModel();
+  if (!model) return;
+
+  const text = model.getValueInRange(selection);
+  let transformed: string;
+  switch (mode) {
+    case 'camel': transformed = toCamelCase(text); break;
+    case 'upper': transformed = text.toUpperCase(); break;
+    case 'lower': transformed = text.toLowerCase(); break;
+    case 'title': transformed = toTitleCase(text); break;
+    default: return;
+  }
+
+  editor.executeEdits('case-transform', [{
+    range: selection,
+    text: transformed,
+    forceMoveMarkers: true,
+  }]);
+}
+
 const Loading = () => {
   const { t } = useTranslation();
   return (
@@ -446,6 +484,7 @@ interface MonacoEditorProps {
 }
 
 const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused = true, path, modelPath, onOpenFileByPath, onReady }: MonacoEditorProps) => {
+  const { t } = useTranslation();
   const dispatch = useAppDispatch();
   const searchHighlight = useAppSelector((state) => state.workspace.searchHighlight);
   const { theme, fontSize, semanticHighlightingEnabled, wordWrap, minimapEnabled } = useAppSelector((state) => state.settings);
@@ -456,11 +495,11 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
   const pendingRef = useRef<SearchHighlight | null>(null);
   const snapshotAppliedRef = useRef(false);
   const diagUnsubRef = useRef<(() => void) | null>(null);
-  const changeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lspDisposablesRef = useRef<Array<{ dispose(): void }>>([]);
-  const semTokenGenRef = useRef(0);
   const jsxTagDecoRef = useRef<string[]>([]);
   const jsxTagTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  /** 缓存上一次成功的语义 tokens，确保编辑期间高亮永不消失 */
+  const lastSemTokensRef = useRef<{ resultId?: string; data: Uint32Array } | null>(null);
 
   const onSnapshotRef = useRef(onSnapshot);
   onSnapshotRef.current = onSnapshot;
@@ -470,6 +509,11 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
 
   const pathRef = useRef(path);
   pathRef.current = path;
+
+  // 切换文件时清空语义 token 缓存，避免旧文件的 tokens 被应用到新文件
+  useEffect(() => {
+    lastSemTokensRef.current = null;
+  }, [path]);
 
   const onOpenFileByPathRef = useRef(onOpenFileByPath);
   onOpenFileByPathRef.current = onOpenFileByPath;
@@ -637,12 +681,9 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
         if (path) {
           eventBus.emit('editor:changed', { fileId: path, groupIndex: 0 });
         }
-        // 去抖通知 tsserver 文件变更
+        // 立即通知 tsserver 文件变更（无去抖），确保 semanticTokens 请求时 server 内容是最新的
         if (!isBrowser && path) {
-          if (changeTimerRef.current) clearTimeout(changeTimerRef.current);
-          changeTimerRef.current = setTimeout(() => {
-            tsService.change(path, v || '')?.catch(() => {});
-          }, 500);
+          tsService.change(path, v || '')?.catch(() => {});
         }
       }}
       theme={toMonacoTheme(theme)}
@@ -914,14 +955,20 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
             getLegend: () => semanticTokensLegend ?? defaultSemanticTokensLegend,
             provideDocumentSemanticTokens: async () => {
               const currentPath = pathRef.current;
-              if (!currentPath) return null;
-              const gen = ++semTokenGenRef.current;
-              const tokens = await tsService.semanticTokens(currentPath);
-              // 忽略 stale 响应（新的请求已发出，旧结果不再需要）
-              if (gen !== semTokenGenRef.current) return null;
-              if (!tokens) return null;
-
-              return { resultId: tokens.resultId, data: new Uint32Array(tokens.data) };
+              if (!currentPath) return lastSemTokensRef.current ?? null;
+              try {
+                const tokens = await tsService.semanticTokens(currentPath);
+                if (tokens && tokens.data && tokens.data.length > 0) {
+                  const result = { resultId: tokens.resultId, data: new Uint32Array(tokens.data) };
+                  lastSemTokensRef.current = result;
+                  return result;
+                }
+                // tsserver 返回空 → 返回缓存（不清空已有高亮）
+                return lastSemTokensRef.current ?? null;
+              } catch {
+                // 请求失败 → 返回缓存（不清空已有高亮）
+                return lastSemTokensRef.current ?? null;
+              }
             },
             releaseDocumentSemanticTokens: () => {},
           }));
@@ -937,6 +984,50 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
 
         const pending = pendingRef.current;
         if (pending) { pendingRef.current = null; applyHighlight(editor, monaco, pending); }
+
+        // ── 右键菜单自定义功能 ──
+        // 注意：转到定义/类型定义/实现/引用、重命名、格式化、剪切/复制/粘贴等
+        // 均为 Monaco 内置动作，已通过 NLS 本地化为中文，无需重复注册。
+        const contextMenuDisposables: Array<{ dispose(): void }> = [];
+
+        // 转换大小写（无内置等价项，自定义实现）
+        const caseGroupId = '10_caseConversion';
+        // 驼峰命名
+        contextMenuDisposables.push(editor.addAction({
+          id: 'ideacode-to-camel-case',
+          label: t('editor.contextMenu.toCamelCase'),
+          contextMenuGroupId: caseGroupId,
+          contextMenuOrder: 1,
+          run: (ed) => transformSelection(ed, 'camel'),
+        }));
+        // 全部转大写
+        contextMenuDisposables.push(editor.addAction({
+          id: 'ideacode-to-upper-case',
+          label: t('editor.contextMenu.toUpperCase'),
+          keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyU],
+          contextMenuGroupId: caseGroupId,
+          contextMenuOrder: 2,
+          run: (ed) => transformSelection(ed, 'upper'),
+        }));
+        // 全部转小写
+        contextMenuDisposables.push(editor.addAction({
+          id: 'ideacode-to-lower-case',
+          label: t('editor.contextMenu.toLowerCase'),
+          keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyL],
+          contextMenuGroupId: caseGroupId,
+          contextMenuOrder: 3,
+          run: (ed) => transformSelection(ed, 'lower'),
+        }));
+        // 首字母大写
+        contextMenuDisposables.push(editor.addAction({
+          id: 'ideacode-to-title-case',
+          label: t('editor.contextMenu.toTitleCase'),
+          contextMenuGroupId: caseGroupId,
+          contextMenuOrder: 4,
+          run: (ed) => transformSelection(ed, 'title'),
+        }));
+
+        contextMenuDisposables.forEach((d) => lspDisposablesRef.current.push(d));
       }}
       options={{
         minimap: { enabled: focused && minimapEnabled, showSlider: 'always' },

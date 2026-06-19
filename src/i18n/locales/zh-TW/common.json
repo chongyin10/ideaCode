@@ -132,6 +132,26 @@
   "monacoEditor": {
     "loading": "正在載入編輯器..."
   },
+  "editor": {
+    "contextMenu": {
+      "goToDefinition": "前往定義",
+      "goToTypeDefinition": "前往型別定義",
+      "goToSourceDefinition": "前往源定義",
+      "goToImplementation": "前往實作",
+      "goToReferences": "前往參考",
+      "findAllReferences": "尋找所有參考",
+      "findAllImplementations": "尋找所有實作",
+      "renameSymbol": "重新命名符號",
+      "formatDocument": "格式化文件",
+      "cut": "剪下",
+      "copy": "複製",
+      "paste": "貼上",
+      "toCamelCase": "駝峰命名",
+      "toUpperCase": "全部轉大寫",
+      "toLowerCase": "全部轉小寫",
+      "toTitleCase": "首字母大寫"
+    }
+  },
   "activityBar": {
     "explorer": "資源管理器",
     "search": "搜尋",
