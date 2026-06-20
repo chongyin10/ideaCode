@@ -467,6 +467,105 @@ function getStringLiteralRange(
   };
 }
 
+/* ─── 语义 token 位置重映射（消除编辑时高亮跳动）───
+ * LSP semantic tokens 使用 delta 编码的 Uint32Array（每 5 个值一组）。
+ * 编辑后旧 token 的行/列位置不再正确，但 token 类型（function/class/variable）通常不变。
+ * 通过 onDidChangeContent 的变更信息，对缓存的 token 做位置平移，
+ * 使 provider 能在 Monaco 调用时瞬间返回位置正确的 tokens，消除 IPC 延迟期间的跳动。
+ */
+
+interface DecodedToken {
+  line: number;      // 0-based
+  startChar: number; // 0-based
+  length: number;
+  type: number;
+  modifiers: number;
+  invalid?: boolean;
+}
+
+/** 将 LSP delta-encoded Uint32Array 解码为绝对位置数组 */
+function decodeSemTokens(data: Uint32Array): DecodedToken[] {
+  const tokens: DecodedToken[] = [];
+  let prevLine = 0, prevChar = 0;
+  for (let i = 0; i + 4 < data.length; i += 5) {
+    const deltaLine = data[i];
+    const deltaStartChar = data[i + 1];
+    const line = prevLine + deltaLine;
+    const startChar = deltaLine === 0 ? prevChar + deltaStartChar : deltaStartChar;
+    tokens.push({ line, startChar, length: data[i + 2], type: data[i + 3], modifiers: data[i + 4] });
+    prevLine = line;
+    prevChar = startChar;
+  }
+  return tokens;
+}
+
+/** 将绝对位置数组重新编码为 LSP delta-encoded Uint32Array */
+function encodeSemTokens(tokens: DecodedToken[]): Uint32Array {
+  const data = new Uint32Array(tokens.length * 5);
+  let prevLine = 0, prevChar = 0;
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    data[i * 5] = t.line - prevLine;
+    data[i * 5 + 1] = t.line === prevLine ? t.startChar - prevChar : t.startChar;
+    data[i * 5 + 2] = t.length;
+    data[i * 5 + 3] = t.type;
+    data[i * 5 + 4] = t.modifiers;
+    prevLine = t.line;
+    prevChar = t.startChar;
+  }
+  return data;
+}
+
+/**
+ * 根据内容变更对 decoded tokens 做位置重映射。
+ * 处理行增删和同行字符增删，与编辑重叠的 token 标记为 invalid（等 LSP 刷新）。
+ */
+function remapDecodedTokens(
+  tokens: DecodedToken[],
+  changes: ReadonlyArray<{ range: { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number }; text: string }>,
+): DecodedToken[] {
+  // 从后向前处理变更，保证位置一致性
+  for (let c = changes.length - 1; c >= 0; c--) {
+    const ch = changes[c];
+    const startLine = ch.range.startLineNumber - 1;  // 0-based
+    const endLine = ch.range.endLineNumber - 1;
+    const startCol = ch.range.startColumn - 1;
+    const endCol = ch.range.endColumn - 1;
+
+    const newParts = ch.text.split('\n');
+    const newLineCount = newParts.length - 1;       // 插入的换行数
+    const oldLineSpan = endLine - startLine;         // 被替换区域的换行数
+    const lineDelta = newLineCount - oldLineSpan;
+
+    // 同行字符变化量（仅当单行替换时有意义）
+    const oldCharSpan = (oldLineSpan === 0) ? (endCol - startCol) : 0;
+    const newCharOnStartLine = newParts[0].length;
+    const charDelta = newCharOnStartLine - oldCharSpan;
+
+    for (const tk of tokens) {
+      if (tk.invalid) continue;
+      if (tk.line < startLine) continue;                    // 变更前：不受影响
+      if (tk.line > endLine) { tk.line += lineDelta; continue; } // 变更后：平移行号
+
+      if (oldLineSpan === 0 && tk.line === startLine) {
+        // 单行变更
+        if (tk.startChar >= endCol) {
+          // token 在变更点之后 → 平移字符
+          tk.startChar += charDelta;
+        } else if (tk.startChar + tk.length > startCol) {
+          // token 与变更重叠 → 标记失效，等 LSP 刷新
+          tk.invalid = true;
+        }
+        // token 在变更点之前 → 不受影响
+      } else {
+        // 多行变更：startLine 和 endLine 之间的 token 全部标记失效
+        tk.invalid = true;
+      }
+    }
+  }
+  return tokens.filter((t) => !t.invalid);
+}
+
 /** 判断指定 token 是否位于对象字面量键位置（如 { jsx: ... } 中的 jsx） */
 interface MonacoEditorProps {
   value: string;
@@ -498,8 +597,10 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
   const lspDisposablesRef = useRef<Array<{ dispose(): void }>>([]);
   const jsxTagDecoRef = useRef<string[]>([]);
   const jsxTagTimerRef = useRef<ReturnType<typeof setTimeout>>();
-  /** 缓存上一次成功的语义 tokens，确保编辑期间高亮永不消失 */
-  const lastSemTokensRef = useRef<{ resultId?: string; data: Uint32Array } | null>(null);
+  /** 缓存解码后的语义 tokens（绝对位置），用于编辑时即时位置重映射 */
+  const decodedTokensRef = useRef<DecodedToken[] | null>(null);
+  /** 预取：onChange 时立即发起 semanticTokens 请求，Monaco 调用 provider 时直接取结果，消除 IPC 延迟 */
+  const semTokensPrefetchRef = useRef<Promise<{ resultId?: string; data: Uint32Array } | null> | null>(null);
 
   const onSnapshotRef = useRef(onSnapshot);
   onSnapshotRef.current = onSnapshot;
@@ -510,9 +611,10 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
   const pathRef = useRef(path);
   pathRef.current = path;
 
-  // 切换文件时清空语义 token 缓存，避免旧文件的 tokens 被应用到新文件
+  // 切换文件时清空语义 token 缓存和预取，避免旧文件的 tokens 被应用到新文件
   useEffect(() => {
-    lastSemTokensRef.current = null;
+    decodedTokensRef.current = null;
+    semTokensPrefetchRef.current = null;
   }, [path]);
 
   const onOpenFileByPathRef = useRef(onOpenFileByPath);
@@ -681,9 +783,18 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
         if (path) {
           eventBus.emit('editor:changed', { fileId: path, groupIndex: 0 });
         }
-        // 立即通知 tsserver 文件变更（无去抖），确保 semanticTokens 请求时 server 内容是最新的
+        // 立即通知 tsserver + 预取 semanticTokens，消除编辑后高亮延迟/跳动
         if (!isBrowser && path) {
           tsService.change(path, v || '')?.catch(() => {});
+          // 预取：didChange 发出后立即请求 tokens，Monaco 调用 provider 时直接取结果
+          semTokensPrefetchRef.current = tsService.semanticTokens(path).then((tokens) => {
+            if (tokens && tokens.data && tokens.data.length > 0) {
+              const data = new Uint32Array(tokens.data);
+              decodedTokensRef.current = decodeSemTokens(data); // 缓存解码后的 tokens
+              return { resultId: tokens.resultId, data };
+            }
+            return null;
+          }).catch(() => null);
         }
       }}
       theme={toMonacoTheme(theme)}
@@ -747,11 +858,18 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
 
         // ── JSX 标签名 + 尖括号着色兜底（Monaco TS worker 不识别这些 token） ──
         applyJsxDecorations(editor, monaco);
-        const jsxContentDisposable = editor.getModel()?.onDidChangeContent(() => {
+
+        // ── 语义 token 位置重映射：编辑时即时平移缓存 token 的行/列，消除高亮跳动 ──
+        const semRemapDisposable = editor.getModel()?.onDidChangeContent((e) => {
+          // 1. JSX decorations（debounced）
           applyJsxDecorations(editorRef.current, monacoRef.current);
+          // 2. 语义 token 位置重映射（同步，即时）
+          if (decodedTokensRef.current && e.changes.length > 0) {
+            decodedTokensRef.current = remapDecodedTokens(decodedTokensRef.current, e.changes);
+          }
         });
-        if (jsxContentDisposable) {
-          lspDisposablesRef.current.push({ dispose: () => jsxContentDisposable.dispose() });
+        if (semRemapDisposable) {
+          lspDisposablesRef.current.push({ dispose: () => semRemapDisposable.dispose() });
         }
 
         // ── 拦截 definition / link 跳转，转到应用内文件打开 ──
@@ -940,6 +1058,10 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
           try {
             const firstTokens = await tsService.semanticTokens(path);
             if (firstTokens?.legend) semanticTokensLegend = firstTokens.legend;
+            // 首次加载时缓存解码后的 tokens
+            if (firstTokens?.data && firstTokens.data.length > 0) {
+              decodedTokensRef.current = decodeSemTokens(new Uint32Array(firstTokens.data));
+            }
           } catch { /* legend 获取失败时使用默认 legend */ }
 
           // 与 electron/shared/semanticTokensLegend.cjs 保持同步的默认 legend
@@ -955,20 +1077,34 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
             getLegend: () => semanticTokensLegend ?? defaultSemanticTokensLegend,
             provideDocumentSemanticTokens: async () => {
               const currentPath = pathRef.current;
-              if (!currentPath) return lastSemTokensRef.current ?? null;
-              try {
-                const tokens = await tsService.semanticTokens(currentPath);
-                if (tokens && tokens.data && tokens.data.length > 0) {
-                  const result = { resultId: tokens.resultId, data: new Uint32Array(tokens.data) };
-                  lastSemTokensRef.current = result;
-                  return result;
-                }
-                // tsserver 返回空 → 返回缓存（不清空已有高亮）
-                return lastSemTokensRef.current ?? null;
-              } catch {
-                // 请求失败 → 返回缓存（不清空已有高亮）
-                return lastSemTokensRef.current ?? null;
+
+              // 1. 优先使用预取结果（onChange 时已发起，大概率已完成，包含最新 LSP tokens）
+              const prefetch = semTokensPrefetchRef.current;
+              semTokensPrefetchRef.current = null;
+              if (prefetch) {
+                const result = await prefetch;
+                if (result) return result;
               }
+
+              // 2. 有预取或无预取但 LSP 可达 → 发起新请求并更新缓存
+              if (currentPath) {
+                try {
+                  const tokens = await tsService.semanticTokens(currentPath);
+                  if (tokens && tokens.data && tokens.data.length > 0) {
+                    const data = new Uint32Array(tokens.data);
+                    decodedTokensRef.current = decodeSemTokens(data);
+                    return { resultId: tokens.resultId, data };
+                  }
+                } catch { /* fall through to remapped cache */ }
+              }
+
+              // 3. LSP 请求失败或返回空 → 返回位置重映射后的缓存 tokens（同步，零延迟）
+              const cached = decodedTokensRef.current;
+              if (cached && cached.length > 0) {
+                return { data: encodeSemTokens(cached) };
+              }
+
+              return null;
             },
             releaseDocumentSemanticTokens: () => {},
           }));
