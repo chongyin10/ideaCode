@@ -41,6 +41,7 @@ const ActivityBar = () => {
   const draggingIdRef = useRef<PanelId | null>(null);
   draggingIdRef.current = draggingId;
 
+  
   const handleDragStart = (e: React.DragEvent, panelId: PanelId) => {
     setDraggingId(panelId);
     draggingIdRef.current = panelId;

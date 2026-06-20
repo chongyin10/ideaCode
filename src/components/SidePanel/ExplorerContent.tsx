@@ -27,7 +27,6 @@ import {
   refreshAllFilePaths,
   clearExpandPaths,
   toggleExpandDir,
-  closeDiffView,
   activateFile,
 } from '../../store/slices/workspaceSlice';
 import { setShowCloneForm, refreshGitStatus as refreshGitSliceStatus } from '../../store/slices/gitSlice';
@@ -720,7 +719,6 @@ const ExplorerContent = () => {
   }, [contextMenu, dispatch, rootSource, startCreate, startRename, handleFindInFiles, handlePaste, notifyChange, selectedEntries, wrapWithClickTracking, t]);
 
   const stableOnOpenFile = useCallback((entry: FileEntry) => {
-    dispatch(closeDiffView());
     dispatch(openFile(entry));
   }, [dispatch]);
 

@@ -799,13 +799,28 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
       }}
       theme={toMonacoTheme(theme)}
       loading={<Loading />}
-      onMount={async (editor, monaco) => {
+      onMount={(editor, monaco) => {
         editorRef.current = editor;
         monacoRef.current = monaco;
 
         // ── 按需加载语言语法（减少首屏体积）──
         if (language) {
           ensureLanguage(language).catch(() => {});
+        }
+
+        // ── 预加载 tsserver + 预取 semantic tokens（与后续逻辑并行，消除高亮延迟）──
+        // 在 provider 注册前即发起请求，当 Monaco 首次调用 provideDocumentSemanticTokens 时缓存已就绪
+        let semTokensPrefetch: Promise<{ resultId?: string; data: Uint32Array } | null> | null = null;
+        if (!isBrowser && path) {
+          tsService.open(path, value).catch(() => {});
+          semTokensPrefetch = tsService.semanticTokens(path).then((tokens) => {
+            if (tokens && tokens.data && tokens.data.length > 0) {
+              const data = new Uint32Array(tokens.data);
+              decodedTokensRef.current = decodeSemTokens(data);
+              return { resultId: tokens.resultId, data };
+            }
+            return null;
+          }).catch(() => null);
         }
 
         // ── 快照恢复（layout 先行，消除抖动 + 保证位置正确）──
@@ -838,22 +853,19 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
           };
         }
 
-        // 确保 model 语言与 prop 一致，并强制刷新一次 tokenization；
+        // 确保 model 语言与 prop 一致，并强制刷新 tokenization；
         // 解决首次打开 tsx/jsx 时 Monaco worker 尚未就绪导致无高亮的问题。
         const model = editor.getModel();
         if (model) {
           if (model.getLanguageId() !== language) {
             monaco.editor.setModelLanguage(model, language);
           }
-          // 立即尝试 + 推迟重试：resetTokenization 是内部 API，初次调用可能因 worker 未就绪而失效
-          const forceTokenization = () => {
-            try {
-              (model as unknown as { tokenization: { resetTokenization(): void } }).tokenization.resetTokenization();
-            } catch { /* 忽略 */ }
-          };
-          forceTokenization();
-          // 200ms 后重试，确保 worker 已就绪
-          setTimeout(forceTokenization, 200);
+          // 仅重置一次 tokenization：触发 Monaco 重新从 worker 请求基础语法高亮。
+          // 注意：语义高亮（semantic tokens）由 Monaco 内部自动调度，provider 注册后
+          // 会在后台异步请求，无需手动 resetTokenization，否则会导致高亮闪动。
+          try {
+            (model as unknown as { tokenization: { resetTokenization(): void } }).tokenization.resetTokenization();
+          } catch { /* 忽略 */ }
         }
 
         // ── JSX 标签名 + 尖括号着色兜底（Monaco TS worker 不识别这些 token） ──
@@ -932,8 +944,7 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
             }
           });
 
-          // 打开文件到 tsserver
-          tsService.open(path, value).catch(() => {});
+          // 注意：tsService.open 已在 onMount 开头并行发起，此处不再重复调用
 
           // 注册补全 provider
           lspDisposablesRef.current.push(monaco.languages.registerCompletionItemProvider(language, {
@@ -1053,16 +1064,20 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
           }));
 
           // 注册语义高亮 provider（semantic tokens），让方法/变量/类型等按语义着色
-          // 先向 tsserver 索要一次 legend，确保 Monaco 解析 tokens 时与 server 一致
+          // 使用 onMount 开头预取的 semTokensPrefetch 结果，消除首次高亮延迟
+          // 注意：不 await 预取结果，避免阻塞 onMount。provider 回调中自行 await。
           let semanticTokensLegend = null;
-          try {
-            const firstTokens = await tsService.semanticTokens(path);
-            if (firstTokens?.legend) semanticTokensLegend = firstTokens.legend;
-            // 首次加载时缓存解码后的 tokens
-            if (firstTokens?.data && firstTokens.data.length > 0) {
-              decodedTokensRef.current = decodeSemTokens(new Uint32Array(firstTokens.data));
+          // 尝试从预取结果获取 legend（非阻塞）
+          semTokensPrefetch?.then((firstTokens) => {
+            if (firstTokens?.resultId) {
+              // legend 需要单独请求（预取时未保存），但用默认 legend 即可工作
+              tsService.semanticTokens(path).then((legendTokens) => {
+                if (legendTokens?.legend) {
+                  semanticTokensLegend = legendTokens.legend;
+                }
+              }).catch(() => {});
             }
-          } catch { /* legend 获取失败时使用默认 legend */ }
+          }).catch(() => {});
 
           // 与 electron/shared/semanticTokensLegend.cjs 保持同步的默认 legend
           const defaultSemanticTokensLegend = {
@@ -1078,15 +1093,22 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
             provideDocumentSemanticTokens: async () => {
               const currentPath = pathRef.current;
 
-              // 1. 优先使用预取结果（onChange 时已发起，大概率已完成，包含最新 LSP tokens）
-              const prefetch = semTokensPrefetchRef.current;
-              semTokensPrefetchRef.current = null;
-              if (prefetch) {
-                const result = await prefetch;
+              // 1. 优先使用 onMount 预取结果（首次加载，大概率已缓存）
+              if (semTokensPrefetch) {
+                const result = await semTokensPrefetch;
+                semTokensPrefetch = null;
                 if (result) return result;
               }
 
-              // 2. 有预取或无预取但 LSP 可达 → 发起新请求并更新缓存
+              // 2. 其次使用 onChange 预取结果（编辑后预取）
+              const changePrefetch = semTokensPrefetchRef.current;
+              semTokensPrefetchRef.current = null;
+              if (changePrefetch) {
+                const result = await changePrefetch;
+                if (result) return result;
+              }
+
+              // 3. 无预取但 LSP 可达 → 发起新请求并更新缓存
               if (currentPath) {
                 try {
                   const tokens = await tsService.semanticTokens(currentPath);
@@ -1098,7 +1120,7 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
                 } catch { /* fall through to remapped cache */ }
               }
 
-              // 3. LSP 请求失败或返回空 → 返回位置重映射后的缓存 tokens（同步，零延迟）
+              // 4. LSP 请求失败或返回空 → 返回位置重映射后的缓存 tokens（同步，零延迟）
               const cached = decodedTokensRef.current;
               if (cached && cached.length > 0) {
                 return { data: encodeSemTokens(cached) };

@@ -26,10 +26,10 @@ import {
 import { openDirectory, warmupFileCache } from '../services/fileService';
 import TabBar from '../components/TabBar';
 import MonacoEditor from '../components/MonacoEditor';
+import DiffEditorPanel from '../components/DiffEditorPanel';
 import ConfirmDialog, { type ConfirmResult } from '../components/ConfirmDialog';
 import QuickOpen from '../components/QuickOpen';
 import GitSetupPanel from '../components/GitSetupPanel';
-import DiffEditorPanel from '../components/DiffEditorPanel';
 import SettingsPanel from '../components/SettingsPanel';
 import ContextMenu, { type MenuItem } from '../components/ContextMenu';
 import FileReferencesModal from '../components/FileReferencesModal';
@@ -96,7 +96,6 @@ function Home() {
   const { openedFiles, recentProjects, editorGroups, activeGroupIndex, allFilePaths, mirrorContent, splitPhase, editorSnapshots: snapshots, missingFileIds } = workspace;
   const splitView = editorGroups.length > 1;
   const showCloneForm = useAppSelector((state) => state.git.showCloneForm);
-  const diffView = useAppSelector((state) => state.workspace.diffView);
   const settingsVisible = useAppSelector((state) => state.workspace.settingsVisible);
   const rootSource = useAppSelector((state) => state.workspace.rootSource);
   const rootPath = typeof rootSource === 'string' ? rootSource : '';
@@ -381,6 +380,9 @@ function Home() {
         setPendingClose([{ id, groupIndex }]);
         return;
       }
+      // Diff 文件和普通文件一样按组关闭：closeFile 只从指定组移除，
+      // 当文件不再被任何组引用时自动从 openedFiles 清理。
+      // 避免使用 closeDiffView（它会从所有组中移除，导致多面板时全部关闭）。
       dispatch(closeFile({ id, groupIndex }));
     },
     [dispatch]
@@ -675,19 +677,23 @@ function Home() {
           />
           <div className="editor-area">
             {file ? (
+              file.isDiff && file.diffData ? (
+                <DiffEditorPanel diffData={file.diffData} />
+              ) : (
                 <MonacoEditor
-                key={`${file.id}-${group.id}`}
-                value={panelContent ?? file.content}
-                language={file.language}
-                path={typeof file.source === 'string' ? file.source : file.name}
-                modelPath={`file:///__ideacode_group/${group.id}/${file.id.replace(/^\//, '')}`}
-                onChange={handleEditorChange(group.activeFileId, groupIndex)}
-                snapshot={snapshot}
-                onSnapshot={saveSnapshot}
-                focused={focused}
-                onOpenFileByPath={handleOpenFileByPath}
-                onReady={() => handleTabReady(file?.id || '')}
-              />
+                  key={`${file.id}-${group.id}`}
+                  value={panelContent ?? file.content}
+                  language={file.language}
+                  path={typeof file.source === 'string' ? file.source : file.name}
+                  modelPath={`file:///__ideacode_group/${group.id}/${file.id.replace(/^\//, '')}`}
+                  onChange={handleEditorChange(group.activeFileId, groupIndex)}
+                  snapshot={snapshot}
+                  onSnapshot={saveSnapshot}
+                  focused={focused}
+                  onOpenFileByPath={handleOpenFileByPath}
+                  onReady={() => handleTabReady(file?.id || '')}
+                />
+              )
             ) : (
               <div className="no-active-file">
                 <button className="open-folder-btn secondary" onClick={handleOpenQuickOpen}>
@@ -742,8 +748,6 @@ function Home() {
 
       {settingsVisible ? (
         <SettingsPanel />
-      ) : diffView ? (
-        <DiffEditorPanel />
       ) : showCloneForm ? (
         <GitSetupPanel />
       ) : allFileIds.length === 0 ? (

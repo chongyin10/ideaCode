@@ -9,7 +9,6 @@ import router from './router'
 import { createPluginManager } from './plugin'
 import { createPluginContext } from './plugin'
 import { helloWorldPlugin } from './plugin'
-import { ensureLanguage } from './services/languageLoader'
 import './i18n'
 import './index.css'
 
@@ -24,18 +23,17 @@ let tsWorkerFactory: (() => Worker) | null = null;
 let htmlWorkerFactory: (() => Worker) | null = null;
 let cssWorkerFactory: (() => Worker) | null = null;
 
-// 预取 Worker（不阻塞渲染）
-const prefetchWorkers = () => {
-  import('monaco-editor/esm/vs/editor/editor.worker?worker').then(m => { editorWorkerFactory = () => new m.default(); });
-  import('monaco-editor/esm/vs/language/json/json.worker?worker').then(m => { jsonWorkerFactory = () => new m.default(); });
-  import('monaco-editor/esm/vs/language/typescript/ts.worker?worker').then(m => { tsWorkerFactory = () => new m.default(); });
-  import('monaco-editor/esm/vs/language/html/html.worker?worker').then(m => { htmlWorkerFactory = () => new m.default(); });
-  import('monaco-editor/esm/vs/language/css/css.worker?worker').then(m => { cssWorkerFactory = () => new m.default(); });
-};
-
-// 同步导入兜底：首屏编辑器 Worker 必须可用
+// 同步预加载核心 Worker：首屏编辑器（尤其是 TS/JS）必须立即可用
 import('monaco-editor/esm/vs/editor/editor.worker?worker').then(m => { editorWorkerFactory = () => new m.default(); })
-  .catch(() => console.warn('[main] 编辑器 Worker 预加载失败'));
+  .catch(() => console.warn('[main] editor.worker 预加载失败'));
+import('monaco-editor/esm/vs/language/typescript/ts.worker?worker').then(m => { tsWorkerFactory = () => new m.default(); })
+  .catch(() => console.warn('[main] ts.worker 预加载失败'));
+import('monaco-editor/esm/vs/language/json/json.worker?worker').then(m => { jsonWorkerFactory = () => new m.default(); })
+  .catch(() => console.warn('[main] json.worker 预加载失败'));
+import('monaco-editor/esm/vs/language/html/html.worker?worker').then(m => { htmlWorkerFactory = () => new m.default(); })
+  .catch(() => console.warn('[main] html.worker 预加载失败'));
+import('monaco-editor/esm/vs/language/css/css.worker?worker').then(m => { cssWorkerFactory = () => new m.default(); })
+  .catch(() => console.warn('[main] css.worker 预加载失败'));
 
 self.MonacoEnvironment = {
   getWorker(_moduleId: string, label: string) {
@@ -75,26 +73,21 @@ function getEditorWorkerFallback(): Worker {
 // 使用本地 monaco 包
 loader.config({ monaco })
 
-// ─── 语言语法按需注册 ───
-// 基础语言（几乎总是需要）：TS/JS
+// ─── 语言语法预置（同步加载，消除首屏高亮延迟）───
+// 核心语言：TypeScript / JavaScript（富语言支持含语义高亮）
 import 'monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution.js'
 import 'monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution.js'
-// 注册 TypeScript/Javascript 富语言支持（含 worker 通信），diff 编辑器需要它才能正确高亮
 import 'monaco-editor/esm/vs/language/typescript/monaco.contribution.js'
-
-// 页面空闲时预取 Worker 和常用语言
-if (typeof requestIdleCallback !== 'undefined') {
-  requestIdleCallback(() => {
-    prefetchWorkers();
-  });
-  requestIdleCallback(() => {
-    ensureLanguage('html').catch(() => {});
-    ensureLanguage('css').catch(() => {});
-    ensureLanguage('json').catch(() => {});
-  }, { timeout: 3000 });
-} else {
-  setTimeout(() => prefetchWorkers(), 0);
-}
+// 常用语言：提前同步加载，避免按需加载的 200-500ms 延迟
+import 'monaco-editor/esm/vs/basic-languages/java/java.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/python/python.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/csharp/csharp.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/html/html.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/css/css.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/scss/scss.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/less/less.contribution.js'
+import 'monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution.js'
+import 'monaco-editor/esm/vs/language/json/monaco.contribution.js'
 
 // ─── 初始化插件系统 ───
 const pluginManager = createPluginManager((pluginId, manifest) =>

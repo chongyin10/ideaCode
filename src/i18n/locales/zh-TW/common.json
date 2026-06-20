@@ -342,6 +342,8 @@
   },
   "diffEditorPanel": {
     "compareTitle": "{{fileName}} — 對比 HEAD",
+    "original": "原始版本",
+    "modified": "修改版本",
     "replaceRight": "向右全部取代（把左側內容複製到右側）",
     "replaceLeft": "向左全部取代（把右側內容複製到左側）",
     "prevChange": "上一個變更 (Shift+F7)",

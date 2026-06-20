@@ -101,6 +101,12 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
+    include: [
+      'monaco-editor/esm/vs/language/css/cssMode',
+      'monaco-editor/esm/vs/language/typescript/tsMode',
+      'monaco-editor/esm/vs/language/json/jsonMode',
+      'monaco-editor/esm/vs/language/html/htmlMode',
+    ],
     esbuildOptions: {
       plugins: [
         esbuildMonacoNlsLocalize2Fix(),

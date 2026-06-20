@@ -5,8 +5,11 @@
  * 使用方直接从此模块 import。
  */
 
-// 已加载的语言集合
-const loadedLanguages = new Set<string>(['typescript', 'javascript', 'typescriptreact', 'javascriptreact']);
+// 已预置加载的语言集合（与 main.tsx 同步导入保持一致）
+const loadedLanguages = new Set<string>([
+  'typescript', 'javascript', 'typescriptreact', 'javascriptreact',
+  'java', 'python', 'csharp', 'html', 'css', 'scss', 'less', 'markdown', 'json',
+]);
 
 /**
  * 按需加载语言贡献（语法高亮）

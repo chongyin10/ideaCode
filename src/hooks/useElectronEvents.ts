@@ -66,7 +66,7 @@ export function useElectronEvents() {
 
     /* ── 窗口状态变化 ── */
     const unsubState = api.window.onStateChanged((data) => {
-      console.log('[Electron] 窗口状态变化', data);
+      // console.log('[Electron] 窗口状态变化', data);
     });
     cleanups.push(unsubState);
 
@@ -76,7 +76,7 @@ export function useElectronEvents() {
         filePath: event.path,
         eventType: event.eventType,
       });
-      console.log('[Electron] 文件变更', event);
+      // console.log('[Electron] 文件变更', event);
     });
     cleanups.push(unsubFsChange);
 

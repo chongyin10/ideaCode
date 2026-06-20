@@ -342,6 +342,8 @@
   },
   "diffEditorPanel": {
     "compareTitle": "{{fileName}} — Compare with HEAD",
+    "original": "Original",
+    "modified": "Modified",
     "replaceRight": "Replace right with left (copy left content to right)",
     "replaceLeft": "Replace left with right (copy right content to left)",
     "prevChange": "Previous Change (Shift+F7)",

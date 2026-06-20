@@ -44,7 +44,23 @@ const TabBar = ({ tabs, activeId, onActivate, onClose, onPin, onSplitView, onCon
   draggingIdRef.current = draggingId;
 
   useEffect(() => {
+    const prevTabs = prevTabsRef.current;
     const nextIds = new Set(tabs.map((t) => t.id));
+    const prevIds = new Set(prevTabs.map((t) => t.id));
+
+    // 检测"预览替换"场景：旧 Tab 是预览态，被新 Tab 替换在同一位置
+    // 这种情况下直接切换，不播放退出/进入动画，避免"幻影"效果
+    const replacedPreviewIds = new Set<string>();
+    for (const prevTab of prevTabs) {
+      if (prevTab.isPreview && !nextIds.has(prevTab.id)) {
+        // 旧 Tab 是预览态且被移除，检查是否有新 Tab 在同一位置
+        const prevIdx = prevTabs.findIndex((t) => t.id === prevTab.id);
+        const newTabAtSamePos = tabs[prevIdx];
+        if (newTabAtSamePos && newTabAtSamePos.isPreview && !prevIds.has(newTabAtSamePos.id)) {
+          replacedPreviewIds.add(prevTab.id);
+        }
+      }
+    }
 
     setDisplayTabs((current) => {
       const next: DisplayTab[] = [];
@@ -56,14 +72,16 @@ const TabBar = ({ tabs, activeId, onActivate, onClose, onPin, onSplitView, onCon
           // 已存在：同步数据；如果它之前正在退出，恢复为稳定态
           next.push({ ...tab, phase: existing.phase === 'exiting' ? 'stable' : existing.phase });
         } else {
-          // 新增：标记为进入动画
-          next.push({ ...tab, phase: 'entering' });
+          // 新增：如果是预览替换场景，直接标记为 stable（无动画）
+          const isPreviewReplace = prevTabs.some((pt) => replacedPreviewIds.has(pt.id));
+          next.push({ ...tab, phase: isPreviewReplace ? 'stable' : 'entering' });
         }
       }
 
       // 对正在移除的 tab 保留其 exiting 状态，以播放退出动画
+      // 但预览替换场景下的旧 tab 直接跳过（不显示退出动画）
       for (const tab of current) {
-        if (!nextIds.has(tab.id) && tab.phase !== 'exiting') {
+        if (!nextIds.has(tab.id) && !replacedPreviewIds.has(tab.id) && tab.phase !== 'exiting') {
           next.push({ ...tab, phase: 'exiting' });
         }
       }

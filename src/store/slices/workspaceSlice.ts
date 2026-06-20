@@ -12,6 +12,10 @@ export interface OpenedFile {
   language: string;
   isDirty: boolean;
   isPreview?: boolean;
+  /** 是否为 Git Diff 虚拟文件 */
+  isDiff?: boolean;
+  /** Diff 视图数据（仅当 isDiff 为 true 时有效） */
+  diffData?: DiffView;
 }
 
 export interface SearchHighlight {
@@ -527,9 +531,16 @@ const workspaceSlice = createSlice({
 
     pinPreviewFile: (state) => {
       const group = activeGroup(state);
+      // 优先固定当前激活的预览 Tab（如果它是预览态）
+      const activeFile = state.openedFiles.find((f) => f.id === group.activeFileId);
+      if (activeFile?.isPreview) {
+        activeFile.isPreview = false;
+        return;
+      }
+      // 否则固定第一个非 Diff 的预览 Tab
       const previewId = group.fileIds.find((fid) => {
         const f = state.openedFiles.find((of) => of.id === fid);
-        return f?.isPreview;
+        return f?.isPreview && !f?.isDiff;
       });
       if (previewId) {
         const preview = state.openedFiles.find((f) => f.id === previewId);
@@ -696,17 +707,118 @@ const workspaceSlice = createSlice({
 
     /** 打开 Git Diff 视图 */
     openDiffView: (state, action) => {
-      state.diffView = action.payload as DiffView;
+      const diffData = action.payload as DiffView;
+      const diffId = `diff://${diffData.filePath}`;
+      const diffName = `${diffData.fileName} (工作树)`;
+
+      // 如果已存在，更新内容并激活
+      const existingFile = state.openedFiles.find((f) => f.id === diffId);
+      if (existingFile) {
+        existingFile.diffData = diffData;
+        existingFile.language = diffData.language;
+      } else {
+        // 创建虚拟 Diff 文件
+        state.openedFiles.push({
+          id: diffId,
+          name: diffName,
+          source: diffData.filePath as FileSource,
+          content: diffData.modified,
+          language: diffData.language,
+          isDirty: false,
+          isPreview: true,
+          isDiff: true,
+          diffData,
+        });
+      }
+
+      // 打开到当前焦点组
+      const group = activeGroup(state);
+
+      // 已在当前组 → 直接激活
+      if (group.fileIds.includes(diffId)) {
+        group.activeFileId = diffId;
+        group.tabHistory = pushToHistory(group.tabHistory, diffId);
+        syncGlobalActive(state);
+        return;
+      }
+
+      // 优先替换当前 active 的 Diff 预览 Tab（如果当前 active 是 Diff 预览）
+      const activeFile = state.openedFiles.find((f) => f.id === group.activeFileId);
+      if (activeFile?.isDiff && activeFile?.isPreview) {
+        const activeIdx = group.fileIds.indexOf(group.activeFileId!);
+        // 只替换 fileIds 中的 ID，保留 openedFiles 中的旧文件（避免 React 重新渲染 Tab 栏）
+        // 旧文件会在后续 closeDiffView 或 cleanup 时清理
+        group.fileIds[activeIdx] = diffId;
+        group.tabHistory = removeFromHistory(group.tabHistory, group.activeFileId!);
+        group.activeFileId = diffId;
+        group.tabHistory = pushToHistory(group.tabHistory, diffId);
+        syncGlobalActive(state);
+        return;
+      }
+
+      // 否则查找当前组内的其他 Diff 预览 Tab，存在则替换它
+      const diffPreviewId = group.fileIds.find((fid) => {
+        const f = state.openedFiles.find((of) => of.id === fid);
+        return f?.isDiff && f?.isPreview;
+      });
+      if (diffPreviewId) {
+        const diffPreviewIdx = group.fileIds.indexOf(diffPreviewId);
+        // 只替换 fileIds 中的 ID，保留 openedFiles 中的旧文件
+        group.fileIds[diffPreviewIdx] = diffId;
+        group.tabHistory = removeFromHistory(group.tabHistory, diffPreviewId);
+        group.activeFileId = diffId;
+        group.tabHistory = pushToHistory(group.tabHistory, diffId);
+        syncGlobalActive(state);
+        return;
+      }
+
+      // 没有 Diff 预览，直接添加
+      group.fileIds.push(diffId);
+      group.activeFileId = diffId;
+      group.tabHistory = pushToHistory(group.tabHistory, diffId);
+      syncGlobalActive(state);
     },
 
     /** 关闭 Git Diff 视图 */
-    closeDiffView: (state) => {
-      state.diffView = null;
+    closeDiffView: (state, action) => {
+      const diffId = action.payload as string | undefined;
+      const targetId = diffId || state.activeFileId;
+      if (!targetId || !targetId.startsWith('diff://')) return;
+
+      // 从所有组中移除
+      state.editorGroups.forEach((g) => {
+        g.fileIds = g.fileIds.filter((id) => id !== targetId);
+        g.tabHistory = removeFromHistory(g.tabHistory, targetId);
+        if (g.activeFileId === targetId) {
+          g.activeFileId = g.fileIds[g.fileIds.length - 1] || null;
+        }
+      });
+
+      // 从 openedFiles 中移除
+      state.openedFiles = state.openedFiles.filter((f) => f.id !== targetId);
+
+      // 清理 mirror content 和 snapshots
+      Object.keys(state.mirrorContent).forEach((key) => {
+        if (key.startsWith(`${targetId}::`)) delete state.mirrorContent[key];
+      });
+      Object.keys(state.editorSnapshots).forEach((key) => {
+        if (key.startsWith(`${targetId}::`)) delete state.editorSnapshots[key];
+      });
+
+      removeEmptyGroups(state);
+      syncGlobalActive(state);
     },
 
     /** 更新 Git Diff 视图内容（替换操作后） */
     updateDiffView: (state, action) => {
-      state.diffView = action.payload as DiffView;
+      const diffData = action.payload as DiffView;
+      const diffId = `diff://${diffData.filePath}`;
+      const file = state.openedFiles.find((f) => f.id === diffId);
+      if (file) {
+        file.diffData = diffData;
+        file.content = diffData.modified;
+        file.language = diffData.language;
+      }
     },
 
     /** 设置文件的语法高亮语言 */
@@ -740,21 +852,27 @@ const workspaceSlice = createSlice({
           return;
         }
 
-        // 查找当前组内的预览 Tab，存在则替换它（不新增 tab）
+        // 优先替换当前 active 的预览 Tab（如果它是预览态且非 Diff）
+        const activeFile = state.openedFiles.find((f) => f.id === group.activeFileId);
+        if (activeFile?.isPreview && !activeFile?.isDiff) {
+          const activeIdx = group.fileIds.indexOf(group.activeFileId!);
+          // 只替换 fileIds 中的 ID，保留 openedFiles 中的旧文件（避免 React 重新渲染 Tab 栏）
+          group.fileIds[activeIdx] = file.id;
+          group.tabHistory = removeFromHistory(group.tabHistory, group.activeFileId!);
+          group.activeFileId = file.id;
+          group.tabHistory = pushToHistory(group.tabHistory, file.id);
+          syncGlobalActive(state);
+          return;
+        }
+
+        // 否则查找当前组内的其他预览 Tab（排除 Diff 文件），存在则替换它
         const previewFileId = group.fileIds.find((fid) => {
           const f = state.openedFiles.find((of) => of.id === fid);
-          return f?.isPreview;
+          return f?.isPreview && !f?.isDiff;
         });
         if (previewFileId) {
           const previewIdx = group.fileIds.indexOf(previewFileId);
-          // 如果预览 Tab 不再被其他组引用，从 openedFiles 移除旧文件
-          const stillUsed = state.editorGroups.some((g) => g.id !== group.id && g.fileIds.includes(previewFileId));
-          if (!stillUsed) {
-            state.openedFiles = state.openedFiles.filter((f) => f.id !== previewFileId);
-            delete state.editorSnapshots[`${previewFileId}::${state.activeGroupIndex}`];
-            delete state.mirrorContent[`${previewFileId}::${state.activeGroupIndex}`];
-          }
-          // 替换 tab 列表中的旧文件 ID
+          // 只替换 fileIds 中的 ID，保留 openedFiles 中的旧文件
           group.fileIds[previewIdx] = file.id;
           group.tabHistory = removeFromHistory(group.tabHistory, previewFileId);
           group.activeFileId = file.id;
