@@ -40,27 +40,26 @@ const ActivityBar = () => {
     extensions: { icon: <Blocks size={20} strokeWidth={1.5} />, title: t('activityBar.extensions') },
   };
 
-  // 合并固定面板和扩展贡献的视图容器
+  // 合并固定面板和扩展贡献的视图容器（统一按 panelOrder）
   const allPanels = useMemo(() => {
     const panels: { id: string; icon: React.ReactNode; title: string }[] = [];
-    
-    // 固定面板（按 panelOrder）
+
     for (const id of panelOrder) {
       if (panelConfig[id]) {
         panels.push({ id, ...panelConfig[id] });
+      } else {
+        const container = viewContainers.find((c) => c.id === id);
+        if (container) {
+          const IconComp = getLucideIcon(container.icon);
+          panels.push({
+            id: container.id,
+            icon: IconComp ? <IconComp size={20} strokeWidth={1.5} /> : <Blocks size={20} strokeWidth={1.5} />,
+            title: container.title,
+          });
+        }
       }
     }
-    
-    // 扩展贡献的视图容器
-    for (const container of viewContainers) {
-      const IconComp = getLucideIcon(container.icon);
-      panels.push({
-        id: container.id,
-        icon: IconComp ? <IconComp size={20} strokeWidth={1.5} /> : <Blocks size={20} strokeWidth={1.5} />,
-        title: container.title,
-      });
-    }
-    
+
     return panels;
   }, [panelOrder, viewContainers]);
 

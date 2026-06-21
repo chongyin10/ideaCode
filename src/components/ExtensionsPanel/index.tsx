@@ -1,46 +1,142 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Search, Puzzle } from 'lucide-react';
-import { getPluginManager } from '../../plugin';
-import type { PluginState } from '../../plugin';
+import { Search, Puzzle, RefreshCw } from 'lucide-react';
+import { useAppDispatch } from '../../store/hooks';
+import { openExtensionDetail } from '../../store/slices/workspaceSlice';
+import type { ExtensionState } from '../../plugin/extensionBridge';
 import './ExtensionsPanel.css';
 
-/**
- * 扩展面板
- *
- * 展示已安装/已注册的插件列表，支持查看状态、激活/停用。
- */
+function getBridge() {
+  return (window as unknown as Record<string, unknown>).__extensionBridge as {
+    getAllExtensions?: () => ExtensionState[];
+    scanExtensions?: () => Promise<ExtensionState[]>;
+    activateExtension?: (id: string) => Promise<boolean>;
+    deactivateExtension?: (id: string) => Promise<boolean>;
+  } | undefined;
+}
+
+interface SectionState {
+  installed: boolean;
+  discovered: boolean;
+}
+
 const ExtensionsPanel = () => {
   const { t } = useTranslation();
-  const [plugins, setPlugins] = useState<PluginState[]>([]);
+  const dispatch = useAppDispatch();
+  const [extensions, setExtensions] = useState<ExtensionState[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<SectionState>({ installed: true, discovered: true });
+  const [loading, setLoading] = useState(false);
 
-  // 刷新插件列表
-  const refresh = () => {
-    const manager = getPluginManager();
-    if (manager) {
-      setPlugins(manager.getAllPlugins());
-    }
-  };
-
-  useEffect(() => {
-    refresh();
-    const manager = getPluginManager();
-    if (manager) {
-      return manager.onChange(refresh);
+  const refresh = useCallback(async () => {
+    const bridge = getBridge();
+    if (!bridge) return;
+    setLoading(true);
+    try {
+      await bridge.scanExtensions?.();
+      setExtensions(bridge.getAllExtensions?.() || []);
+    } finally {
+      setLoading(false);
     }
   }, []);
 
-  const filteredPlugins = useMemo(() => {
-    if (!searchQuery) return plugins;
+  useEffect(() => {
+    refresh();
+    // 定时刷新状态（因为扩展可能在后台被激活）
+    const timer = setInterval(() => {
+      const bridge = getBridge();
+      if (bridge?.getAllExtensions) {
+        setExtensions(bridge.getAllExtensions());
+      }
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [refresh]);
+
+  const filtered = useMemo(() => {
+    if (!searchQuery) return extensions;
     const q = searchQuery.toLowerCase();
-    return plugins.filter(
-      (p) =>
-        p.manifest.name.toLowerCase().includes(q) ||
-        p.manifest.id.toLowerCase().includes(q)
+    return extensions.filter(
+      (ext) =>
+        ext.manifest.name?.toLowerCase().includes(q) ||
+        ext.manifest.displayName?.toLowerCase().includes(q) ||
+        ext.manifest.description?.toLowerCase().includes(q)
     );
-  }, [plugins, searchQuery]);
+  }, [extensions, searchQuery]);
+
+  const installed = filtered.filter((ext) => ext.activated);
+  const discovered = filtered.filter((ext) => !ext.activated);
+
+  const openDetail = (ext: ExtensionState) => {
+    dispatch(
+      openExtensionDetail({
+        extId: ext.id,
+        name: ext.manifest.displayName || ext.manifest.name,
+        description: ext.manifest.description,
+      })
+    );
+  };
+
+  const toggleSection = (section: keyof SectionState) => {
+    setExpanded((prev) => ({ ...prev, [section]: !prev[section] }));
+  };
+
+  const renderSection = (
+    title: string,
+    sectionKey: keyof SectionState,
+    list: ExtensionState[]
+  ) => (
+    <div className="extensions-section">
+      <div className="extensions-section__header" onClick={() => toggleSection(sectionKey)}>
+        <span className={`extensions-section__chevron ${expanded[sectionKey] ? 'expanded' : ''}`}>▶</span>
+        <span className="extensions-section__title">{title}</span>
+        <span className="extensions-section__count">{list.length}</span>
+      </div>
+      {expanded[sectionKey] && (
+        <div className="extensions-section__list">
+          {list.length === 0 ? (
+            <div className="extensions-section__empty">
+              {sectionKey === 'installed' ? '暂无已启用扩展' : '暂无未启用扩展'}
+            </div>
+          ) : (
+            list.map((ext) => {
+              const manifest = ext.manifest;
+              const displayName = manifest.displayName || manifest.name;
+              const publisher = manifest.publisher || manifest.author || t('extensionsPanel.unknownAuthor');
+              return (
+                <div
+                  key={ext.id}
+                  className="extension-item"
+                  onClick={() => openDetail(ext)}
+                >
+                  <div className="extension-item__icon">
+                    <Puzzle size={20} strokeWidth={1.5} />
+                  </div>
+                  <div className="extension-item__info">
+                    <div className="extension-item__name-row">
+                      <span className="extension-item__name" title={displayName}>
+                        {displayName}
+                      </span>
+                      <span className={`extension-item__status ${ext.activated ? 'active' : 'inactive'}`}>
+                        {ext.activated ? '已启用' : '未启用'}
+                      </span>
+                    </div>
+                    <div className="extension-item__meta">
+                      v{manifest.version} · {publisher}
+                    </div>
+                    {manifest.description && (
+                      <div className="extension-item__description" title={manifest.description}>
+                        {manifest.description}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
+    </div>
+  );
 
   return (
     <div className="extensions-panel">
@@ -54,77 +150,20 @@ const ExtensionsPanel = () => {
             onChange={(e) => setSearchQuery(e.target.value)}
           />
         </div>
-        <div className="extensions-actions">
-          <button onClick={refresh}>{t('extensionsPanel.refresh')}</button>
-          <button
-            onClick={() => {
-              // 触发示例命令
-              const manager = getPluginManager();
-              if (manager) {
-                try {
-                  manager.getCommandManager().executeCommand('hello-world.sayHello');
-                } catch (err) {
-                  console.error(err);
-                }
-              }
-            }}
-          >
-            {t('extensionsPanel.testCommand')}
-          </button>
-        </div>
+        <button className="extensions-refresh" onClick={refresh} disabled={loading}>
+          <RefreshCw size={12} className={loading ? 'spin' : ''} />
+          {t('extensionsPanel.refresh')}
+        </button>
       </div>
 
       <div className="extensions-list">
-        {filteredPlugins.length === 0 ? (
-          <div className="extensions-empty">
-            {searchQuery ? t('extensionsPanel.noMatching') : t('extensionsPanel.noInstalled')}
-          </div>
+        {extensions.length === 0 && !loading ? (
+          <div className="extensions-empty">{t('extensionsPanel.noInstalled')}</div>
         ) : (
-          filteredPlugins.map((plugin) => (
-            <div
-              key={plugin.id}
-              className={`extension-item ${selectedId === plugin.id ? 'active' : ''}`}
-              onClick={() => setSelectedId(plugin.id)}
-            >
-              <div className="extension-item__header">
-                <div className="extension-item__icon">
-                  <Puzzle size={16} strokeWidth={1.5} />
-                </div>
-                <div className="extension-item__info">
-                  <div className="extension-item__name">
-                    {plugin.manifest.name}
-                  </div>
-                  <div className="extension-item__meta">
-                    v{plugin.manifest.version} · {plugin.manifest.author || t('extensionsPanel.unknownAuthor')}
-                  </div>
-                </div>
-                <span
-                  className={`extension-item__status ${
-                    plugin.error
-                      ? 'extension-item__status--error'
-                      : plugin.isActive
-                      ? 'extension-item__status--active'
-                      : 'extension-item__status--inactive'
-                  }`}
-                >
-                  {plugin.error ? t('extensionsPanel.statusError') : plugin.isActive ? t('extensionsPanel.statusActive') : t('extensionsPanel.statusInactive')}
-                </span>
-              </div>
-              {plugin.manifest.description && (
-                <div className="extension-item__description">
-                  {plugin.manifest.description}
-                </div>
-              )}
-              {plugin.error && (
-                <div
-                  className="extension-item__description"
-                  style={{ color: '#f44747' }}
-                >
-                  {plugin.error}
-                </div>
-              )}
-            </div>
-          ))
+          <>
+            {renderSection('已安装', 'installed', installed)}
+            {renderSection('已发现', 'discovered', discovered)}
+          </>
         )}
       </div>
     </div>

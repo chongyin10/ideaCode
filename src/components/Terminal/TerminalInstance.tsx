@@ -1,4 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
+import { Loader2 } from 'lucide-react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import type { SearchAddon as SearchAddonType } from '@xterm/addon-search';
@@ -207,8 +208,21 @@ export const TerminalInstance = forwardRef<TerminalInstanceHandle, TerminalInsta
         if (!terminal) return;
 
         if (event.type === 'data' && event.data) {
-          terminal.write(event.data);
-          trackOutput(event.data.length);
+          let data = event.data;
+          if (tab?.outputFilter) {
+            try {
+              const regex = new RegExp(tab.outputFilter, 'gi');
+              data = data.replace(regex, '');
+              // 过滤后去掉开头的空行，避免残留 \r\n 导致顶部空白
+              data = data.replace(/^[\r\n]+/, '');
+            } catch {
+              // 非法正则则忽略过滤
+            }
+          }
+          if (data) {
+            terminal.write(data);
+            trackOutput(data.length);
+          }
         } else if (event.type === 'exit') {
           terminal.write(
             `\r\n\x1b[33m[进程已退出，退出码: ${event.exitCode}]\x1b[0m\r\n`
@@ -436,7 +450,14 @@ export const TerminalInstance = forwardRef<TerminalInstanceHandle, TerminalInsta
         className={`terminal-instance ${className}`}
         style={style}
         data-terminal-id={terminalId}
-      />
+      >
+        {(tab?.connecting || !tab?.ready) && (
+          <div className="terminal-instance__loading">
+            <Loader2 size={20} className="spin" />
+            <span>{tab?.connecting ? '连接中...' : '正在启动终端...'}</span>
+          </div>
+        )}
+      </div>
     );
   }
 );

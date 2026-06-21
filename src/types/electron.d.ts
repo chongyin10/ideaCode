@@ -192,6 +192,8 @@ export interface ElectronAPI {
     startHost: () => Promise<{ success: boolean }>;
     stopHost: () => Promise<{ success: boolean }>;
     rpc: (method: string, params: unknown) => Promise<ExtensionRpcResult>;
+    install: (extPath: string) => Promise<{ success: boolean; stdout?: string; stderr?: string; code?: number; error?: string }>;
+    uninstall: (extPath: string) => Promise<{ success: boolean; error?: string }>;
     onMessage: (callback: (data: ExtensionMessage) => void) => () => void;
   };
 

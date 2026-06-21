@@ -212,6 +212,11 @@ function App() {
     if (vscode) vscode.postMessage({ command: 'execute', sessionId, cmd: command.trim() });
   };
 
+  const handleOpenTerminal = (conn: SshConnection) => {
+    const vscode = getVsCodeApi();
+    if (vscode) vscode.postMessage({ command: 'openTerminal', connectionId: conn.id });
+  };
+
   const getConnectionName = (connectionId: string) => {
     return connections.find((c) => c.id === connectionId)?.name || connectionId;
   };
@@ -285,6 +290,11 @@ function App() {
                     >
                       {connected ? '断开' : connecting ? '连接中' : '连接'}
                     </button>
+                    {connected && (
+                      <button className="btn btn-sm btn-secondary" onClick={() => handleOpenTerminal(conn)}>
+                        终端
+                      </button>
+                    )}
                     <button className="btn btn-sm btn-secondary" onClick={() => handleEdit(conn)}>
                       编辑
                     </button>

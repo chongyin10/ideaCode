@@ -78,6 +78,28 @@ const vscode = {
         },
       };
     },
+    createTerminal: (options) => {
+      return new Promise((resolve, reject) => {
+        if (typeof process !== 'undefined' && process.send) {
+          const id = Date.now() + Math.random();
+          process.send({ jsonrpc: '2.0', id, method: 'terminal.create', params: options });
+          const handler = (msg) => {
+            if (msg.id === id) {
+              process.removeListener('message', handler);
+              if (msg.error) reject(new Error(msg.error.message));
+              else resolve(msg.result);
+            }
+          };
+          process.on('message', handler);
+          setTimeout(() => {
+            process.removeListener('message', handler);
+            reject(new Error('Terminal creation timeout'));
+          }, 30000);
+        } else {
+          reject(new Error('Extension Host not connected'));
+        }
+      });
+    },
   },
   workspace: {
     getConfiguration: () => ({

@@ -2,6 +2,7 @@ const { registerDialogHandlers } = require('./dialogHandler.cjs');
 const { registerFsHandlers } = require('./fsHandler.cjs');
 const { registerWindowHandlers } = require('./windowHandler.cjs');
 const { registerExtensionHandlers } = require('./extensionHandler.cjs');
+const { registerExtensionInstallHandlers } = require('./extensionInstallHandler.cjs');
 const { registerHistoryHandlers } = require('./historyHandler.cjs');
 const { registerGitHandlers } = require('./gitHandler.cjs');
 const { registerTsServerHandlers } = require('../lsp/tsserverManager.cjs');
@@ -28,6 +29,8 @@ function registerIpcHandlers(deps = {}) {
   if (extensionHostManager) {
     registerExtensionHandlers(extensionHostManager);
   }
+
+  registerExtensionInstallHandlers();
 
   if (historyManager) {
     registerHistoryHandlers(historyManager);

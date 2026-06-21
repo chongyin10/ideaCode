@@ -43,6 +43,15 @@ class ExtensionManager {
   async scanExtensions() {
     const results = [];
     console.log('[ExtensionHost] 开始扫描扩展目录:', this.extensionsDir);
+    // 清理已不存在的扩展（例如被卸载）
+    for (const [id, ext] of this.extensions) {
+      try {
+        await fs.access(ext.path);
+      } catch {
+        console.log('[ExtensionHost] 扩展目录已不存在，移除:', id);
+        this.extensions.delete(id);
+      }
+    }
     try {
       const entries = await fs.readdir(this.extensionsDir, { withFileTypes: true });
       console.log('[ExtensionHost] 目录条目数:', entries.length);
@@ -62,7 +71,7 @@ class ExtensionManager {
               active: false,
               context: null,
             });
-            results.push({ id: manifest.name, manifest });
+            results.push({ id: manifest.name, manifest, path: extPath });
           }
         } catch (err) {
           console.log('[ExtensionHost] 扩展目录无效:', entry.name, err.message);
@@ -202,6 +211,7 @@ class ExtensionManager {
     return Array.from(this.extensions.values()).map((ext) => ({
       id: ext.manifest.name,
       manifest: ext.manifest,
+      path: ext.path,
       active: ext.active,
     }));
   }
@@ -212,6 +222,7 @@ class ExtensionManager {
     return {
       id: ext.manifest.name,
       manifest: ext.manifest,
+      path: ext.path,
       active: ext.active,
     };
   }

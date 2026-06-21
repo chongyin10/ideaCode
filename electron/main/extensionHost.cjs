@@ -195,8 +195,9 @@ class ExtensionHostManager {
         case 'tree.register':
         case 'tree.unregister':
         case 'webviewView.register':
-        case 'webviewView.unregister': {
-          // 广播到渲染进程处理 WebView
+        case 'webviewView.unregister':
+        case 'terminal.create': {
+          // 广播到渲染进程处理 WebView / 终端
           this.windowManager.broadcast(Channels.EXTENSION_MESSAGE, {
             method,
             params,

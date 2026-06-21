@@ -35,6 +35,8 @@ const Channels = {
   EXTENSION_HOST_STOP: 'extensionHost:stop',
   EXTENSION_HOST_RPC: 'extensionHost:rpc',
   EXTENSION_HOST_MESSAGE: 'extensionHost:message',
+  EXTENSION_INSTALL: 'extension:install',
+  EXTENSION_UNINSTALL: 'extension:uninstall',
   APP_QUIT: 'app:quit',
   APP_RELAUNCH: 'app:relaunch',
   MENU_OPEN_FOLDER: 'menu:open-folder',
@@ -184,6 +186,8 @@ const electronAPI = {
     startHost: () => ipcRenderer.invoke(Channels.EXTENSION_HOST_START),
     stopHost: () => ipcRenderer.invoke(Channels.EXTENSION_HOST_STOP),
     rpc: (method, params) => ipcRenderer.invoke(Channels.EXTENSION_HOST_RPC, method, params),
+    install: (extPath) => ipcRenderer.invoke(Channels.EXTENSION_INSTALL, extPath),
+    uninstall: (extPath) => ipcRenderer.invoke(Channels.EXTENSION_UNINSTALL, extPath),
     onMessage: (callback) => onChannel(Channels.EXTENSION_MESSAGE, callback),
   },
 

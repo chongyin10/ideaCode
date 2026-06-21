@@ -27,6 +27,7 @@ import { openDirectory, warmupFileCache } from '../services/fileService';
 import TabBar from '../components/TabBar';
 import MonacoEditor from '../components/MonacoEditor';
 import DiffEditorPanel from '../components/DiffEditorPanel';
+import ExtensionDetail from '../components/ExtensionDetail';
 import ConfirmDialog, { type ConfirmResult } from '../components/ConfirmDialog';
 import QuickOpen from '../components/QuickOpen';
 import GitSetupPanel from '../components/GitSetupPanel';
@@ -669,7 +670,7 @@ function Home() {
             onContextMenu={(e, id) => handleTabContextMenu(e, id, groupIndex)}
             onPin={() => dispatch(pinPreviewFile())}
             onReorder={(fromId, toId, position) => dispatch(reorderTab({ fromId, toId, position }))}
-            onSplitView={() => dispatch(toggleSplitView())}
+            onSplitView={file?.language === 'extension' ? undefined : () => dispatch(toggleSplitView())}
             splitActive={splitView}
             focused={focused}
             loadingFiles={loadingFiles}
@@ -677,7 +678,9 @@ function Home() {
           />
           <div className="editor-area">
             {file ? (
-              file.isDiff && file.diffData ? (
+              file.language === 'extension' ? (
+                <ExtensionDetail key={`ext-${file.id}-${group.id}`} extensionId={file.id.replace('extension://', '')} />
+              ) : file.isDiff && file.diffData ? (
                 <DiffEditorPanel key={`diff-${file.id}-${group.id}`} diffData={file.diffData} groupId={group.id} />
               ) : (
                 <MonacoEditor

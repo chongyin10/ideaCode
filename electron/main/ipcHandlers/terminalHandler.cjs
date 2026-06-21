@@ -310,6 +310,7 @@ async function createTerminalProcess(config, cwd, cols, rows, ownerWindow, owner
   }
 
   const shellConfig = config.shellConfig || getDefaultShell();
+  const hasExplicitExecutable = !!config.executable;
   const shellPath = config.executable || shellConfig.path;
   const shellArgs = config.args || shellConfig.args || [];
   const env = { ...process.env, ...(config.env || {}) };
@@ -342,19 +343,27 @@ async function createTerminalProcess(config, cwd, cols, rows, ownerWindow, owner
   // 终端现在直接渲染在主窗口 DOM 中，无需再创建 BrowserView
 
   // 尝试主 shell，失败后使用常见 fallback
+  // 如果调用方显式指定了 executable（例如 SSH 的 'ssh'），则只尝试该程序，不再 fallback
   const fallbackShells = ['/bin/zsh', '/bin/bash', '/bin/sh'];
-  const shellsToTry = new Set([
-    shellPath,
-    ...(process.env.SHELL && fs.existsSync(process.env.SHELL) ? [process.env.SHELL] : []),
-    ...fallbackShells,
-  ]);
+  const shellsToTry = hasExplicitExecutable
+    ? [shellPath]
+    : new Set([
+        shellPath,
+        ...(process.env.SHELL && fs.existsSync(process.env.SHELL) ? [process.env.SHELL] : []),
+        ...fallbackShells,
+      ]);
 
   let lastError = null;
   for (const tryPath of shellsToTry) {
-    if (!tryPath || !fs.existsSync(tryPath)) continue;
+    if (!tryPath) continue;
+    if (!hasExplicitExecutable && !fs.existsSync(tryPath)) continue;
 
     const basename = path.basename(tryPath);
-    const tryArgs = basename === 'zsh' || basename === 'bash' ? ['-l'] : [];
+    const tryArgs = hasExplicitExecutable
+      ? shellArgs
+      : basename === 'zsh' || basename === 'bash'
+        ? ['-l']
+        : [];
 
     try {
       const ptyProcess = ptyModule.spawn(tryPath, tryArgs, {

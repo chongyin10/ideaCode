@@ -10,6 +10,10 @@ export interface TerminalTab {
   profile?: TerminalProfile;
   cwd?: string;
   ready: boolean;
+  /** 连接中（例如 SSH 自动输入密码阶段） */
+  connecting?: boolean;
+  /** 输出过滤正则（字符串形式），用于隐藏密码提示等 */
+  outputFilter?: string;
   exited: boolean;
   exitCode?: number;
   bookmarks: TerminalBookmark[];
@@ -172,8 +176,8 @@ const terminalSlice = createSlice({
   initialState,
   reducers: {
     /* — 终端 Tab 生命周期 — */
-    addTab(state, action: PayloadAction<{ id?: string; name?: string; profile?: TerminalProfile; isEditor?: boolean; processId?: number }>) {
-      const { id: providedId, name, profile, isEditor, processId } = action.payload;
+    addTab(state, action: PayloadAction<{ id?: string; name?: string; profile?: TerminalProfile; isEditor?: boolean; processId?: number; outputFilter?: string }>) {
+      const { id: providedId, name, profile, isEditor, processId, outputFilter } = action.payload;
       const id = providedId || nextTabId();
       const tab: TerminalTab = {
         id,
@@ -181,6 +185,7 @@ const terminalSlice = createSlice({
         name: name || profile?.name || '终端',
         profile,
         ready: false,
+        outputFilter,
         exited: false,
         bookmarks: [],
         isBroadcastReceiver: false,
@@ -243,6 +248,13 @@ const terminalSlice = createSlice({
       if (tab) {
         tab.ready = true;
         tab.cwd = action.payload.cwd;
+      }
+    },
+
+    setTabConnecting(state, action: PayloadAction<{ id: string; connecting: boolean }>) {
+      const tab = state.tabs[action.payload.id];
+      if (tab) {
+        tab.connecting = action.payload.connecting;
       }
     },
 
@@ -483,7 +495,7 @@ const terminalSlice = createSlice({
 
 export const {
   addTab, removeTab, removeEditorTerminal,
-  setTabProcessId, setTabReady, setTabExited, setTabCwd, renameTab,
+  setTabProcessId, setTabReady, setTabConnecting, setTabExited, setTabCwd, renameTab,
   setPanelVisible, togglePanel, setPanelHeight, toggleMaximize, setSidebarWidth,
   setActiveGroup, splitPane, closePane, setActivePane,
   reorderTerminalTab,

@@ -274,6 +274,28 @@ async function activate(context) {
         break;
       }
 
+      case 'openTerminal': {
+        const conn = connections.find((c) => c.id === message.connectionId);
+        if (!conn) return;
+        const terminalName = `${conn.name} ${conn.host}`;
+        const options = {
+          name: terminalName,
+          executable: 'ssh',
+          args: ['-p', String(conn.port || 22), `${conn.username}@${conn.host}`],
+        };
+        // 密码认证时自动输入密码，并过滤掉密码提示行，避免显示不美观
+        if (conn.authType === 'password' && conn.password) {
+          options.input = conn.password;
+          options.outputFilter = '[^\\r\\n]*password:\\s*\\r?\\n?';
+        }
+        try {
+          await vscode.window.createTerminal(options);
+        } catch (err) {
+          console.error('[SSH Extension] 创建终端失败:', err.message);
+        }
+        break;
+      }
+
       case 'execute': {
         const execSession = sessions.get(message.sessionId);
         if (!execSession || execSession.status !== 'connected') return;

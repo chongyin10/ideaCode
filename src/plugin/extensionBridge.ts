@@ -18,8 +18,10 @@
 import type { Store } from '@reduxjs/toolkit';
 import type { RootState } from '../store';
 import { openFile } from '../store/slices/workspaceSlice';
+import { addPanelToOrder, removePanelFromOrder } from '../store/slices/layoutSlice';
 import { getPluginManager } from './core';
 import type { PluginManifest } from './types';
+import { terminalSDK } from '../services/terminalSDK';
 import {
   registerViewContainer,
   unregisterViewContainer,
@@ -30,12 +32,14 @@ import {
   setWebviewPanelHtml,
 } from '../store/slices/extensionUISlice';
 
-interface ExtensionManifest {
+export interface ExtensionManifest {
   id: string;
   name: string;
+  displayName?: string;
   version: string;
   description?: string;
   author?: string;
+  publisher?: string;
   main: string;
   activationEvents?: string[];
   contributes?: {
@@ -45,12 +49,15 @@ interface ExtensionManifest {
     views?: Record<string, Array<{ id: string; name: string; when?: string }>>;
     viewsContainers?: Record<string, Array<{ id: string; title: string; icon: string }>>;
   };
+  dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
   capabilities?: Record<string, boolean>;
 }
 
-interface ExtensionState {
+export interface ExtensionState {
   id: string;
   manifest: ExtensionManifest;
+  path: string;
   activated: boolean;
   error?: string;
 }
@@ -77,6 +84,7 @@ export class ExtensionBridge {
   private isReady = false;
   private webviewPanels: Map<string, WebViewPanel> = new Map();
   private webviewMessageCallbacks: Map<string, ((message: unknown) => void)[]> = new Map();
+  private disabledExtensions: Set<string> = new Set();
 
   constructor(store: Store<RootState>) {
     this.store = store;
@@ -359,6 +367,15 @@ export class ExtensionBridge {
       window.open(uri, '_blank');
       return { opened: true };
     });
+
+    // 终端创建（由扩展请求，转交给 TerminalSDK 处理）
+    this.rpcHandlers.set('terminal.create', (params) => {
+      const options = (params as { name?: string; cwd?: string; executable?: string; args?: string[]; env?: Record<string, string>; profile?: import('../types/electron').TerminalProfile; autoFocus?: boolean }) || {};
+      terminalSDK.createTab(options).catch((err) => {
+        console.error('[ExtensionBridge] terminalSDK.createTab 失败:', err);
+      });
+      return { queued: true };
+    });
   }
 
   /* ─── IPC 监听 ─── */
@@ -400,13 +417,15 @@ export class ExtensionBridge {
 
     try {
       const response = await window.electronAPI.extension.rpc('ext.scan', {});
-      const result = (response as { result?: { manifests: Array<{ id: string; manifest: ExtensionManifest }> } }).result;
+      const result = (response as { result?: { manifests: Array<{ id: string; manifest: ExtensionManifest; path?: string }> } }).result;
       const manifests = result?.manifests || [];
 
-      for (const { id, manifest } of manifests) {
+      for (const { id, manifest, path } of manifests) {
+        const isDisabled = this.disabledExtensions.has(id);
         this.extensions.set(id, {
           id,
           manifest,
+          path: path || '',
           activated: false,
         });
 
@@ -435,8 +454,8 @@ export class ExtensionBridge {
           manager.register(pluginManifest);
         }
 
-        // 自动激活有 onStartupFinished 的扩展
-        if (manifest.activationEvents?.includes('onStartupFinished')) {
+        // 自动激活有 onStartupFinished 的扩展（禁用的除外）
+        if (!isDisabled && manifest.activationEvents?.includes('onStartupFinished')) {
           console.log(`[ExtensionBridge] 自动激活扩展: ${id}`);
           await this.activateExtension(id);
         }
@@ -458,6 +477,8 @@ export class ExtensionBridge {
       return false;
     }
 
+    this.disabledExtensions.delete(extId);
+
     if (ext.activated) return true;
 
     try {
@@ -475,6 +496,7 @@ export class ExtensionBridge {
             icon: container.icon,
             extensionId: extId,
           }));
+          this.store.dispatch(addPanelToOrder(container.id));
         }
       }
       if (manifest.contributes?.views) {
@@ -514,6 +536,137 @@ export class ExtensionBridge {
       console.error(`[ExtensionBridge] 停用扩展失败 ${extId}:`, err);
       return false;
     }
+  }
+
+  private unregisterExtensionContributions(extId: string) {
+    const ext = this.extensions.get(extId);
+    if (!ext) return;
+    const manifest = ext.manifest;
+    if (manifest.contributes?.viewsContainers?.activitybar) {
+      for (const container of manifest.contributes.viewsContainers.activitybar) {
+        this.store.dispatch(unregisterViewContainer(container.id));
+        this.store.dispatch(removePanelFromOrder(container.id));
+      }
+    }
+    if (manifest.contributes?.views) {
+      for (const [, views] of Object.entries(manifest.contributes.views)) {
+        for (const view of views) {
+          this.store.dispatch(unregisterView(view.id));
+        }
+      }
+    }
+    const webviewPanels = this.store.getState().extensionUI.webviewPanels;
+    for (const panel of webviewPanels) {
+      if (panel.extensionId === extId) {
+        this.store.dispatch(disposeWebviewPanel(panel.id));
+      }
+    }
+  }
+
+  async disableExtension(extId: string): Promise<{ success: boolean; error?: string }> {
+    const ext = this.extensions.get(extId);
+    if (!ext?.path) return { success: false, error: '扩展不存在' };
+
+    this.disabledExtensions.add(extId);
+    await this.deactivateExtension(extId);
+    ext.activated = false;
+    this.unregisterExtensionContributions(extId);
+
+    // 删除 node_modules，使扩展进入“未启用/需重新安装依赖”状态
+    const nodeModulesPath = `${ext.path}/node_modules`;
+    try {
+      if (window.electronAPI?.fs?.delete) {
+        await window.electronAPI.fs.delete(nodeModulesPath);
+      }
+    } catch (err) {
+      console.warn(`[ExtensionBridge] 禁用扩展时删除 node_modules 失败 ${extId}:`, err);
+    }
+
+    console.log(`[ExtensionBridge] 扩展已禁用: ${extId}`);
+    return { success: true };
+  }
+
+  async enableExtension(extId: string): Promise<{ success: boolean; error?: string }> {
+    const ext = this.extensions.get(extId);
+    if (!ext?.path) return { success: false, error: '扩展不存在' };
+
+    this.disabledExtensions.delete(extId);
+
+    // 如果有依赖，先安装
+    const hasDeps = ext.manifest.dependencies && Object.keys(ext.manifest.dependencies).length > 0;
+    if (hasDeps && window.electronAPI?.extension?.install) {
+      try {
+        const installResult = await window.electronAPI.extension.install(ext.path);
+        if (!installResult.success) {
+          return { success: false, error: installResult.stderr || installResult.error || '依赖安装失败' };
+        }
+      } catch (err) {
+        return { success: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+
+    const activated = await this.activateExtension(extId);
+    if (!activated) {
+      return { success: false, error: '扩展激活失败' };
+    }
+    return { success: true };
+  }
+
+  async uninstallExtension(extId: string): Promise<{ success: boolean; error?: string }> {
+    const ext = this.extensions.get(extId);
+    if (!ext?.path) return { success: false, error: '扩展不存在' };
+
+    this.disabledExtensions.delete(extId);
+
+    // 安全检查：只能删除 extensions 目录下的文件夹
+    if (ext.path.includes('..') || !/[\\/]extensions[\\/][^\\/]+$/.test(ext.path)) {
+      return { success: false, error: `路径不在 extensions 目录下: ${ext.path}` };
+    }
+
+    if (ext.activated) {
+      await this.deactivateExtension(extId);
+    }
+
+    let deleteError: string | undefined;
+
+    // 优先使用扩展卸载 IPC（带服务端校验）
+    if (window.electronAPI?.extension?.uninstall) {
+      try {
+        const result = await window.electronAPI.extension.uninstall(ext.path);
+        if (result?.success) {
+          deleteError = undefined;
+        } else {
+          deleteError = result?.error || 'extension:uninstall 返回失败';
+        }
+      } catch (err) {
+        deleteError = err instanceof Error ? err.message : String(err);
+      }
+    } else {
+      deleteError = 'extension.uninstall 不可用';
+    }
+
+    // 如果专用 IPC 失败（主进程/Preload 未重启等情况），回退到 fs.delete
+    if (deleteError) {
+      console.warn(`[ExtensionBridge] 专用卸载通道失败，回退到 fs.delete: ${deleteError}`);
+      if (window.electronAPI?.fs?.delete) {
+        try {
+          const ok = await window.electronAPI.fs.delete(ext.path);
+          if (!ok) {
+            return { success: false, error: `fs.delete 返回 false (${deleteError})` };
+          }
+          deleteError = undefined;
+        } catch (err) {
+          return { success: false, error: `${deleteError}; fs.delete 也失败: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      } else {
+        return { success: false, error: deleteError };
+      }
+    }
+
+    this.unregisterExtensionContributions(extId);
+    this.extensions.delete(extId);
+    console.log(`[ExtensionBridge] 扩展已卸载: ${extId}`);
+    return { success: true };
   }
 
   getAllExtensions(): ExtensionState[] {

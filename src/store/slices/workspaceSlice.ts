@@ -273,6 +273,21 @@ export const openFile = createAsyncThunk(
   }
 );
 
+export const openExtensionDetail = createAsyncThunk(
+  'workspace/openExtensionDetail',
+  async ({ extId, name, description }: { extId: string; name: string; description?: string }) => {
+    const id = `extension://${extId}`;
+    return {
+      id,
+      name,
+      source: id,
+      content: description || '',
+      language: 'extension',
+      isDirty: false,
+    };
+  }
+);
+
 export const refreshDirectory = createAsyncThunk(
   'workspace/refreshDirectory',
   async (source: FileSource) => {
@@ -882,6 +897,56 @@ const workspaceSlice = createSlice({
         }
 
         // 插入到当前 active tab 后面
+        const activeIdx = group.activeFileId ? group.fileIds.indexOf(group.activeFileId) : -1;
+        if (activeIdx >= 0) {
+          group.fileIds.splice(activeIdx + 1, 0, file.id);
+        } else {
+          group.fileIds.push(file.id);
+        }
+        group.activeFileId = file.id;
+        group.tabHistory = pushToHistory(group.tabHistory, file.id);
+        syncGlobalActive(state);
+      })
+      .addCase(openExtensionDetail.fulfilled, (state, action) => {
+        if (!action.payload) return;
+        const file = action.payload;
+        if (!state.openedFiles.find((f) => f.id === file.id)) {
+          state.openedFiles.push({ ...file, isPreview: true });
+        }
+        const group = activeGroup(state);
+
+        if (group.fileIds.includes(file.id)) {
+          group.activeFileId = file.id;
+          group.tabHistory = pushToHistory(group.tabHistory, file.id);
+          syncGlobalActive(state);
+          return;
+        }
+
+        const activeFile = state.openedFiles.find((f) => f.id === group.activeFileId);
+        if (activeFile?.isPreview && !activeFile?.isDiff) {
+          const activeIdx = group.fileIds.indexOf(group.activeFileId!);
+          group.fileIds[activeIdx] = file.id;
+          group.tabHistory = removeFromHistory(group.tabHistory, group.activeFileId!);
+          group.activeFileId = file.id;
+          group.tabHistory = pushToHistory(group.tabHistory, file.id);
+          syncGlobalActive(state);
+          return;
+        }
+
+        const previewFileId = group.fileIds.find((fid) => {
+          const f = state.openedFiles.find((of) => of.id === fid);
+          return f?.isPreview && !f?.isDiff;
+        });
+        if (previewFileId) {
+          const previewIdx = group.fileIds.indexOf(previewFileId);
+          group.fileIds[previewIdx] = file.id;
+          group.tabHistory = removeFromHistory(group.tabHistory, previewFileId);
+          group.activeFileId = file.id;
+          group.tabHistory = pushToHistory(group.tabHistory, file.id);
+          syncGlobalActive(state);
+          return;
+        }
+
         const activeIdx = group.activeFileId ? group.fileIds.indexOf(group.activeFileId) : -1;
         if (activeIdx >= 0) {
           group.fileIds.splice(activeIdx + 1, 0, file.id);

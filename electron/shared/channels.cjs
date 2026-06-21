@@ -44,6 +44,8 @@ const Channels = {
   EXTENSION_HOST_RPC: 'extensionHost:rpc',
   EXTENSION_HOST_MESSAGE: 'extensionHost:message',
   EXTENSION_MESSAGE: 'extensionHost:message',
+  EXTENSION_INSTALL: 'extension:install',
+  EXTENSION_UNINSTALL: 'extension:uninstall',
 
   /* ─── 应用生命周期 ─── */
   APP_QUIT: 'app:quit',

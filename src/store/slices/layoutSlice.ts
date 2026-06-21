@@ -108,6 +108,19 @@ const layoutSlice = createSlice({
       state.bottomPanelVisible = true;
     },
     /**
+     * 将面板加入 ActivityBar 顺序（不切换激活状态）
+     */
+    addPanelToOrder: (state, action) => {
+      const panel = action.payload as PanelId;
+      if (!state.panelOrder.includes(panel)) {
+        state.panelOrder.push(panel);
+      }
+    },
+    removePanelFromOrder: (state, action) => {
+      const panel = action.payload as PanelId;
+      state.panelOrder = state.panelOrder.filter((id) => id !== panel);
+    },
+    /**
      * 拖拽重排 ActivityBar 面板顺序
      * @param payload { fromId, toId, position } 将 fromId 移到 toId 的 before/after
      */
@@ -158,6 +171,8 @@ export const {
   setBottomPanelVisible,
   switchBottomTab,
   openBottomTab,
+  addPanelToOrder,
+  removePanelFromOrder,
   reorderPanel,
   reorderBottomTab,
 } = layoutSlice.actions;
