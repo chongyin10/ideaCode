@@ -678,7 +678,7 @@ function Home() {
           <div className="editor-area">
             {file ? (
               file.isDiff && file.diffData ? (
-                <DiffEditorPanel diffData={file.diffData} />
+                <DiffEditorPanel key={`diff-${file.id}-${group.id}`} diffData={file.diffData} groupId={group.id} />
               ) : (
                 <MonacoEditor
                   key={`${file.id}-${group.id}`}

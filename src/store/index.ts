@@ -4,6 +4,7 @@ import layoutReducer from './slices/layoutSlice';
 import gitReducer from './slices/gitSlice';
 import settingsReducer, { persistSettings } from './slices/settingsSlice';
 import terminalReducer from './slices/terminalSlice';
+import extensionUIReducer from './slices/extensionUISlice';
 
 export const store = configureStore({
   reducer: {
@@ -12,6 +13,7 @@ export const store = configureStore({
     git: gitReducer,
     settings: settingsReducer,
     terminal: terminalReducer,
+    extensionUI: extensionUIReducer,
   },
 });
 

@@ -1,5 +1,5 @@
-import { useState, useRef } from 'react';
-import { Files, Search, GitBranch, Bug, Blocks, User, Settings } from 'lucide-react';
+import { useState, useRef, useMemo } from 'react';
+import { Files, Search, GitBranch, Bug, Blocks, User, Settings, Terminal, type LucideIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import { switchPanel, reorderPanel } from '../../store/slices/layoutSlice';
@@ -7,18 +7,32 @@ import type { PanelId } from '../../store/slices/layoutSlice';
 import { setSettingsVisible } from '../../store/slices/workspaceSlice';
 import './ActivityBar.css';
 
+// 动态图标映射（扩展贡献的图标名 → lucide-react 组件）
+const iconMap: Record<string, LucideIcon> = {
+  Files, Search, GitBranch, Bug, Blocks, User, Settings, Terminal,
+};
+
+function getLucideIcon(name: string): LucideIcon | null {
+  // 去掉 $(...) 包装（VSCode 图标语法）
+  const cleanName = name.replace(/^\$\((.*)\)$/, '$1');
+  // 首字母大写匹配
+  const pascal = cleanName.charAt(0).toUpperCase() + cleanName.slice(1);
+  return iconMap[pascal] || iconMap[cleanName] || null;
+}
+
 const ActivityBar = () => {
   const { t } = useTranslation();
   const dispatch = useAppDispatch();
   const activePanel = useAppSelector((state) => state.layout.activePanel);
   const panelOrder = useAppSelector((state) => state.layout.panelOrder);
+  const viewContainers = useAppSelector((state) => state.extensionUI.viewContainers);
   const gitStagedCount = Object.keys(useAppSelector((s) => s.git.staged)).length;
   const gitChangesCount = Object.keys(useAppSelector((s) => s.git.changes)).length;
   const gitMergeCount = Object.keys(useAppSelector((s) => s.git.merge)).length;
   const gitUntrackedCount = Object.keys(useAppSelector((s) => s.git.untracked)).length;
   const gitBadgeCount = gitStagedCount + gitChangesCount + gitMergeCount + gitUntrackedCount;
 
-  const panelConfig: Record<PanelId, { icon: React.ReactNode; title: string }> = {
+  const panelConfig: Record<string, { icon: React.ReactNode; title: string }> = {
     explorer: { icon: <Files size={20} strokeWidth={1.5} />, title: t('activityBar.explorer') },
     search: { icon: <Search size={20} strokeWidth={1.5} />, title: t('activityBar.search') },
     git: { icon: <GitBranch size={20} strokeWidth={1.5} />, title: t('activityBar.sourceControl') },
@@ -26,8 +40,29 @@ const ActivityBar = () => {
     extensions: { icon: <Blocks size={20} strokeWidth={1.5} />, title: t('activityBar.extensions') },
   };
 
-  // 按 panelOrder 排序的面板列表
-  const panels = panelOrder.map((id) => ({ id, ...panelConfig[id] }));
+  // 合并固定面板和扩展贡献的视图容器
+  const allPanels = useMemo(() => {
+    const panels: { id: string; icon: React.ReactNode; title: string }[] = [];
+    
+    // 固定面板（按 panelOrder）
+    for (const id of panelOrder) {
+      if (panelConfig[id]) {
+        panels.push({ id, ...panelConfig[id] });
+      }
+    }
+    
+    // 扩展贡献的视图容器
+    for (const container of viewContainers) {
+      const IconComp = getLucideIcon(container.icon);
+      panels.push({
+        id: container.id,
+        icon: IconComp ? <IconComp size={20} strokeWidth={1.5} /> : <Blocks size={20} strokeWidth={1.5} />,
+        title: container.title,
+      });
+    }
+    
+    return panels;
+  }, [panelOrder, viewContainers]);
 
   const bottomItems: { icon: React.ReactNode; title: string; action?: 'settings' }[] = [
     { icon: <User size={20} strokeWidth={1.5} />, title: t('activityBar.account') },
@@ -35,21 +70,20 @@ const ActivityBar = () => {
   ];
 
   // ── 拖拽重排状态 ──
-  const [draggingId, setDraggingId] = useState<PanelId | null>(null);
-  const [dragOverId, setDragOverId] = useState<PanelId | null>(null);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
   const [dragOverPos, setDragOverPos] = useState<'before' | 'after'>('after');
-  const draggingIdRef = useRef<PanelId | null>(null);
+  const draggingIdRef = useRef<string | null>(null);
   draggingIdRef.current = draggingId;
 
-  
-  const handleDragStart = (e: React.DragEvent, panelId: PanelId) => {
+  const handleDragStart = (e: React.DragEvent, panelId: string) => {
     setDraggingId(panelId);
     draggingIdRef.current = panelId;
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/plain', panelId);
   };
 
-  const handleDragOver = (e: React.DragEvent, panelId: PanelId) => {
+  const handleDragOver = (e: React.DragEvent, panelId: string) => {
     if (!draggingIdRef.current || draggingIdRef.current === panelId) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
@@ -61,11 +95,11 @@ const ActivityBar = () => {
     setDragOverPos(e.clientY < midY ? 'before' : 'after');
   };
 
-  const handleDragLeave = (panelId: PanelId) => {
+  const handleDragLeave = (panelId: string) => {
     if (dragOverId === panelId) setDragOverId(null);
   };
 
-  const handleDrop = (e: React.DragEvent, panelId: PanelId) => {
+  const handleDrop = (e: React.DragEvent, panelId: string) => {
     e.preventDefault();
     e.stopPropagation();
     if (!draggingIdRef.current) return;
@@ -91,7 +125,7 @@ const ActivityBar = () => {
   return (
     <div className="activity-bar">
       <div className="activity-bar__top">
-        {panels.map((p) => {
+        {allPanels.map((p) => {
           const isDragging = draggingId === p.id;
           const isDragOver = dragOverId === p.id;
           return (

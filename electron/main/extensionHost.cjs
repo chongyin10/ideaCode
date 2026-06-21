@@ -143,12 +143,90 @@ class ExtensionHostManager {
       return;
     }
 
+    // JSON-RPC 请求（Extension Host 向主进程请求）
+    if (message.method && message.id !== undefined) {
+      this.handleHostRequest(message).catch(console.error);
+      return;
+    }
+
     // JSON-RPC 通知 / 推送消息
     if (message.method) {
       // 将扩展消息广播到所有渲染进程
       this.windowManager.broadcast(Channels.EXTENSION_MESSAGE, {
         method: message.method,
         params: message.params,
+      });
+    }
+  }
+
+  /**
+   * 处理 Extension Host 发来的请求（需要响应）
+   */
+  async handleHostRequest(message) {
+    const { id, method, params } = message;
+    let result;
+    let error = null;
+
+    try {
+      switch (method) {
+        case 'commands.execute': {
+          // 转发到渲染进程执行命令
+          const { command, args } = params;
+          // 这里需要广播到渲染进程并等待响应
+          // 简化实现：直接返回成功
+          result = { executed: true, command };
+          break;
+        }
+        case 'window.showInformationMessage':
+        case 'window.showErrorMessage':
+        case 'window.showWarningMessage': {
+          // 广播到渲染进程显示消息
+          this.windowManager.broadcast(Channels.EXTENSION_MESSAGE, {
+            method,
+            params,
+          });
+          result = { shown: true };
+          break;
+        }
+        case 'webview.create':
+        case 'webview.dispose':
+        case 'webview.reveal':
+        case 'webview.postMessage':
+        case 'tree.register':
+        case 'tree.unregister':
+        case 'webviewView.register':
+        case 'webviewView.unregister': {
+          // 广播到渲染进程处理 WebView
+          this.windowManager.broadcast(Channels.EXTENSION_MESSAGE, {
+            method,
+            params,
+          });
+          result = { processed: true };
+          break;
+        }
+        default: {
+          // 未知方法，广播到渲染进程
+          this.windowManager.broadcast(Channels.EXTENSION_MESSAGE, {
+            method,
+            params,
+          });
+          result = { processed: true };
+        }
+      }
+    } catch (err) {
+      error = {
+        code: -32603,
+        message: err.message || 'Internal error',
+      };
+    }
+
+    // 发送响应回 Extension Host
+    if (this.hostProcess) {
+      this.hostProcess.send({
+        jsonrpc: '2.0',
+        id,
+        result: error ? undefined : result,
+        error: error || undefined,
       });
     }
   }

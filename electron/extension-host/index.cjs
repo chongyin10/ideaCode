@@ -29,10 +29,531 @@ process.on('message', (message) => {
 });
 
 /* ────────────────────────────────────────────── */
-/*  扩展宿主内置能力                               */
+/*  扩展管理器                                     */
 /* ────────────────────────────────────────────── */
 
-// 文件系统搜索（模拟扩展的搜索能力）
+class ExtensionManager {
+  constructor() {
+    this.extensions = new Map(); // id -> { manifest, path, active, context }
+    // 使用 __dirname 定位扩展目录（从 extension-host 向上两级到项目根目录）
+    this.extensionsDir = path.resolve(__dirname, '..', '..', 'extensions');
+    console.log('[ExtensionHost] 扩展目录:', this.extensionsDir);
+  }
+
+  async scanExtensions() {
+    const results = [];
+    console.log('[ExtensionHost] 开始扫描扩展目录:', this.extensionsDir);
+    try {
+      const entries = await fs.readdir(this.extensionsDir, { withFileTypes: true });
+      console.log('[ExtensionHost] 目录条目数:', entries.length);
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const extPath = path.join(this.extensionsDir, entry.name);
+        const manifestPath = path.join(extPath, 'package.json');
+        console.log('[ExtensionHost] 检查扩展:', entry.name, manifestPath);
+        try {
+          const raw = await fs.readFile(manifestPath, 'utf-8');
+          const manifest = JSON.parse(raw);
+          console.log('[ExtensionHost] 找到扩展:', manifest.name, 'main:', manifest.main);
+          if (manifest.name && manifest.main) {
+            this.extensions.set(manifest.name, {
+              manifest,
+              path: extPath,
+              active: false,
+              context: null,
+            });
+            results.push({ id: manifest.name, manifest });
+          }
+        } catch (err) {
+          console.log('[ExtensionHost] 扩展目录无效:', entry.name, err.message);
+        }
+      }
+    } catch (err) {
+      console.error('[ExtensionHost] 扩展目录不存在或无法读取:', this.extensionsDir, err.message);
+    }
+    console.log('[ExtensionHost] 扫描完成，找到', results.length, '个扩展');
+    return results;
+  }
+
+  async activateExtension(extId) {
+    const ext = this.extensions.get(extId);
+    if (!ext || ext.active) return false;
+
+    try {
+      const mainPath = path.join(ext.path, ext.manifest.main);
+      const module = require(mainPath);
+      
+      if (module.activate) {
+        // 创建 vscode API 上下文
+        const context = this.createExtensionContext(ext);
+        await module.activate(context);
+        ext.context = context;
+        ext.active = true;
+        return true;
+      }
+    } catch (err) {
+      console.error(`[ExtensionHost] 激活扩展失败 ${extId}:`, err.message);
+      return false;
+    }
+    return false;
+  }
+
+  async deactivateExtension(extId) {
+    const ext = this.extensions.get(extId);
+    if (!ext || !ext.active) return false;
+
+    try {
+      const mainPath = path.join(ext.path, ext.manifest.main);
+      const module = require(mainPath);
+      
+      if (module.deactivate) {
+        await module.deactivate();
+      }
+      
+      // 清理 subscriptions
+      if (ext.context && ext.context.subscriptions) {
+        for (const dispose of ext.context.subscriptions) {
+          try { dispose(); } catch { /* ignore */ }
+        }
+      }
+      
+      ext.active = false;
+      ext.context = null;
+      return true;
+    } catch (err) {
+      console.error(`[ExtensionHost] 停用扩展失败 ${extId}:`, err.message);
+      return false;
+    }
+  }
+
+  createExtensionContext(ext) {
+    const subscriptions = [];
+    
+    return {
+      subscriptions,
+      extensionPath: ext.path,
+      extensionUri: { fsPath: ext.path, scheme: 'file' },
+      
+      // 全局状态存储（通过主进程代理）
+      globalState: {
+        get: async (key, defaultValue) => {
+          const result = await rpc.request('storage.get', { 
+            prefix: ext.manifest.name, 
+            key, 
+            defaultValue 
+          });
+          return result.value;
+        },
+        update: async (key, value) => {
+          await rpc.request('storage.set', { 
+            prefix: ext.manifest.name, 
+            key, 
+            value 
+          });
+        },
+      },
+      
+      // 工作区状态存储
+      workspaceState: {
+        get: async (key, defaultValue) => {
+          const result = await rpc.request('storage.get', { 
+            prefix: `workspace:${ext.manifest.name}`, 
+            key, 
+            defaultValue 
+          });
+          return result.value;
+        },
+        update: async (key, value) => {
+          await rpc.request('storage.set', { 
+            prefix: `workspace:${ext.manifest.name}`, 
+            key, 
+            value 
+          });
+        },
+      },
+      
+      // 密钥存储
+      secrets: {
+        get: async (key) => {
+          const result = await rpc.request('secrets.get', { 
+            extensionId: ext.manifest.name, 
+            key 
+          });
+          return result.value;
+        },
+        store: async (key, value) => {
+          await rpc.request('secrets.store', { 
+            extensionId: ext.manifest.name, 
+            key, 
+            value 
+          });
+        },
+        delete: async (key) => {
+          await rpc.request('secrets.delete', { 
+            extensionId: ext.manifest.name, 
+            key 
+          });
+        },
+      },
+    };
+  }
+
+  getAllExtensions() {
+    return Array.from(this.extensions.values()).map((ext) => ({
+      id: ext.manifest.name,
+      manifest: ext.manifest,
+      active: ext.active,
+    }));
+  }
+
+  getExtension(extId) {
+    const ext = this.extensions.get(extId);
+    if (!ext) return null;
+    return {
+      id: ext.manifest.name,
+      manifest: ext.manifest,
+      active: ext.active,
+    };
+  }
+}
+
+const manager = new ExtensionManager();
+
+/* ────────────────────────────────────────────── */
+/*  VSCode 兼容 API                               */
+/* ────────────────────────────────────────────── */
+
+// 创建全局 vscode 对象
+const vscode = {
+  // 窗口 API
+  window: {
+    showInformationMessage: (message, ...items) => {
+      return rpc.request('window.showInformationMessage', { message, items });
+    },
+    showErrorMessage: (message, ...items) => {
+      return rpc.request('window.showErrorMessage', { message, items });
+    },
+    showWarningMessage: (message, ...items) => {
+      return rpc.request('window.showWarningMessage', { message, items });
+    },
+    
+    // WebView - 插件渲染自定义 UI 的主要方式
+    createWebviewPanel: (viewType, title, showOptions, options) => {
+      const panelId = `webview-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+      
+      // 通知渲染进程创建 WebView 面板
+      rpc.notify('webview.create', {
+        id: panelId,
+        viewType,
+        title,
+        showOptions,
+        options,
+        extensionPath: manager.extensions.get(viewType.split('.')[0])?.path,
+      });
+      
+      return {
+        id: panelId,
+        viewType,
+        title,
+        webview: {
+          html: '',
+          options: {},
+          postMessage: (message) => {
+            rpc.notify('webview.postMessage', { id: panelId, message });
+          },
+          onDidReceiveMessage: (callback) => {
+            // 通过事件监听
+            const handler = (msg) => {
+              if (msg.method === 'webview.message' && msg.params?.id === panelId) {
+                callback(msg.params.message);
+              }
+            };
+            // 注册到 rpc 的通用消息处理器
+            return { dispose: () => {} };
+          },
+          asWebviewUri: (localResource) => {
+            // 将本地资源路径转换为 webview URI
+            return `ideacode-webview-resource://${localResource.fsPath}`;
+          },
+          cspSource: "ideacode-webview-resource:",
+        },
+        onDidDispose: (callback) => {
+          return { dispose: () => {} };
+        },
+        onDidChangeViewState: (callback) => {
+          return { dispose: () => {} };
+        },
+        reveal: (viewColumn) => {
+          rpc.notify('webview.reveal', { id: panelId, viewColumn });
+        },
+        dispose: () => {
+          rpc.notify('webview.dispose', { id: panelId });
+        },
+      };
+    },
+    
+    // 输入框
+    showInputBox: (options) => {
+      return rpc.request('window.showInputBox', options);
+    },
+    
+    // 快速选择
+    showQuickPick: (items, options) => {
+      return rpc.request('window.showQuickPick', { items, options });
+    },
+    
+    // 打开文件选择器
+    showOpenDialog: (options) => {
+      return rpc.request('window.showOpenDialog', options);
+    },
+    
+    // 保存文件选择器
+    showSaveDialog: (options) => {
+      return rpc.request('window.showSaveDialog', options);
+    },
+    
+    // 注册树数据提供者（用于 Activity Bar 的侧边栏视图）
+    registerTreeDataProvider: (viewId, treeDataProvider) => {
+      rpc.notify('tree.register', { viewId, treeDataProvider });
+      return {
+        dispose: () => {
+          rpc.notify('tree.unregister', { viewId });
+        },
+      };
+    },
+    
+    // 注册 WebView 提供者（用于 Activity Bar 的自定义视图）
+    registerWebviewViewProvider: (viewId, provider) => {
+      rpc.notify('webviewView.register', { viewId });
+      return {
+        dispose: () => {
+          rpc.notify('webviewView.unregister', { viewId });
+        },
+      };
+    },
+  },
+  
+  // 工作区 API
+  workspace: {
+    getConfiguration: (section) => {
+      return {
+        get: (key, defaultValue) => defaultValue,
+        update: () => {},
+        has: () => false,
+        inspect: () => undefined,
+      };
+    },
+    
+    openTextDocument: (uri) => {
+      return rpc.request('workspace.openTextDocument', { uri });
+    },
+    
+    saveAll: () => {
+      return rpc.request('workspace.saveAll', {});
+    },
+    
+    getWorkspaceFolders: () => {
+      return rpc.request('workspace.getWorkspaceFolders', {});
+    },
+    
+    onDidChangeConfiguration: (callback) => {
+      return { dispose: () => {} };
+    },
+    
+    onDidOpenTextDocument: (callback) => {
+      return { dispose: () => {} };
+    },
+    
+    onDidCloseTextDocument: (callback) => {
+      return { dispose: () => {} };
+    },
+    
+    onDidSaveTextDocument: (callback) => {
+      return { dispose: () => {} };
+    },
+  },
+  
+  // 命令 API
+  commands: {
+    registerCommand: (command, handler) => {
+      rpc.on(`command.${command}`, async (params) => {
+        return handler(...(params.args || []));
+      });
+      return {
+        dispose: () => {
+          rpc.handlers.delete(`command.${command}`);
+        },
+      };
+    },
+    
+    executeCommand: (command, ...args) => {
+      return rpc.request('commands.execute', { command, args });
+    },
+    
+    getCommands: () => {
+      return rpc.request('commands.getCommands', {});
+    },
+  },
+  
+  // 语言 API
+  languages: {
+    registerDocumentSemanticTokensProvider: () => {
+      return { dispose: () => {} };
+    },
+    
+    registerCompletionItemProvider: () => {
+      return { dispose: () => {} };
+    },
+    
+    registerHoverProvider: () => {
+      return { dispose: () => {} };
+    },
+    
+    registerDefinitionProvider: () => {
+      return { dispose: () => {} };
+    },
+    
+    registerCodeActionsProvider: () => {
+      return { dispose: () => {} };
+    },
+  },
+  
+  // 环境 API
+  env: {
+    appName: 'IDEACODE',
+    appRoot: process.cwd(),
+    language: 'zh-CN',
+    machineId: 'unknown',
+    sessionId: 'unknown',
+    shell: process.env.SHELL || '',
+    clipboard: {
+      writeText: (text) => {
+        return rpc.request('env.clipboard.writeText', { text });
+      },
+      readText: () => {
+        return rpc.request('env.clipboard.readText', {});
+      },
+    },
+    openExternal: (uri) => {
+      return rpc.request('env.openExternal', { uri: uri.toString() });
+    },
+  },
+  
+  // URI 工具
+  Uri: {
+    file: (path) => ({ fsPath: path, scheme: 'file' }),
+    parse: (uri) => {
+      const match = uri.match(/^([^:]+):\/\/(.+)$/);
+      if (match) {
+        return { scheme: match[1], fsPath: match[2] };
+      }
+      return { scheme: 'file', fsPath: uri };
+    },
+  },
+  
+  // 事件 API
+  EventEmitter: class EventEmitter {
+    constructor() {
+      this.listeners = [];
+    }
+    
+    event(callback) {
+      this.listeners.push(callback);
+      return {
+        dispose: () => {
+          const idx = this.listeners.indexOf(callback);
+          if (idx >= 0) this.listeners.splice(idx, 1);
+        },
+      };
+    }
+    
+    fire(data) {
+      for (const listener of this.listeners) {
+        listener(data);
+      }
+    }
+    
+    dispose() {
+      this.listeners = [];
+    }
+  },
+  
+  // Disposable 工具
+  Disposable: class Disposable {
+    constructor(callOnDispose) {
+      this.callOnDispose = callOnDispose;
+    }
+    
+    dispose() {
+      if (this.callOnDispose) {
+        this.callOnDispose();
+      }
+    }
+    
+    static from(...disposables) {
+      return new Disposable(() => {
+        for (const d of disposables) {
+          d.dispose();
+        }
+      });
+    }
+  },
+  
+  // 版本
+  version: '1.0.0',
+};
+
+// 将 vscode 对象挂载到全局
+global.vscode = vscode;
+
+/* ────────────────────────────────────────────── */
+/*  JSON-RPC 方法注册                              */
+/* ────────────────────────────────────────────── */
+
+// 扫描扩展
+rpc.on('ext.scan', async () => {
+  const manifests = await manager.scanExtensions();
+  return { manifests };
+});
+
+// 激活扩展
+rpc.on('ext.activate', async (params) => {
+  const { extId } = params;
+  const result = await manager.activateExtension(extId);
+  return { success: result };
+});
+
+// 停用扩展
+rpc.on('ext.deactivate', async (params) => {
+  const { extId } = params;
+  const result = await manager.deactivateExtension(extId);
+  return { success: result };
+});
+
+// 获取所有扩展
+rpc.on('ext.getAll', async () => {
+  return { extensions: manager.getAllExtensions() };
+});
+
+// 获取单个扩展
+rpc.on('ext.get', async (params) => {
+  const { extId } = params;
+  return { extension: manager.getExtension(extId) };
+});
+
+// 扩展宿主健康检查
+rpc.on('host.ping', async () => {
+  return { pong: true, timestamp: Date.now() };
+});
+
+// 关闭扩展宿主
+rpc.on('host.shutdown', async () => {
+  console.log('[ExtensionHost] 收到关闭信号，正在退出...');
+  setTimeout(() => process.exit(0), 100);
+  return { shuttingDown: true };
+});
+
+// 文件系统搜索
 rpc.on('fs.search', async (params) => {
   const { rootPath, query, maxResults = 100 } = params;
   const results = [];
@@ -73,7 +594,7 @@ rpc.on('fs.search', async (params) => {
   return { results, total: count };
 });
 
-// 文件内容分析（模拟扩展的语言分析能力）
+// 文件内容分析
 rpc.on('fs.analyze', async (params) => {
   const { filePath } = params;
   const stat = await fs.stat(filePath);
@@ -89,19 +610,7 @@ rpc.on('fs.analyze', async (params) => {
   };
 });
 
-// 扩展宿主健康检查
-rpc.on('host.ping', async () => {
-  return { pong: true, timestamp: Date.now() };
-});
+console.log('[ExtensionHost] 扩展宿主已启动，等待连接...');
 
-// 关闭扩展宿主
-rpc.on('host.shutdown', async () => {
-  console.log('[ExtensionHost] 收到关闭信号，正在退出...');
-  setTimeout(() => process.exit(0), 100);
-  return { shuttingDown: true };
-});
-
-// 通知主进程扩展宿主已就绪
-rpc.notify('host.ready', { pid: process.pid, version: '1.0.0' });
-
-console.log('[ExtensionHost] 扩展宿主进程已启动，PID:', process.pid);
+// 发送 host.ready 通知
+rpc.notify('host.ready', { timestamp: Date.now() });

@@ -26,3 +26,4 @@ source
 
 dist_open
 .qoder
+extensions/ssh/webview-dist

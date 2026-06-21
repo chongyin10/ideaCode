@@ -9,6 +9,7 @@ import router from './router'
 import { createPluginManager } from './plugin'
 import { createPluginContext } from './plugin'
 import { helloWorldPlugin } from './plugin'
+import { createExtensionBridge } from './plugin/extensionBridge'
 import './i18n'
 import './index.css'
 
@@ -111,6 +112,21 @@ if (typeof requestIdleCallback !== 'undefined') {
 // 将插件管理器挂载到全局
 if (typeof window !== 'undefined') {
   (window as unknown as Record<string, unknown>).__pluginManager = pluginManager;
+}
+
+// 初始化扩展桥接（第三方扩展系统）
+const initExtensionBridge = async () => {
+  const bridge = createExtensionBridge(store);
+  if (typeof window !== 'undefined') {
+    (window as unknown as Record<string, unknown>).__extensionBridge = bridge;
+  }
+  await bridge.initialize();
+};
+
+if (typeof requestIdleCallback !== 'undefined') {
+  requestIdleCallback(() => initExtensionBridge().catch(console.error), { timeout: 5000 });
+} else {
+  setTimeout(() => initExtensionBridge().catch(console.error), 500);
 }
 
 createRoot(document.getElementById('root')!).render(

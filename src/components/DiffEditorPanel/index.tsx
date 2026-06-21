@@ -29,11 +29,12 @@ import './DiffEditorPanel.css';
 
 interface DiffEditorPanelProps {
   diffData: DiffView;
+  groupId?: string;
 }
 
 /* ─── 组件 ─── */
 
-const DiffEditorPanel = ({ diffData }: DiffEditorPanelProps) => {
+const DiffEditorPanel = ({ diffData, groupId }: DiffEditorPanelProps) => {
   const { t } = useTranslation();
   const dispatch = useAppDispatch();
   const theme = useAppSelector((s) => s.settings.theme);
@@ -43,6 +44,10 @@ const DiffEditorPanel = ({ diffData }: DiffEditorPanelProps) => {
   const monacoRef = useRef<typeof Monaco | null>(null);
   const [currentDiffIndex, setCurrentDiffIndex] = useState(-1);
   const [lineChanges, setLineChanges] = useState<Monaco.editor.ILineChange[]>([]);
+
+  // 使用 groupId 生成唯一的 model path，避免分屏时 model 冲突
+  const modelPathPrefix = groupId ? `${groupId}-` : '';
+  const diffEditorKey = `${modelPathPrefix}${diffData.filePath}-${diffData.language}-${diffData.original.length}-${diffData.modified.length}`;
 
   /* ── 统计信息（Myers 算法即时计算） ── */
   const stats = useMemo(() => {
@@ -68,12 +73,29 @@ const DiffEditorPanel = ({ diffData }: DiffEditorPanelProps) => {
       }
 
       // 为内部编辑器启用语义高亮
-      // 注意：不手动调用 resetTokenization()，避免高亮闪动。
-      // Monaco 检测到 semanticHighlighting.enabled 变化后会自动调度语义 tokens 请求。
+      // 先设置选项，再延迟触发一次 tokenization 刷新（给 Monaco 时间准备 provider）
       const originalEditor = editor.getOriginalEditor();
       const modifiedEditor = editor.getModifiedEditor();
       originalEditor.updateOptions({ 'semanticHighlighting.enabled': semanticHighlightingEnabled });
       modifiedEditor.updateOptions({ 'semanticHighlighting.enabled': semanticHighlightingEnabled });
+
+      // 延迟刷新：避免多次 resetTokenization 导致的闪动，只执行一次
+      if (semanticHighlightingEnabled) {
+        setTimeout(() => {
+          const origModel = originalEditor.getModel();
+          const modModel = modifiedEditor.getModel();
+          if (origModel) {
+            try {
+              (origModel as unknown as { tokenization: { resetTokenization(): void } }).tokenization.resetTokenization();
+            } catch { /* 忽略 */ }
+          }
+          if (modModel) {
+            try {
+              (modModel as unknown as { tokenization: { resetTokenization(): void } }).tokenization.resetTokenization();
+            } catch { /* 忽略 */ }
+          }
+        }, 100);
+      }
 
       // 监听 diff 计算完成事件，更新导航索引
       editor.onDidUpdateDiff(() => {
@@ -95,10 +117,27 @@ const DiffEditorPanel = ({ diffData }: DiffEditorPanelProps) => {
   useEffect(() => {
     const editor = diffEditorRef.current;
     if (!editor) return;
-    editor.getOriginalEditor().updateOptions({ 'semanticHighlighting.enabled': semanticHighlightingEnabled });
-    editor.getModifiedEditor().updateOptions({ 'semanticHighlighting.enabled': semanticHighlightingEnabled });
-    // 不手动 resetTokenization：Monaco 检测到选项变化后会自动调度语义 tokens 刷新，
-    // 手动调用反而会导致高亮闪动（先变白再重新上色）。
+    const originalEditor = editor.getOriginalEditor();
+    const modifiedEditor = editor.getModifiedEditor();
+    originalEditor.updateOptions({ 'semanticHighlighting.enabled': semanticHighlightingEnabled });
+    modifiedEditor.updateOptions({ 'semanticHighlighting.enabled': semanticHighlightingEnabled });
+    // 延迟触发一次 tokenization 刷新，使语义高亮生效
+    if (semanticHighlightingEnabled) {
+      setTimeout(() => {
+        const origModel = originalEditor.getModel();
+        const modModel = modifiedEditor.getModel();
+        if (origModel) {
+          try {
+            (origModel as unknown as { tokenization: { resetTokenization(): void } }).tokenization.resetTokenization();
+          } catch { /* 忽略 */ }
+        }
+        if (modModel) {
+          try {
+            (modModel as unknown as { tokenization: { resetTokenization(): void } }).tokenization.resetTokenization();
+          } catch { /* 忽略 */ }
+        }
+      }, 100);
+    }
   }, [semanticHighlightingEnabled]);
 
   /* ── 卸载时清理引用 ── */
@@ -143,9 +182,6 @@ const DiffEditorPanel = ({ diffData }: DiffEditorPanelProps) => {
     dispatch(updateDiffView({ ...diffData, original: diffData.modified }));
   }, [dispatch, diffData]);
 
-  // key 包含内容和语言，确保任何变化时重新挂载 DiffEditor
-  const diffEditorKey = `${diffData.filePath}-${diffData.language}-${diffData.original.length}-${diffData.modified.length}`;
-
   return (
     <div className="diff-panel">
       {/* 内联工具栏（不显示文件名，Tab 栏已显示） */}
@@ -182,8 +218,8 @@ const DiffEditorPanel = ({ diffData }: DiffEditorPanelProps) => {
           language={diffData.language}
           originalLanguage={diffData.language}
           modifiedLanguage={diffData.language}
-          originalModelPath={`gitdiff-original://${diffData.filePath}`}
-          modifiedModelPath={`gitdiff-modified://${diffData.filePath}`}
+          originalModelPath={`gitdiff-original://${modelPathPrefix}${diffData.filePath}`}
+          modifiedModelPath={`gitdiff-modified://${modelPathPrefix}${diffData.filePath}`}
           keepCurrentOriginalModel={true}
           keepCurrentModifiedModel={true}
           height="100%"

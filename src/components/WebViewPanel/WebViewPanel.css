@@ -1,0 +1,12 @@
+.webview-panel {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.webview-panel__iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: var(--bg-color, #1e1e1e);
+}

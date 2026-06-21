@@ -17,6 +17,7 @@ import {
   pullBranch,
   pushBranch,
   discardFile,
+  discardFiles,
   clearGitError,
   setShowCloneForm,
   initRepo,
@@ -250,14 +251,14 @@ const SourceControlPanel = () => {
     const files = changesEntries.map((e) => e.path);
     if (!files.length) return;
     if (window.confirm(t('sourceControlPanel.confirm.discardFiles', { count: files.length }))) {
-      Promise.all(files.map((f) => dispatch(discardFile(f)))).then(() => resetPolling());
+      dispatch(discardFiles(files)).then(() => resetPolling());
     }
   }, [dispatch, changesEntries, resetPolling, t]);
   const handleDiscardAllMerge = useCallback(() => {
     const files = mergeEntries.map((e) => e.path);
     if (!files.length) return;
     if (window.confirm(t('sourceControlPanel.confirm.discardMergeFiles', { count: files.length }))) {
-      Promise.all(files.map((f) => dispatch(discardFile(f)))).then(() => resetPolling());
+      dispatch(discardFiles(files)).then(() => resetPolling());
     }
   }, [dispatch, mergeEntries, resetPolling, t]);
   const handleDeleteAllUntracked = useCallback(async () => {

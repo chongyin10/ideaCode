@@ -6,7 +6,8 @@
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "npm run build:extensions && tsc -b && vite build",
+    "build:extensions": "cd web/ssh && npm install && npm run build && cd ../../extensions/ssh && npm install && npm run build",
     "lint": "eslint .",
     "preview": "vite preview",
     "postinstall": "node scripts/fix-node-pty.mjs",

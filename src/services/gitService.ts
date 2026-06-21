@@ -109,9 +109,9 @@ export const gitService = {
     return gitApi()?.getBehindAhead(dirPath) ?? { ahead: 0, behind: 0 };
   },
 
-  /** 丢弃文件更改 */
-  async discard(dirPath: string, file: string): Promise<void> {
-    await gitApi()?.discard(dirPath, file);
+  /** 丢弃文件更改（支持单文件或批量） */
+  async discard(dirPath: string, files: string | string[]): Promise<void> {
+    await gitApi()?.discard(dirPath, files);
   },
 
   /** 初始化 Git 仓库 */

@@ -227,8 +227,11 @@ function registerGitHandlers() {
     }
   });
 
-  ipcMain.handle(Channels.GIT_DISCARD, async (_event, dirPath, file) => {
-    const safe = `"${file.replace(/"/g, '\\"')}"`;
+  ipcMain.handle(Channels.GIT_DISCARD, async (_event, dirPath, files) => {
+    // 支持单文件（字符串）或批量（数组）
+    const fileList = Array.isArray(files) ? files : [files];
+    if (fileList.length === 0) return true;
+    const safe = fileList.map((f) => `"${f.replace(/"/g, '\\"')}"`).join(' ');
     await execGit(`git checkout -- ${safe}`, dirPath);
     return true;
   });

@@ -1,6 +1,6 @@
 import { createSlice } from '@reduxjs/toolkit';
 
-export type PanelId = 'explorer' | 'search' | 'git' | 'debug' | 'extensions';
+export type PanelId = 'explorer' | 'search' | 'git' | 'debug' | 'extensions' | string;
 export type BottomTabId = 'terminal' | 'problems' | 'output' | 'debug-console' | 'ports' | 'gitlens';
 
 export const DEFAULT_SIDEBAR_WIDTH = 260;
@@ -63,6 +63,10 @@ const layoutSlice = createSlice({
         state.sidePanelVisible = true;
         if (state.sidePanelWidth < MIN_SIDEBAR_WIDTH) {
           state.sidePanelWidth = DEFAULT_SIDEBAR_WIDTH;
+        }
+        // 如果面板不在 panelOrder 中（是动态添加的扩展面板），添加到末尾
+        if (!state.panelOrder.includes(panel)) {
+          state.panelOrder.push(panel);
         }
       }
     },

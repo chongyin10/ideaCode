@@ -213,6 +213,17 @@ export const discardFile = createAsyncThunk(
   }
 );
 
+export const discardFiles = createAsyncThunk(
+  'git/discardFiles',
+  async (files: string[], { getState, dispatch }) => {
+    const root = getRootPath(getState() as GitRootState);
+    if (!root) throw new Error('no project');
+    if (files.length === 0) return;
+    await gitService.discard(root, files);
+    dispatch(refreshGitStatus());
+  }
+);
+
 export const stashPush = createAsyncThunk(
   'git/stashPush',
   async (message: string | undefined, { getState, dispatch }) => {
