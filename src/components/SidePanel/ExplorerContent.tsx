@@ -932,27 +932,27 @@ const ExplorerContent = () => {
             {/* ── 远程工作区根目录 ── */}
             {remoteRoots.map((root) => {
               const rootEntry: FileEntry = { name: root.name, kind: 'directory', source: root.source };
+              const rootExpandPath = `remote-root-${root.id}`;
+              const rootTools = (
+                <>
+                  <button
+                    className="explorer-header__icon"
+                    title={t('explorer.header.refresh')}
+                    onClick={(e) => { e.stopPropagation(); notifyChange(root.source); }}
+                  >
+                    <RefreshCw size={14} strokeWidth={1.5} />
+                  </button>
+                  <button
+                    className="explorer-header__icon"
+                    title="从资源管理器移除"
+                    onClick={(e) => { e.stopPropagation(); dispatch(removeWorkspaceFolder(root.id)); }}
+                  >
+                    <Trash2 size={14} strokeWidth={1.5} />
+                  </button>
+                </>
+              );
               return (
                 <div key={root.id} className="explorer-section explorer-section--remote">
-                  <div className="explorer-section__header">
-                    <span className="explorer-section__title" title={String(root.source)}>{root.name}</span>
-                    <span className="explorer-section__tools">
-                      <button
-                        className="explorer-header__icon"
-                        title={t('explorer.header.refresh')}
-                        onClick={() => notifyChange(root.source)}
-                      >
-                        <RefreshCw size={14} strokeWidth={1.5} />
-                      </button>
-                      <button
-                        className="explorer-header__icon"
-                        title="从资源管理器移除"
-                        onClick={() => dispatch(removeWorkspaceFolder(root.id))}
-                      >
-                        <Trash2 size={14} strokeWidth={1.5} />
-                      </button>
-                    </span>
-                  </div>
                   <div className="explorer-section__content">
                     <FileTree
                       entry={rootEntry}
@@ -978,7 +978,10 @@ const ExplorerContent = () => {
                       expandedDirs={expandedDirs}
                       onToggleExpand={stableOnToggleExpand}
                       onMoveFile={handleMoveFile}
-                      relativePath={`remote-root-${root.id}`}
+                      relativePath={rootExpandPath}
+                      headerTools={rootTools}
+                      rootClassName="tree-item--remote-root"
+                      rootIndentOffset={2}
                     />
                     {renderInlineInput(root.source)}
                   </div>

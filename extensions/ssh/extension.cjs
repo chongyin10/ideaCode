@@ -21070,6 +21070,7 @@ async function activate(context) {
               tree
             }
           });
+          broadcast({ type: "remoteFileTreeLoaded", connectionId: conn.id });
         } catch (err) {
           broadcast({
             type: "remoteFileTreeError",

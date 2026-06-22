@@ -47,6 +47,35 @@
   background: rgba(255, 255, 255, 0.22);
 }
 
+/* ─── 仓库根信息（多仓库时用于区分项目）─── */
+.scm-repo-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  flex-shrink: 0;
+}
+
+.scm-repo-header__name {
+  font-weight: 600;
+  color: #cccccc;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scm-repo-header__branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: #858585;
+  flex-shrink: 0;
+}
+
 /* ─── 头部：提交 + 工具栏 ─── */
 
 .scm-header {

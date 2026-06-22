@@ -580,9 +580,11 @@ interface MonacoEditorProps {
   onOpenFileByPath?: (path: string) => void;
   /** 编辑器（含 tsserver）就绪时回调 */
   onReady?: () => void;
+  /** 是否只读 */
+  readOnly?: boolean;
 }
 
-const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused = true, path, modelPath, onOpenFileByPath, onReady }: MonacoEditorProps) => {
+const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused = true, path, modelPath, onOpenFileByPath, onReady, readOnly }: MonacoEditorProps) => {
   const { t } = useTranslation();
   const dispatch = useAppDispatch();
   const searchHighlight = useAppSelector((state) => state.workspace.searchHighlight);
@@ -1202,6 +1204,7 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
         // hover 优先显示在光标下方，避免靠近编辑器顶部时被 tab-bar/容器裁切
         hover: { above: false },
         'semanticHighlighting.enabled': semanticHighlightingEnabled,
+        readOnly: !!readOnly,
       }}
     />
   );

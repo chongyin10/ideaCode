@@ -260,6 +260,8 @@ function App() {
           connectionId: message.connectionId as string,
           message: (message.error as string) || '加载目录结构失败',
         });
+      } else if (message.type === 'remoteFileTreeLoaded') {
+        setFileTreeStatus(null);
       } else if (message.type === 'sshLog') {
         const logMsg = (message.message as string) || '';
         setLogs((prev) => {

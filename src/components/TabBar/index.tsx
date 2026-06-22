@@ -1,14 +1,15 @@
 import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { X, Columns2, Loader2 } from 'lucide-react';
+import { X, Columns2, Loader2, Lock, Unlock } from 'lucide-react';
 import './TabBar.css';
 
 interface TabBarProps {
-  tabs: { id: string; name: string; isDirty?: boolean; isPreview?: boolean; gitStatus?: string }[];
+  tabs: { id: string; name: string; isDirty?: boolean; isPreview?: boolean; readOnly?: boolean; gitStatus?: string }[];
   activeId: string | null;
   onActivate: (id: string) => void;
   onClose: (id: string) => void;
   onPin?: (id: string) => void;
+  onToggleReadOnly?: (id: string) => void;
   onSplitView?: () => void;
   onContextMenu?: (e: React.MouseEvent, id: string) => void;
   /** 拖拽重排：将 fromId 移动到 toId 的 before/after 位置 */
@@ -27,7 +28,7 @@ type DisplayTab = TabBarProps['tabs'][number] & { phase: TabPhase };
 
 const TRANSITION_MS = 200;
 
-const TabBar = ({ tabs, activeId, onActivate, onClose, onPin, onSplitView, onContextMenu, onReorder, splitActive, focused = true, loadingFiles, missingFileIds }: TabBarProps) => {
+const TabBar = ({ tabs, activeId, onActivate, onClose, onPin, onToggleReadOnly, onSplitView, onContextMenu, onReorder, splitActive, focused = true, loadingFiles, missingFileIds }: TabBarProps) => {
   const { t } = useTranslation();
   const [displayTabs, setDisplayTabs] = useState<DisplayTab[]>([]);
   const prevTabsRef = useRef(tabs);
@@ -183,6 +184,16 @@ const TabBar = ({ tabs, activeId, onActivate, onClose, onPin, onSplitView, onCon
               <span className={`tab-bar__name ${tab.isDirty ? 'dirty' : ''} ${tab.gitStatus ? 'git-' + tab.gitStatus.toLowerCase() : ''}`}>{tab.name}</span>
               {tab.isDirty && <span className="tab-bar__dirty">●</span>}
               {loadingFiles?.has(tab.id) && <Loader2 size={12} strokeWidth={1.5} className="tab-bar__loading tab-bar__spinner" />}
+              <span
+                className={`tab-bar__lock ${tab.readOnly ? 'tab-bar__lock--locked' : ''}`}
+                title={tab.readOnly ? '点击解锁编辑' : '点击锁定只读'}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleReadOnly?.(tab.id);
+                }}
+              >
+                {tab.readOnly ? <Lock size={12} strokeWidth={1.5} /> : <Unlock size={12} strokeWidth={1.5} />}
+              </span>
               <span
                 className="tab-bar__close"
                 onClick={(e) => {

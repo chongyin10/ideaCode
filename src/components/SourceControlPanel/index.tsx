@@ -83,6 +83,7 @@ const SourceControlPanel = () => {
     const r = s.workspace.rootSource;
     return typeof r === 'string' ? r : null;
   });
+  const rootName = useMemo(() => rootPath ? rootPath.split(/[\\/]/).filter(Boolean).pop() || rootPath : '', [rootPath]);
   const staged = useAppSelector((s) => s.git.staged);
   const changes = useAppSelector((s) => s.git.changes);
   const merge = useAppSelector((s) => s.git.merge);
@@ -417,6 +418,15 @@ const SourceControlPanel = () => {
       </div>
 
       <div className="scm-content" ref={contentRef}>
+        <div className="scm-repo-header" title={rootPath || ''}>
+          <span className="scm-repo-header__name">{rootName}</span>
+          {branch && (
+            <span className="scm-repo-header__branch">
+              <GitBranch size={10} strokeWidth={1.5} />
+              {branch}
+            </span>
+          )}
+        </div>
         {renderSection(t('sourceControlPanel.sections.staged'), stagedEntries, stagedOpen, setStagedOpen, 'undo', [
           { label: t('sourceControlPanel.actions.unstageAll'), icon: Minus, handler: handleUnstageAll },
           { label: t('sourceControlPanel.actions.revertStagedAll'), icon: Undo2, handler: handleUnstageAll },

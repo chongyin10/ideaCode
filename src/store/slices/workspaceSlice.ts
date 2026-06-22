@@ -12,6 +12,8 @@ export interface OpenedFile {
   language: string;
   isDirty: boolean;
   isPreview?: boolean;
+  /** 是否只读（可手动解锁） */
+  readOnly?: boolean;
   /** 是否为 Git Diff 虚拟文件 */
   isDiff?: boolean;
   /** Diff 视图数据（仅当 isDiff 为 true 时有效） */
@@ -309,7 +311,7 @@ export const loadDirectory = createAsyncThunk(
 
 export const openFile = createAsyncThunk(
   'workspace/openFile',
-  async (entry: FileEntry) => {
+  async (entry: FileEntry & { readOnly?: boolean }) => {
     if (entry.kind !== 'file') return null;
     const content = await readFile(entry.source);
     const ext = entry.name.split('.').pop()?.toLowerCase() || '';
@@ -327,7 +329,7 @@ export const openFile = createAsyncThunk(
     const language = langMap[ext] || 'plaintext';
     // 用完整路径作为唯一 id，避免不同目录下的同名文件（如 index.tsx）冲突
     const id = typeof entry.source === 'string' ? entry.source : entry.name;
-    return { id, name: entry.name, source: entry.source, content, language, isDirty: false };
+    return { id, name: entry.name, source: entry.source, content, language, isDirty: false, readOnly: entry.readOnly ?? false };
   }
 );
 
@@ -932,6 +934,12 @@ const workspaceSlice = createSlice({
       const file = state.openedFiles.find((f) => f.id === id);
       if (file) file.language = language;
     },
+    toggleFileReadOnly: (state, action) => {
+      const payload = action.payload;
+      const id = typeof payload === 'string' ? payload : (payload as { id: string }).id;
+      const file = state.openedFiles.find((f) => f.id === id);
+      if (file) file.readOnly = !file.readOnly;
+    },
   },
 
   extraReducers: (builder) => {
@@ -1056,7 +1064,7 @@ export const {
   toggleExpandDir, toggleSplitView, collapseAllGroups, setActiveGroup, saveEditorSnapshot, setGroupRatio, equalizeGroupRatios, reorderTab,
   openDiffView, closeDiffView, updateDiffView, setFileLanguage,
   setSettingsVisible, closeSettings, setMissingFileIds, openVirtualFile,
-  addWorkspaceFolder, removeWorkspaceFolder,
+  addWorkspaceFolder, removeWorkspaceFolder, toggleFileReadOnly,
 } = workspaceSlice.actions;
 
 export default workspaceSlice.reducer;

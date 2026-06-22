@@ -72,6 +72,12 @@ interface FileTreeProps {
     dropEntry: FileEntry | null,
     dropParentSource: FileSource,
   ) => void;
+  /** 根节点右侧自定义工具按钮（仅在 level=0 时生效） */
+  headerTools?: React.ReactNode;
+  /** 根节点额外 className（仅在 level=0 时生效） */
+  rootClassName?: string;
+  /** 根节点左侧起始缩进（默认 12px），用于远程根与区域标题对齐 */
+  rootIndentOffset?: number;
 }
 
 /**
@@ -107,6 +113,9 @@ const FileTree = memo(({
   expandedDirs,
   onToggleExpand,
   onMoveFile,
+  headerTools,
+  rootClassName,
+  rootIndentOffset,
 }: FileTreeProps) => {
   const { t } = useTranslation();
   const [children, setChildren] = useState<FileEntry[]>([]);
@@ -115,6 +124,8 @@ const FileTree = memo(({
   const [isDragOver, setIsDragOver] = useState(false);
   const onMoveFileRef = useRef(onMoveFile);
   onMoveFileRef.current = onMoveFile;
+
+  const baseIndent = rootIndentOffset ?? 12;
 
   // 计算当前 entry 的相对路径（用于 Git 状态查询 + 自动展开匹配）
   const entryRelPath = relativePath ? `${relativePath}/${entry.name}` : entry.name;
@@ -132,17 +143,17 @@ const FileTree = memo(({
   const indentGuides = useMemo(() => {
     if (level <= 0) return null;
     return (
-      <div className="tree-indent-guides" style={{ left: 0, width: level * 12 + 6 }}>
+      <div className="tree-indent-guides" style={{ left: 0, width: baseIndent + level * 12 + 6 }}>
         {Array.from({ length: level }).map((_, i) => (
           <span
             key={i}
             className="tree-indent-guide"
-            style={{ left: 12 + i * 12 + 5 }}
+            style={{ left: baseIndent + i * 12 + 5 }}
           />
         ))}
       </div>
     );
-  }, [level]);
+  }, [level, baseIndent]);
 
   // 用 ref 存储最新 expanded 值，避免 useCallback 闭包捕获过期值
   const expandedRef = useRef(expanded);
@@ -353,8 +364,8 @@ const FileTree = memo(({
       {/* 享元缩进引导线 */}
       {indentGuides}
       <div
-        className={`tree-item ${isActive ? 'active' : ''} ${isSelected ? 'selected' : ''} ${isCut ? 'is-cut' : ''} ${isDragOver ? 'drag-over' : ''}`}
-        style={{ paddingLeft: 12 + level * 12 }}
+        className={`tree-item ${isActive ? 'active' : ''} ${isSelected ? 'selected' : ''} ${isCut ? 'is-cut' : ''} ${isDragOver ? 'drag-over' : ''} ${level === 0 && rootClassName ? rootClassName : ''}`}
+        style={{ paddingLeft: baseIndent + level * 12 }}
         draggable
         onDragStart={handleDragStart}
         onDragOver={handleDragOver}
@@ -391,6 +402,11 @@ const FileTree = memo(({
             <span className={`git-status ${activeGitCode}`}>{activeGitCode}</span>
           )
         )}
+        {level === 0 && headerTools && (
+          <span className="tree-item__tools" onClick={(e) => e.stopPropagation()}>
+            {headerTools}
+          </span>
+        )}
       </div>
 
       {expanded && myPendingCreateType && (
@@ -420,6 +436,7 @@ const FileTree = memo(({
             onOpenFile={onOpenFile}
             parentSource={entry.source}
             rootSource={rootSource}
+            rootIndentOffset={rootIndentOffset}
             onFindInFiles={onFindInFiles}
             onContextMenu={onContextMenu}
             pendingCreate={pendingCreate}

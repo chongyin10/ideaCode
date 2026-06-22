@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useAppDispatch } from '../../store/hooks';
-import { setFileContent, addWorkspaceFolder } from '../../store/slices/workspaceSlice';
+import { setFileContent, addWorkspaceFolder, openFile } from '../../store/slices/workspaceSlice';
 import { terminalSDK } from '../../services/terminalSDK';
 import { getExtensionBridge } from '../../plugin/extensionBridge';
 import ContextMenu, { type MenuItem } from '../ContextMenu';
@@ -367,6 +367,20 @@ export default function SshFileTreePanel({ content, fileId }: SshFileTreePanelPr
     showNotice('已添加到资源管理器');
   };
 
+  const handleViewFileContent = (node: FileTreeNode) => {
+    if (!data || node.type !== 'file') return;
+    const uri = `ssh://${data.connectionId}${node.path}`;
+    dispatch(
+      openFile({
+        name: node.name,
+        kind: 'file',
+        source: uri,
+        readOnly: true,
+      })
+    );
+    showNotice('已以只读模式打开文件，点击标签锁图标可编辑');
+  };
+
   const menuItems: MenuItem[] = useMemo(() => {
     if (!contextMenu) return [];
     const node = contextMenu.node;
@@ -411,6 +425,13 @@ export default function SshFileTreePanel({ content, fileId }: SshFileTreePanelPr
         group: 'term',
         disabled: !canOperate,
         onClick: () => handleOpenInTerminal(node),
+      },
+      {
+        id: 'viewFileContent',
+        label: '查看文件内容',
+        group: 'view',
+        disabled: !canOperate || node.type !== 'file',
+        onClick: () => handleViewFileContent(node),
       },
       {
         id: 'addToExplorer',

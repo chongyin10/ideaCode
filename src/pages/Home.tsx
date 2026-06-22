@@ -12,6 +12,7 @@ import {
   setMirrorFileContent,
   saveFile,
   pinPreviewFile,
+  toggleFileReadOnly,
   fetchRecentProjects,
   removeRecentProjectThunk,
   toggleSplitView,
@@ -662,6 +663,7 @@ function Home() {
                 name: f.name,
                 isDirty: f.isDirty,
                 isPreview: f.isPreview,
+                readOnly: f.readOnly,
                 gitStatus: gitCode,
               };
             })}
@@ -670,6 +672,7 @@ function Home() {
             onClose={(id) => handleCloseTab(id, groupIndex)}
             onContextMenu={(e, id) => handleTabContextMenu(e, id, groupIndex)}
             onPin={() => dispatch(pinPreviewFile())}
+            onToggleReadOnly={(id) => dispatch(toggleFileReadOnly(id))}
             onReorder={(fromId, toId, position) => dispatch(reorderTab({ fromId, toId, position }))}
             onSplitView={file?.language === 'extension' || file?.language === 'ssh-file-tree' ? undefined : () => dispatch(toggleSplitView())}
             splitActive={splitView}
@@ -698,6 +701,7 @@ function Home() {
                   focused={focused}
                   onOpenFileByPath={handleOpenFileByPath}
                   onReady={() => handleTabReady(file?.id || '')}
+                  readOnly={file.readOnly}
                 />
               )
             ) : (

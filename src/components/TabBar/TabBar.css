@@ -216,6 +216,34 @@
   animation: tabSpin 1s linear infinite;
 }
 
+.tab-bar__lock {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  opacity: 0.5;
+  color: #858585;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.tab-bar__item:hover .tab-bar__lock {
+  opacity: 0.8;
+}
+
+.tab-bar__lock:hover {
+  opacity: 1 !important;
+  background-color: rgba(255, 255, 255, 0.1);
+  color: #cccccc;
+}
+
+.tab-bar__lock--locked {
+  color: #d4b98d;
+}
+
 /* ═══════════════════════════════════════════════════
    拖拽重排样式
    ═══════════════════════════════════════════════════ */
