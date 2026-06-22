@@ -15,9 +15,12 @@ import {
   setTabConnecting,
   setTabExited,
   renameTab,
+  setActiveGroup,
+  setActivePane,
 } from '../store/slices/terminalSlice';
 import type { TerminalProfile } from '../types/electron';
-import { createTerminal, sendInput, onTerminalOutput } from './terminalManager';
+import type { TerminalTab } from '../store/slices/terminalSlice';
+import { createTerminal, sendInput, disposeTerminal, onTerminalOutput } from './terminalManager';
 
 export interface TerminalCreateOptions {
   /** Tab 显示名称 */
@@ -34,6 +37,8 @@ export interface TerminalCreateOptions {
   profile?: TerminalProfile;
   /** 是否自动显示并聚焦底部终端面板（默认 true） */
   autoFocus?: boolean;
+  /** 是否为独立 Modal 终端，不参与底部面板布局 */
+  isModal?: boolean;
   /** 终端启动后自动输入的文本（例如 SSH 密码），注意隐私安全 */
   input?: string;
   /** 输出过滤正则字符串，用于隐藏密码提示等不美观内容 */
@@ -68,14 +73,14 @@ export const terminalSDK = {
    * 创建一个新的终端 Tab
    */
   async createTab(options: TerminalCreateOptions): Promise<TerminalCreateResult> {
-    const { name, cwd, executable, args, env, profile, autoFocus = true, input, outputFilter } = options;
+    const { name, cwd, executable, args, env, profile, autoFocus = true, isModal, input, outputFilter } = options;
 
-    if (autoFocus) {
+    if (autoFocus && !isModal) {
       this.showPanel();
     }
 
     const tabId = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-    store.dispatch(addTab({ id: tabId, name, profile, outputFilter }));
+    store.dispatch(addTab({ id: tabId, name, profile, isModal, outputFilter }));
 
     const config: import('../types/electron').TerminalCreateConfig = {
       cwd,
@@ -156,4 +161,103 @@ export const terminalSDK = {
   renameTab(tabId: string, name: string) {
     store.dispatch(renameTab({ id: tabId, name }));
   },
+
+  /** 根据 Tab ID 发送输入 */
+  async sendInputByTabId(tabId: string, data: string): Promise<void> {
+    const processId = getProcessIdByTabId(tabId);
+    if (processId === undefined) {
+      throw new Error(`终端 Tab 不存在或未就绪: ${tabId}`);
+    }
+    await sendInput(processId, data);
+  },
+
+  /** 处置终端 Tab（关闭进程并移除 UI） */
+  async disposeTab(tabId: string): Promise<void> {
+    const processId = getProcessIdByTabId(tabId);
+    if (processId !== undefined) {
+      await disposeTerminal(processId);
+    }
+    store.dispatch(removeTab(tabId));
+    tabOutputListeners.delete(tabId);
+    tabExitListeners.delete(tabId);
+  },
+
+  /** 聚焦并显示指定终端 Tab */
+  showTab(tabId: string): void {
+    this.showPanel();
+    const state = store.getState().terminal;
+    const group = state.panelLayout.groups.find((g) => g.panes.some((p) => p.terminalId === tabId));
+    if (group) {
+      store.dispatch(setActiveGroup(group.id));
+      const pane = group.panes.find((p) => p.terminalId === tabId);
+      if (pane) {
+        store.dispatch(setActivePane({ groupId: group.id, paneId: pane.id }));
+      }
+    }
+  },
+
+  /** 监听指定 Tab 的输出 */
+  onTabOutput(tabId: string, callback: (data: string) => void): () => void {
+    ensureGlobalOutputListener();
+    if (!tabOutputListeners.has(tabId)) {
+      tabOutputListeners.set(tabId, new Set());
+    }
+    tabOutputListeners.get(tabId)!.add(callback);
+    return () => {
+      tabOutputListeners.get(tabId)?.delete(callback);
+    };
+  },
+
+  /** 监听指定 Tab 的退出事件 */
+  onTabExit(tabId: string, callback: (exitCode?: number) => void): () => void {
+    ensureGlobalOutputListener();
+    if (!tabExitListeners.has(tabId)) {
+      tabExitListeners.set(tabId, new Set());
+    }
+    tabExitListeners.get(tabId)!.add(callback);
+    return () => {
+      tabExitListeners.get(tabId)?.delete(callback);
+    };
+  },
 };
+
+/* ─── Tab 级输出/退出事件路由 ─── */
+
+type OutputListener = (data: string) => void;
+type ExitListener = (exitCode?: number) => void;
+
+const tabOutputListeners = new Map<string, Set<OutputListener>>();
+const tabExitListeners = new Map<string, Set<ExitListener>>();
+
+let globalOutputUnsub: (() => void) | null = null;
+
+function ensureGlobalOutputListener(): void {
+  if (globalOutputUnsub) return;
+  globalOutputUnsub = onTerminalOutput((event) => {
+    if (event.type === 'data' && event.data !== undefined) {
+      const tab = findTabByProcessId(event.id);
+      if (tab) {
+        const callbacks = tabOutputListeners.get(tab.id);
+        if (callbacks) {
+          callbacks.forEach((cb) => cb(event.data as string));
+        }
+      }
+    } else if (event.type === 'exit') {
+      const tab = findTabByProcessId(event.id);
+      if (tab) {
+        const callbacks = tabExitListeners.get(tab.id);
+        if (callbacks) {
+          callbacks.forEach((cb) => cb(event.exitCode));
+        }
+      }
+    }
+  });
+}
+
+function getProcessIdByTabId(tabId: string): number | undefined {
+  return store.getState().terminal.tabs[tabId]?.processId ?? undefined;
+}
+
+function findTabByProcessId(processId: number): TerminalTab | undefined {
+  return Object.values(store.getState().terminal.tabs).find((t) => t.processId === processId);
+}

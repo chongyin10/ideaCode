@@ -7,6 +7,7 @@ import RightPanel from './components/RightPanel';
 import BottomPanel from './components/BottomPanel';
 import StatusBar from './components/StatusBar';
 import ModalWebview from './components/ModalWebview';
+import TerminalModal from './components/TerminalModal';
 import './App.css';
 
 function App() {
@@ -29,6 +30,7 @@ function App() {
       </div>
       <StatusBar />
       <ModalWebview />
+      <TerminalModal />
     </div>
   );
 }

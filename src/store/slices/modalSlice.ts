@@ -10,12 +10,19 @@ export interface ModalWebviewState {
   visible: boolean;
 }
 
+export interface TerminalModalState {
+  tabId: string;
+  title?: string;
+}
+
 interface ModalState {
   modalWebview: ModalWebviewState | null;
+  terminalModal: TerminalModalState | null;
 }
 
 const initialState: ModalState = {
   modalWebview: null,
+  terminalModal: null,
 };
 
 const modalSlice = createSlice({
@@ -33,8 +40,14 @@ const modalSlice = createSlice({
     closeModalWebview: (state) => {
       state.modalWebview = null;
     },
+    openTerminalModal: (state, action: PayloadAction<TerminalModalState>) => {
+      state.terminalModal = action.payload;
+    },
+    closeTerminalModal: (state) => {
+      state.terminalModal = null;
+    },
   },
 });
 
-export const { openModalWebview, setModalWebviewHtml, closeModalWebview } = modalSlice.actions;
+export const { openModalWebview, setModalWebviewHtml, closeModalWebview, openTerminalModal, closeTerminalModal } = modalSlice.actions;
 export default modalSlice.reducer;

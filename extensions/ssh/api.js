@@ -3,6 +3,30 @@
  * 在 Extension Host 进程中运行，通过 JSON-RPC 与主进程通信
  */
 
+class EventEmitter {
+  constructor() {
+    this._listeners = new Set();
+  }
+
+  fire(data) {
+    for (const listener of this._listeners) {
+      try {
+        listener(data);
+      } catch {
+        // ignore listener errors
+      }
+    }
+  }
+
+  get event() {
+    const self = this;
+    return function (listener) {
+      self._listeners.add(listener);
+      return { dispose: () => self._listeners.delete(listener) };
+    };
+  }
+}
+
 const vscode = {
   window: {
     showInformationMessage: (message, ...items) => {
@@ -87,24 +111,78 @@ const vscode = {
     },
     createTerminal: (options) => {
       return new Promise((resolve, reject) => {
-        if (typeof process !== 'undefined' && process.send) {
-          const id = Date.now() + Math.random();
-          process.send({ jsonrpc: '2.0', id, method: 'terminal.create', params: options });
-          const handler = (msg) => {
-            if (msg.id === id) {
-              process.removeListener('message', handler);
-              if (msg.error) reject(new Error(msg.error.message));
-              else resolve(msg.result);
-            }
-          };
-          process.on('message', handler);
-          setTimeout(() => {
-            process.removeListener('message', handler);
-            reject(new Error('Terminal creation timeout'));
-          }, 30000);
-        } else {
+        if (typeof process === 'undefined' || !process.send) {
           reject(new Error('Extension Host not connected'));
+          return;
         }
+
+        const requestId = `term-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+        const rpcId = Date.now() + Math.random();
+        let settled = false;
+
+        // 等待渲染进程创建完成后回传的 terminal.created 通知
+        const createdHandler = (msg) => {
+          if (msg.method === 'terminal.created' && msg.params?.requestId === requestId) {
+            if (settled) return;
+            settled = true;
+            process.removeListener('message', createdHandler);
+            clearTimeout(timer);
+
+            const { tabId, processId, success, error } = msg.params || {};
+            if (!success) {
+              reject(new Error(error || '创建终端失败'));
+              return;
+            }
+
+            const outputEmitter = new EventEmitter();
+            const exitEmitter = new EventEmitter();
+
+            const outputRouter = (msg2) => {
+              if (msg2.method === 'terminal.data' && msg2.params?.tabId === tabId) {
+                outputEmitter.fire(msg2.params.data);
+              } else if (msg2.method === 'terminal.exit' && msg2.params?.tabId === tabId) {
+                exitEmitter.fire(msg2.params.exitCode);
+              }
+            };
+            process.on('message', outputRouter);
+
+            const terminal = {
+              tabId,
+              processId,
+              sendText: (text, addNewLine = true) => {
+                const data = addNewLine && !text.endsWith('\r') && !text.endsWith('\n') ? `${text}\r` : text;
+                process.send({ jsonrpc: '2.0', method: 'terminal.sendInput', params: { tabId, text: data } });
+              },
+              show: () => {
+                process.send({ jsonrpc: '2.0', method: 'terminal.show', params: { tabId } });
+              },
+              hide: () => {
+                process.send({ jsonrpc: '2.0', method: 'terminal.hide', params: { tabId } });
+              },
+              dispose: () => {
+                process.removeListener('message', outputRouter);
+                process.send({ jsonrpc: '2.0', method: 'terminal.dispose', params: { tabId } });
+              },
+              openInModal: (title) => {
+                process.send({ jsonrpc: '2.0', method: 'terminal.openInModal', params: { tabId, title } });
+              },
+              onDidWriteData: outputEmitter.event,
+              onDidClose: exitEmitter.event,
+            };
+            resolve(terminal);
+          }
+        };
+        process.on('message', createdHandler);
+
+        process.send({ jsonrpc: '2.0', id: rpcId, method: 'terminal.create', params: { ...options, requestId } });
+
+        const timer = setTimeout(() => {
+          if (!settled) {
+            settled = true;
+            process.removeListener('message', createdHandler);
+            reject(new Error('Terminal creation timeout'));
+          }
+        }, 30000);
       });
     },
   },

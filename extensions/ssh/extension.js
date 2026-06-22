@@ -764,6 +764,7 @@ async function activate(context) {
           name: terminalName,
           executable: 'ssh',
           args: ['-p', String(conn.port || 22), `${conn.username}@${conn.host}`],
+          isModal: true,
         };
         // 密码认证时自动输入密码，并过滤掉密码提示行，避免显示不美观
         if (conn.authType === 'password' && conn.password) {
@@ -771,9 +772,37 @@ async function activate(context) {
           options.outputFilter = '[^\\r\\n]*password:\\s*\\r?\\n?';
         }
         try {
-          await vscode.window.createTerminal(options);
+          const terminal = await vscode.window.createTerminal(options);
+          // 在 IDE Modal 中打开真实终端面板
+          if (typeof terminal.openInModal === 'function') {
+            terminal.openInModal(terminalName);
+          }
+          // 关联到当前会话，实现弹窗/扩展与底部终端双向互通
+          const session = Array.from(sessions.values()).find(
+            (s) => s.connectionId === conn.id && s.status === 'connected'
+          );
+          if (session) {
+            session.terminal = terminal;
+            terminal.onDidWriteData((data) => {
+              broadcast({ type: 'terminalOutput', connectionId: conn.id, data });
+            });
+            terminal.onDidClose((exitCode) => {
+              broadcast({ type: 'terminalClosed', connectionId: conn.id, exitCode });
+              if (session.terminal === terminal) {
+                session.terminal = null;
+              }
+            });
+          }
         } catch (err) {
           console.error('[SSH Extension] 创建终端失败:', err.message);
+        }
+        break;
+      }
+
+      case 'sendTerminalInput': {
+        const session = sessions.get(message.sessionId);
+        if (session?.terminal) {
+          session.terminal.sendText(message.text, false);
         }
         break;
       }

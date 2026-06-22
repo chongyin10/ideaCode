@@ -21,7 +21,7 @@ import { openFile, openVirtualFile, addWorkspaceFolder, removeWorkspaceFolder } 
 import { addPanelToOrder, removePanelFromOrder } from '../store/slices/layoutSlice';
 import { getPluginManager } from './core';
 import type { PluginManifest } from './types';
-import { terminalSDK } from '../services/terminalSDK';
+import { terminalSDK, type TerminalCreateOptions } from '../services/terminalSDK';
 import {
   registerViewContainer,
   unregisterViewContainer,
@@ -35,6 +35,7 @@ import {
   openModalWebview,
   setModalWebviewHtml,
   closeModalWebview,
+  openTerminalModal,
 } from '../store/slices/modalSlice';
 import { registerFileSystemProvider } from '../services/fileSystemProvider';
 
@@ -463,12 +464,74 @@ export class ExtensionBridge {
     });
 
     // 终端创建（由扩展请求，转交给 TerminalSDK 处理）
-    this.rpcHandlers.set('terminal.create', (params) => {
-      const options = (params as { name?: string; cwd?: string; executable?: string; args?: string[]; env?: Record<string, string>; profile?: import('../types/electron').TerminalProfile; autoFocus?: boolean }) || {};
-      terminalSDK.createTab(options).catch((err) => {
-        console.error('[ExtensionBridge] terminalSDK.createTab 失败:', err);
+    this.rpcHandlers.set('terminal.create', async (params) => {
+      const { requestId, ...options } = (params as TerminalCreateOptions & { requestId?: string }) || {};
+      const result = await terminalSDK.createTab(options);
+      if (!result.success) {
+        if (requestId) {
+          this.sendToHost('terminal.created', { requestId, success: false, error: result.error }).catch(() => {});
+        }
+        return { success: false, error: result.error };
+      }
+
+      const { tabId, processId } = result;
+      if (!tabId) {
+        return { success: false, error: '未返回 tabId' };
+      }
+
+      // 转发终端输出/退出事件到 Extension Host，实现扩展与终端双向互通
+      const unsubOutput = terminalSDK.onTabOutput(tabId, (data) => {
+        this.sendToHost('terminal.data', { tabId, processId, data }).catch(() => {});
       });
-      return { queued: true };
+      const unsubExit = terminalSDK.onTabExit(tabId, (exitCode) => {
+        this.sendToHost('terminal.exit', { tabId, processId, exitCode }).catch(() => {});
+        unsubOutput();
+        unsubExit();
+      });
+
+      if (requestId) {
+        this.sendToHost('terminal.created', { requestId, tabId, processId, success: true }).catch(() => {});
+      }
+      return { success: true, tabId, processId };
+    });
+
+    // 终端输入、显示、隐藏、销毁
+    this.rpcHandlers.set('terminal.sendInput', async (params) => {
+      const { tabId, text } = params as { tabId: string; text: string };
+      await terminalSDK.sendInputByTabId(tabId, text);
+      return { sent: true };
+    });
+
+    this.rpcHandlers.set('terminal.dispose', (params) => {
+      const { tabId } = params as { tabId: string };
+      terminalSDK.disposeTab(tabId).catch((err) => {
+        console.error('[ExtensionBridge] 处置终端失败:', err);
+      });
+      return { disposed: true };
+    });
+
+    this.rpcHandlers.set('terminal.show', (params) => {
+      const { tabId } = params as { tabId?: string };
+      if (tabId) {
+        terminalSDK.showTab(tabId);
+      } else {
+        terminalSDK.showPanel();
+      }
+      return { shown: true };
+    });
+
+    this.rpcHandlers.set('terminal.hide', () => {
+      terminalSDK.hidePanel();
+      return { hidden: true };
+    });
+
+    this.rpcHandlers.set('terminal.openInModal', (params) => {
+      const { tabId, title } = params as { tabId: string; title?: string };
+      if (!tabId) {
+        return { opened: false, error: '缺少 tabId' };
+      }
+      this.store.dispatch(openTerminalModal({ tabId, title }));
+      return { opened: true };
     });
   }
 

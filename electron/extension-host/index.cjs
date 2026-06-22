@@ -642,6 +642,12 @@ rpc.on('fs.analyze', async (params) => {
   };
 });
 
+// 终端事件占位处理器：实际路由在 api.js 的 Terminal 代理中完成，
+// 此处注册仅避免主进程返回 "Method not found"。
+rpc.on('terminal.created', async () => ({ received: true }));
+rpc.on('terminal.data', async () => ({ received: true }));
+rpc.on('terminal.exit', async () => ({ received: true }));
+
 console.log('[ExtensionHost] 扩展宿主已启动，等待连接...');
 
 // 发送 host.ready 通知

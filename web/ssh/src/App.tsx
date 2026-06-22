@@ -377,11 +377,6 @@ function App() {
     if (vscode) vscode.postMessage({ command: 'openTerminal', connectionId: conn.id });
   };
 
-  const handleOpenPopup = (sessionId: string) => {
-    const vscode = getVsCodeApi();
-    if (vscode) vscode.postMessage({ command: 'openPopupWindow', sessionId });
-  };
-
   const handleLoadRemoteFileTree = (conn: SshConnection) => {
     const vscode = getVsCodeApi();
     if (vscode) vscode.postMessage({ command: 'loadRemoteFileTree', connectionId: conn.id });
@@ -651,11 +646,15 @@ function App() {
                     <div className="session-actions">
                       <button
                         className="icon-btn"
-                        title="弹出窗口"
-                        onClick={(e) => { e.stopPropagation(); handleOpenPopup(session.id); }}
+                        title="在终端中打开"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const conn = connections.find((c) => c.id === session.connectionId);
+                          if (conn) handleOpenTerminal(conn);
+                        }}
                       >
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
+                          <path d="M4 17l6-6-6-6M12 19h8" />
                         </svg>
                       </button>
                       {session.status === 'connected' && (

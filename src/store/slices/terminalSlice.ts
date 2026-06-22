@@ -176,8 +176,8 @@ const terminalSlice = createSlice({
   initialState,
   reducers: {
     /* — 终端 Tab 生命周期 — */
-    addTab(state, action: PayloadAction<{ id?: string; name?: string; profile?: TerminalProfile; isEditor?: boolean; processId?: number; outputFilter?: string }>) {
-      const { id: providedId, name, profile, isEditor, processId, outputFilter } = action.payload;
+    addTab(state, action: PayloadAction<{ id?: string; name?: string; profile?: TerminalProfile; isEditor?: boolean; isModal?: boolean; processId?: number; outputFilter?: string }>) {
+      const { id: providedId, name, profile, isEditor, isModal, processId, outputFilter } = action.payload;
       const id = providedId || nextTabId();
       const tab: TerminalTab = {
         id,
@@ -195,14 +195,16 @@ const terminalSlice = createSlice({
 
       if (isEditor) {
         state.editorTerminals.push(id);
-      } else {
+      } else if (!isModal) {
         const groupId = nextGroupId();
         const group = createDefaultGroup(groupId, id);
         state.panelLayout.groups.push(group);
         state.panelLayout.activeGroupId = groupId;
       }
 
-      state.panelVisible = true;
+      if (!isModal) {
+        state.panelVisible = true;
+      }
     },
 
     removeTab(state, action: PayloadAction<string>) {

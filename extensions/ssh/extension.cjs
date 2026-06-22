@@ -10,6 +10,26 @@ var __commonJS = (cb, mod) => function __require() {
 // api.js
 var require_api = __commonJS({
   "api.js"(exports2, module2) {
+    var EventEmitter = class {
+      constructor() {
+        this._listeners = /* @__PURE__ */ new Set();
+      }
+      fire(data) {
+        for (const listener of this._listeners) {
+          try {
+            listener(data);
+          } catch {
+          }
+        }
+      }
+      get event() {
+        const self2 = this;
+        return function(listener) {
+          self2._listeners.add(listener);
+          return { dispose: () => self2._listeners.delete(listener) };
+        };
+      }
+    };
     var vscode2 = {
       window: {
         showInformationMessage: (message, ...items) => {
@@ -97,24 +117,69 @@ var require_api = __commonJS({
         },
         createTerminal: (options) => {
           return new Promise((resolve, reject) => {
-            if (typeof process !== "undefined" && process.send) {
-              const id = Date.now() + Math.random();
-              process.send({ jsonrpc: "2.0", id, method: "terminal.create", params: options });
-              const handler = (msg) => {
-                if (msg.id === id) {
-                  process.removeListener("message", handler);
-                  if (msg.error) reject(new Error(msg.error.message));
-                  else resolve(msg.result);
-                }
-              };
-              process.on("message", handler);
-              setTimeout(() => {
-                process.removeListener("message", handler);
-                reject(new Error("Terminal creation timeout"));
-              }, 3e4);
-            } else {
+            if (typeof process === "undefined" || !process.send) {
               reject(new Error("Extension Host not connected"));
+              return;
             }
+            const requestId = `term-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+            const rpcId = Date.now() + Math.random();
+            let settled = false;
+            const createdHandler = (msg) => {
+              if (msg.method === "terminal.created" && msg.params?.requestId === requestId) {
+                if (settled) return;
+                settled = true;
+                process.removeListener("message", createdHandler);
+                clearTimeout(timer);
+                const { tabId, processId, success, error } = msg.params || {};
+                if (!success) {
+                  reject(new Error(error || "\u521B\u5EFA\u7EC8\u7AEF\u5931\u8D25"));
+                  return;
+                }
+                const outputEmitter = new EventEmitter();
+                const exitEmitter = new EventEmitter();
+                const outputRouter = (msg2) => {
+                  if (msg2.method === "terminal.data" && msg2.params?.tabId === tabId) {
+                    outputEmitter.fire(msg2.params.data);
+                  } else if (msg2.method === "terminal.exit" && msg2.params?.tabId === tabId) {
+                    exitEmitter.fire(msg2.params.exitCode);
+                  }
+                };
+                process.on("message", outputRouter);
+                const terminal = {
+                  tabId,
+                  processId,
+                  sendText: (text, addNewLine = true) => {
+                    const data = addNewLine && !text.endsWith("\r") && !text.endsWith("\n") ? `${text}\r` : text;
+                    process.send({ jsonrpc: "2.0", method: "terminal.sendInput", params: { tabId, text: data } });
+                  },
+                  show: () => {
+                    process.send({ jsonrpc: "2.0", method: "terminal.show", params: { tabId } });
+                  },
+                  hide: () => {
+                    process.send({ jsonrpc: "2.0", method: "terminal.hide", params: { tabId } });
+                  },
+                  dispose: () => {
+                    process.removeListener("message", outputRouter);
+                    process.send({ jsonrpc: "2.0", method: "terminal.dispose", params: { tabId } });
+                  },
+                  openInModal: (title) => {
+                    process.send({ jsonrpc: "2.0", method: "terminal.openInModal", params: { tabId, title } });
+                  },
+                  onDidWriteData: outputEmitter.event,
+                  onDidClose: exitEmitter.event
+                };
+                resolve(terminal);
+              }
+            };
+            process.on("message", createdHandler);
+            process.send({ jsonrpc: "2.0", id: rpcId, method: "terminal.create", params: { ...options, requestId } });
+            const timer = setTimeout(() => {
+              if (!settled) {
+                settled = true;
+                process.removeListener("message", createdHandler);
+                reject(new Error("Terminal creation timeout"));
+              }
+            }, 3e4);
           });
         }
       },
@@ -21016,16 +21081,42 @@ async function activate(context) {
         const options = {
           name: terminalName,
           executable: "ssh",
-          args: ["-p", String(conn.port || 22), `${conn.username}@${conn.host}`]
+          args: ["-p", String(conn.port || 22), `${conn.username}@${conn.host}`],
+          isModal: true
         };
         if (conn.authType === "password" && conn.password) {
           options.input = conn.password;
           options.outputFilter = "[^\\r\\n]*password:\\s*\\r?\\n?";
         }
         try {
-          await vscode.window.createTerminal(options);
+          const terminal = await vscode.window.createTerminal(options);
+          if (typeof terminal.openInModal === "function") {
+            terminal.openInModal(terminalName);
+          }
+          const session = Array.from(sessions.values()).find(
+            (s) => s.connectionId === conn.id && s.status === "connected"
+          );
+          if (session) {
+            session.terminal = terminal;
+            terminal.onDidWriteData((data) => {
+              broadcast({ type: "terminalOutput", connectionId: conn.id, data });
+            });
+            terminal.onDidClose((exitCode) => {
+              broadcast({ type: "terminalClosed", connectionId: conn.id, exitCode });
+              if (session.terminal === terminal) {
+                session.terminal = null;
+              }
+            });
+          }
         } catch (err) {
           console.error("[SSH Extension] \u521B\u5EFA\u7EC8\u7AEF\u5931\u8D25:", err.message);
+        }
+        break;
+      }
+      case "sendTerminalInput": {
+        const session = sessions.get(message.sessionId);
+        if (session?.terminal) {
+          session.terminal.sendText(message.text, false);
         }
         break;
       }
