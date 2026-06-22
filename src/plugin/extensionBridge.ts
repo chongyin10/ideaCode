@@ -17,7 +17,7 @@
 
 import type { Store } from '@reduxjs/toolkit';
 import type { RootState } from '../store';
-import { openFile } from '../store/slices/workspaceSlice';
+import { openFile, openVirtualFile, addWorkspaceFolder, removeWorkspaceFolder } from '../store/slices/workspaceSlice';
 import { addPanelToOrder, removePanelFromOrder } from '../store/slices/layoutSlice';
 import { getPluginManager } from './core';
 import type { PluginManifest } from './types';
@@ -31,6 +31,12 @@ import {
   disposeWebviewPanel,
   setWebviewPanelHtml,
 } from '../store/slices/extensionUISlice';
+import {
+  openModalWebview,
+  setModalWebviewHtml,
+  closeModalWebview,
+} from '../store/slices/modalSlice';
+import { registerFileSystemProvider } from '../services/fileSystemProvider';
 
 export interface ExtensionManifest {
   id: string;
@@ -121,14 +127,29 @@ export class ExtensionBridge {
     console.log('[ExtensionBridge] 扩展桥接已初始化');
   }
 
-  private _waitForHostReady(timeout = 10000): Promise<void> {
+  private async _waitForHostReady(timeout = 10000): Promise<void> {
+    const api = window.electronAPI?.extension;
+    if (!api) throw new Error('Electron extension API 不可用');
+
+    // 先尝试 ping：宿主可能已经在主进程启动时就绪并发送过 host.ready，
+    // 避免因为订阅晚于通知而一直等待超时。
+    try {
+      const resp = (await api.rpc('host.ping', {})) as { result?: { pong?: boolean } } | undefined;
+      if (resp?.result?.pong) {
+        console.log('[ExtensionBridge] Extension Host 已通过 ping 就绪');
+        return;
+      }
+    } catch {
+      // 宿主尚未就绪，继续等待 host.ready 通知
+    }
+
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         unsub();
         reject(new Error('Extension Host 就绪超时'));
       }, timeout);
 
-      const unsub = window.electronAPI!.extension!.onMessage((msg) => {
+      const unsub = api.onMessage((msg) => {
         if (msg.method === 'host.ready') {
           clearTimeout(timer);
           unsub();
@@ -154,7 +175,7 @@ export class ExtensionBridge {
       const manager = getPluginManager();
       if (manager) {
         manager.getCommandManager().registerCommand(command, (...args: unknown[]) => {
-          this._sendToHost('commands.execute', { command, args });
+          this.sendToHost('commands.execute', { command, args });
           return args;
         });
       }
@@ -175,6 +196,47 @@ export class ExtensionBridge {
       const { fileName } = params as { fileName: string };
       this.store.dispatch(openFile({ name: fileName, kind: 'file', source: fileName }) as any);
       return { opened: true };
+    });
+
+    this.rpcHandlers.set('workspace.openRemoteFileTree', (params) => {
+      const { title, tree } = params as { title: string; tree: unknown };
+      const id = `ssh-tree-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+      this.store.dispatch(
+        openVirtualFile({
+          id,
+          name: title || '远程目录结构',
+          source: `ssh-tree://${id}`,
+          content: JSON.stringify(tree),
+          language: 'ssh-file-tree',
+          isDirty: false,
+        })
+      );
+      return { opened: true };
+    });
+
+    this.rpcHandlers.set('workspace.registerFileSystemProvider', (params) => {
+      const { scheme, extensionId } = params as { scheme: string; extensionId: string };
+      const proxy: Record<string, unknown> = { scheme };
+      const methods = ['readDirectory', 'readFile', 'writeFile', 'createDirectory', 'delete', 'rename', 'stat'];
+      for (const method of methods) {
+        proxy[method] = async (...args: unknown[]) => {
+          return this.invokeExtension(extensionId, 'callFileSystemProvider', [scheme, method, args]);
+        };
+      }
+      registerFileSystemProvider(scheme, proxy as any);
+      return { registered: true };
+    });
+
+    this.rpcHandlers.set('workspace.addWorkspaceFolder', (params) => {
+      const { id, name, uri } = params as { id: string; name: string; uri: string };
+      this.store.dispatch(addWorkspaceFolder({ id, name, source: uri }));
+      return { added: true };
+    });
+
+    this.rpcHandlers.set('workspace.removeWorkspaceFolder', (params) => {
+      const { id } = params as { id: string };
+      this.store.dispatch(removeWorkspaceFolder(id));
+      return { removed: true };
     });
 
     // 编辑器 API
@@ -272,31 +334,63 @@ export class ExtensionBridge {
 
     // WebView API
     this.rpcHandlers.set('webview.create', (params) => {
-      const { id, viewType, title, extensionPath } = params as { id: string; viewType: string; title: string; extensionPath?: string };
-      this.store.dispatch(createWebviewPanel({
+      const {
+        id,
+        viewType,
+        title,
+        showOptions,
+        options,
+        extensionPath,
+      } = params as {
+        id: string;
+        viewType: string;
+        title: string;
+        showOptions?: Record<string, unknown>;
+        options?: Record<string, unknown>;
+        extensionPath?: string;
+      };
+      const isModal = showOptions?.modal === true;
+      const payload = {
         id,
         viewType,
         title,
         html: '',
-        extensionId: 'unknown',
-        extensionPath: extensionPath || '',
+        extensionId: String(options?.extensionId || 'unknown'),
+        extensionPath: String(extensionPath || options?.extensionPath || ''),
         visible: true,
-      }));
-      console.log(`[WebView] 创建面板: ${id} (${title})`);
+      };
+      if (isModal) {
+        this.store.dispatch(openModalWebview(payload));
+        console.log(`[WebView] 创建 Modal: ${id} (${title})`);
+      } else {
+        this.store.dispatch(createWebviewPanel(payload));
+        console.log(`[WebView] 创建面板: ${id} (${title})`);
+      }
       return { created: true };
     });
 
     this.rpcHandlers.set('webview.setHtml', (params) => {
       const { id, html } = params as { id: string; html: string };
-      this.store.dispatch(setWebviewPanelHtml({ id, html }));
+      const modal = this.store.getState().modal.modalWebview;
+      if (modal && modal.id === id) {
+        this.store.dispatch(setModalWebviewHtml({ id, html }));
+      } else {
+        this.store.dispatch(setWebviewPanelHtml({ id, html }));
+      }
       console.log(`[WebView] 设置 HTML: ${id} (${html.length} bytes)`);
       return { set: true };
     });
 
     this.rpcHandlers.set('webview.dispose', (params) => {
       const { id } = params as { id: string };
-      this.store.dispatch(disposeWebviewPanel(id));
-      console.log(`[WebView] 销毁面板: ${id}`);
+      const modal = this.store.getState().modal.modalWebview;
+      if (modal && modal.id === id) {
+        this.store.dispatch(closeModalWebview());
+        console.log(`[WebView] 关闭 Modal: ${id}`);
+      } else {
+        this.store.dispatch(disposeWebviewPanel(id));
+        console.log(`[WebView] 销毁面板: ${id}`);
+      }
       return { disposed: true };
     });
 
@@ -677,6 +771,18 @@ export class ExtensionBridge {
     return this.extensions.get(extId);
   }
 
+  async invokeExtension(extId: string, method: string, args?: unknown[]): Promise<unknown> {
+    const response = (await this.sendToHost('ext.invoke', { extId, method, args })) as {
+      success: boolean;
+      result?: unknown;
+      error?: string;
+    };
+    if (!response.success) {
+      throw new Error(response.error || '扩展调用失败');
+    }
+    return response.result;
+  }
+
   /* ─── WebView 管理 ─── */
 
   getWebViewPanels(): WebViewPanel[] {
@@ -712,7 +818,7 @@ export class ExtensionBridge {
 
   /* ─── 内部工具 ─── */
 
-  private async _sendToHost(method: string, params: unknown): Promise<unknown> {
+  async sendToHost(method: string, params: unknown): Promise<unknown> {
     if (!window.electronAPI?.extension?.rpc) {
       throw new Error('Extension Host 未连接');
     }

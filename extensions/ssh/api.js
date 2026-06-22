@@ -64,7 +64,14 @@ const vscode = {
           },
           asWebviewUri: (localResource) => `ideacode-webview-resource://${localResource.fsPath}`,
         },
-        onDidDispose: (callback) => ({ dispose: () => {} }),
+        onDidDispose: (callback) => {
+          if (!global._webviewDisposeHandlers) global._webviewDisposeHandlers = new Map();
+          if (!global._webviewDisposeHandlers.has(panelId)) {
+            global._webviewDisposeHandlers.set(panelId, []);
+          }
+          global._webviewDisposeHandlers.get(panelId).push(callback);
+          return { dispose: () => {} };
+        },
         onDidChangeViewState: (callback) => ({ dispose: () => {} }),
         reveal: () => {
           if (typeof process !== 'undefined' && process.send) {
@@ -107,6 +114,48 @@ const vscode = {
       update: () => Promise.resolve(),
     }),
     getWorkspaceFolders: () => Promise.resolve([]),
+    registerFileSystemProvider: (scheme, provider) => {
+      if (!global._fileSystemProviders) global._fileSystemProviders = new Map();
+      global._fileSystemProviders.set(scheme, provider);
+      if (typeof process !== 'undefined' && process.send) {
+        process.send({
+          jsonrpc: '2.0',
+          method: 'workspace.registerFileSystemProvider',
+          params: { scheme, extensionId: global._currentExtensionId },
+        });
+      }
+      return { dispose: () => global._fileSystemProviders?.delete(scheme) };
+    },
+    addWorkspaceFolder: ({ id, name, uri }) => {
+      if (typeof process !== 'undefined' && process.send) {
+        process.send({
+          jsonrpc: '2.0',
+          method: 'workspace.addWorkspaceFolder',
+          params: { id, name, uri },
+        });
+      }
+      return Promise.resolve();
+    },
+    removeWorkspaceFolder: ({ id }) => {
+      if (typeof process !== 'undefined' && process.send) {
+        process.send({
+          jsonrpc: '2.0',
+          method: 'workspace.removeWorkspaceFolder',
+          params: { id },
+        });
+      }
+      return Promise.resolve();
+    },
+    openRemoteFileTree: ({ title, tree }) => {
+      if (typeof process !== 'undefined' && process.send) {
+        process.send({
+          jsonrpc: '2.0',
+          method: 'workspace.openRemoteFileTree',
+          params: { title, tree },
+        });
+      }
+      return Promise.resolve();
+    },
   },
   commands: {
     registerCommand: (command, handler) => {
@@ -164,6 +213,16 @@ if (typeof process !== 'undefined') {
         for (const handler of handlers) {
           handler(message);
         }
+      }
+    }
+    if (msg.method === 'webview.dispose' && msg.params) {
+      const { id } = msg.params;
+      const handlers = global._webviewDisposeHandlers?.get(id);
+      if (handlers) {
+        for (const handler of handlers) {
+          try { handler(); } catch { /* ignore */ }
+        }
+        global._webviewDisposeHandlers.delete(id);
       }
     }
   });

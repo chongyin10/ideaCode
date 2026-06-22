@@ -4,12 +4,24 @@
   box-sizing: border-box;
 }
 
+html, body, #root {
+  height: 100%;
+}
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   font-size: 13px;
   color: #cccccc;
   background: #1e1e1e;
+  padding: 0;
+}
+
+.ssh-panel {
   padding: 16px;
+}
+
+.ssh-panel--popup {
+  padding: 0;
 }
 
 .btn {
@@ -162,6 +174,47 @@ body {
   color: #6e6e6e;
 }
 
+.form-hint {
+  font-size: 11px;
+  color: #6e6e6e;
+  line-height: 1.4;
+}
+
+.file-tree-status {
+  padding: 8px 12px;
+  margin: 8px 0;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.file-tree-status--loading {
+  background: #1e3a5f;
+  color: #9cdcfe;
+}
+
+.file-tree-status--error {
+  background: #3a1d1d;
+  color: #f48771;
+}
+
+.ssh-log {
+  max-height: 200px;
+  overflow-y: auto;
+  background: #1e1e1e;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  padding: 8px;
+  font-family: monospace;
+  font-size: 11px;
+  color: #858585;
+}
+
+.ssh-log__line {
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.5;
+}
+
 .form-row-half {
   display: flex;
   gap: 10px;
@@ -224,9 +277,12 @@ body {
   background: #252526;
   border: 1px solid #2d2d2d;
   transition: border-color 0.15s, background 0.15s;
+  position: relative;
+  z-index: 1;
 }
 
 .connection-card:hover {
+  z-index: 10;
   background: #2a2d2e;
   border-color: #3c3c3c;
 }
@@ -298,6 +354,66 @@ body {
 .connection-card__actions .btn {
   flex: 1;
   justify-content: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.more-menu {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.more-menu__btn {
+  width: 28px;
+  padding: 4px;
+  justify-content: center;
+}
+
+.more-menu__dropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  left: auto;
+  z-index: 10;
+  min-width: 140px;
+  background: #252526;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  padding: 4px 0;
+  padding-top: 4px;
+  display: none;
+}
+
+.more-menu:hover .more-menu__dropdown,
+.more-menu__dropdown:hover {
+  display: block;
+}
+
+.more-menu__item {
+  padding: 6px 12px;
+  font-size: 12px;
+  color: #cccccc;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.more-menu__item:hover {
+  background: #094771;
+  color: #ffffff;
+}
+
+.more-menu__item--danger:hover {
+  background: #5a1d1d;
+  color: #f48771;
+}
+
+.more-menu__divider {
+  height: 1px;
+  margin: 4px 8px;
+  background: #3c3c3c;
 }
 
 .icon-btn {
@@ -440,4 +556,168 @@ body {
 
 .command-input:focus {
   border-color: #007acc;
+}
+
+/* Session popup window */
+.session-popup-overlay {
+  position: fixed;
+  inset: 0;
+  background: transparent;
+  z-index: 1000;
+}
+
+.session-popup {
+  background: #252526;
+  border: 1px solid #3c3c3c;
+  border-radius: 6px;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.7);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 320px;
+  min-height: 240px;
+  max-width: calc(100% - 32px);
+  max-height: calc(100% - 32px);
+  pointer-events: auto;
+}
+
+.ssh-panel--popup {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.session-popup-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.session-popup-content .session-popup__terminal {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+}
+
+.session-popup-content .command-bar {
+  flex-shrink: 0;
+}
+
+.session-popup--maximized {
+  border-radius: 0;
+}
+
+.session-popup__titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  background: #333333;
+  border-bottom: 1px solid #3c3c3c;
+  user-select: none;
+}
+
+.session-popup__title {
+  font-weight: 500;
+  color: #e0e0e0;
+}
+
+.session-popup__controls {
+  display: flex;
+  gap: 4px;
+}
+
+.session-popup__controls .icon-btn {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+}
+
+.session-popup__body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+
+.session-popup__terminal {
+  flex: 1;
+  overflow: auto;
+  padding: 8px;
+  background: #1e1e1e;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.session-popup__resize-handle {
+  position: absolute;
+  z-index: 10;
+}
+
+.session-popup__resize-handle--right {
+  top: 0;
+  right: 0;
+  bottom: 8px;
+  width: 8px;
+  cursor: e-resize;
+}
+
+.session-popup__resize-handle--bottom {
+  left: 0;
+  right: 8px;
+  bottom: 0;
+  height: 8px;
+  cursor: s-resize;
+}
+
+.session-popup__resize-handle--corner {
+  right: 0;
+  bottom: 0;
+  width: 12px;
+  height: 12px;
+  cursor: se-resize;
+}
+
+/* Context menu inside popup terminal */
+.context-menu {
+  position: fixed;
+  min-width: 120px;
+  background: #252526;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  padding: 4px 0;
+  z-index: 1000;
+}
+
+.context-menu__item {
+  padding: 6px 12px;
+  font-size: 12px;
+  color: #cccccc;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.context-menu__item:hover {
+  background: #094771;
+  color: #ffffff;
+}
+
+.context-menu__separator {
+  height: 1px;
+  margin: 4px 8px;
+  background: #3c3c3c;
+}
+
+.terminal-empty-hint {
+  padding: 8px;
+  color: #5a5a5a;
+  font-size: 12px;
+  user-select: none;
 }

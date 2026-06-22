@@ -1,0 +1,494 @@
+import { useMemo, useState } from 'react';
+import { useAppDispatch } from '../../store/hooks';
+import { setFileContent, addWorkspaceFolder } from '../../store/slices/workspaceSlice';
+import { terminalSDK } from '../../services/terminalSDK';
+import { getExtensionBridge } from '../../plugin/extensionBridge';
+import ContextMenu, { type MenuItem } from '../ContextMenu';
+import type { FileTreeNode } from './types';
+import './SshFileTreePanel.css';
+
+const FolderIcon = ({ expanded }: { expanded: boolean }) => (
+  <svg className="ssh-file-tree__icon ssh-file-tree__icon--folder" viewBox="0 0 24 24" fill="currentColor">
+    {expanded ? (
+      <path d="M20 6h-8l-2-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z" />
+    ) : (
+      <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" />
+    )}
+  </svg>
+);
+
+const FileIcon = () => (
+  <svg className="ssh-file-tree__icon ssh-file-tree__icon--file" viewBox="0 0 24 24" fill="currentColor">
+    <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z" />
+  </svg>
+);
+
+const ChevronIcon = ({ expanded }: { expanded: boolean }) => (
+  <svg
+    className={`ssh-file-tree__chevron ${expanded ? 'ssh-file-tree__chevron--expanded' : ''}`}
+    viewBox="0 0 24 24"
+    fill="currentColor"
+  >
+    <path d="M9.29 6.71c-.39.39-.39 1.02 0 1.41L13.17 12l-3.88 3.88c-.39.39-.39 1.02 0 1.41.39.39 1.02.39 1.41 0l4.59-4.59c.39-.39.39-1.02 0-1.41L10.7 6.71c-.38-.38-1.02-.38-1.41.01z" />
+  </svg>
+);
+
+export interface SshConnection {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  username: string;
+  password?: string;
+  privateKey?: string;
+  authType: 'password' | 'key';
+}
+
+interface TreeData {
+  connectionId: string;
+  rootPath: string;
+  connection: SshConnection;
+  tree: FileTreeNode;
+}
+
+interface ClipboardItem {
+  operation: 'move' | 'copy';
+  path: string;
+  name: string;
+}
+
+let remoteClipboard: ClipboardItem | null = null;
+
+function parentDir(p: string): string {
+  const idx = p.lastIndexOf('/');
+  return idx > 0 ? p.slice(0, idx) : p;
+}
+
+function relativePath(root: string, p: string): string {
+  if (p === root) return '~';
+  if (p.startsWith(root + '/')) return '~/' + p.slice(root.length + 1);
+  return p;
+}
+
+interface SshFileTreePanelProps {
+  content: string;
+  fileId: string;
+}
+
+function TreeNodeItem({
+  node,
+  depth = 0,
+  onContextMenu,
+}: {
+  node: FileTreeNode;
+  depth?: number;
+  onContextMenu: (e: React.MouseEvent, node: FileTreeNode) => void;
+}) {
+  const [expanded, setExpanded] = useState(depth < 1);
+  const isDir = node.type === 'directory';
+  const hasChildren = isDir && (node.children?.length ?? 0) > 0;
+
+  return (
+    <div className="ssh-file-tree__node">
+      <div
+        className="ssh-file-tree__row"
+        style={{ paddingLeft: `${depth * 16 + 8}px` }}
+        onClick={() => hasChildren && setExpanded((prev) => !prev)}
+        onContextMenu={(e) => onContextMenu(e, node)}
+        title={node.path}
+      >
+        {hasChildren && <ChevronIcon expanded={expanded} />}
+        {!hasChildren && <span className="ssh-file-tree__chevron-placeholder" />}
+        {isDir ? <FolderIcon expanded={expanded} /> : <FileIcon />}
+        <span className="ssh-file-tree__label">{node.name}</span>
+      </div>
+      {isDir && expanded && node.children && (
+        <div className="ssh-file-tree__children">
+          {node.children.map((child) => (
+            <TreeNodeItem key={child.path} node={child} depth={depth + 1} onContextMenu={onContextMenu} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function findNode(root: FileTreeNode, path: string): FileTreeNode | undefined {
+  if (root.path === path) return root;
+  if (!root.children) return undefined;
+  for (const child of root.children) {
+    const found = findNode(child, path);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function getUniqueName(parent: FileTreeNode, name: string): string {
+  if (!parent.children || parent.children.length === 0) return name;
+  const names = new Set(parent.children.map((c) => c.name));
+  if (!names.has(name)) return name;
+  const dotIndex = name.lastIndexOf('.');
+  const hasExtension = dotIndex > 0;
+  const base = hasExtension ? name.slice(0, dotIndex) : name;
+  const ext = hasExtension ? name.slice(dotIndex) : '';
+  let i = 1;
+  while (names.has(`${base} (${i})${ext}`)) i++;
+  return `${base} (${i})${ext}`;
+}
+
+export default function SshFileTreePanel({ content, fileId }: SshFileTreePanelProps) {
+  const dispatch = useAppDispatch();
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; node: FileTreeNode } | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [inputDialog, setInputDialog] = useState<{
+    type: 'rename' | 'newFile' | 'newFolder';
+    node: FileTreeNode;
+    value: string;
+  } | null>(null);
+
+  const data = useMemo<TreeData | null>(() => {
+    try {
+      const parsed = JSON.parse(content);
+      const emptyConnection: SshConnection = {
+        id: '',
+        name: '',
+        host: '',
+        port: 22,
+        username: '',
+        authType: 'password',
+      };
+      if (parsed && parsed.tree) {
+        return {
+          connectionId: parsed.connectionId || '',
+          rootPath: parsed.rootPath || parsed.tree.path || '~',
+          connection: parsed.connection || emptyConnection,
+          tree: parsed.tree as FileTreeNode,
+        };
+      }
+      // 兼容旧格式：直接是树对象
+      if (parsed && parsed.type) {
+        return {
+          connectionId: '',
+          rootPath: parsed.path || '~',
+          connection: emptyConnection,
+          tree: parsed as FileTreeNode,
+        };
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }, [content]);
+
+  const showNotice = (text: string) => {
+    setNotice(text);
+    setTimeout(() => setNotice(null), 2500);
+  };
+
+  const handleContextMenu = (e: React.MouseEvent, node: FileTreeNode) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({ x: e.clientX, y: e.clientY, node });
+  };
+
+  const closeContextMenu = () => setContextMenu(null);
+
+  const refreshTree = async () => {
+    if (!data?.connectionId) return;
+    const bridge = getExtensionBridge();
+    if (!bridge) return;
+    try {
+      const result = (await bridge.invokeExtension('ideacode-ssh', 'getRemoteFileTree', [
+        data.connectionId,
+      ])) as { rootPath?: string; tree?: FileTreeNode } | undefined;
+      console.log('[SshFileTreePanel] 刷新结果:', result);
+      if (!result?.tree) {
+        showNotice('刷新失败：未获取到目录数据');
+        return;
+      }
+      dispatch(
+        setFileContent({
+          id: fileId,
+          content: JSON.stringify({
+            connectionId: data.connectionId,
+            rootPath: result.rootPath || data.rootPath,
+            connection: data.connection,
+            tree: result.tree,
+          }),
+        })
+      );
+    } catch (err) {
+      console.error('[SshFileTreePanel] 刷新失败:', err);
+      showNotice('刷新失败');
+    }
+  };
+
+  const invokeOperation = async (operation: string, params: Record<string, unknown>) => {
+    if (!data?.connectionId) return;
+    const bridge = getExtensionBridge();
+    if (!bridge) {
+      showNotice('扩展桥接未就绪');
+      return;
+    }
+    try {
+      const opResult = await bridge.invokeExtension('ideacode-ssh', 'handleFileOperation', [
+        { operation, connectionId: data.connectionId, ...params },
+      ]);
+      console.log('[SshFileTreePanel] 操作结果:', opResult);
+      // 留一点时间让远程文件系统落盘
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      await refreshTree();
+    } catch (err) {
+      console.error('[SshFileTreePanel] 操作失败:', err);
+      showNotice(`操作失败: ${(err as Error).message}`);
+    }
+  };
+
+  const handleCut = (node: FileTreeNode) => {
+    remoteClipboard = { operation: 'move', path: node.path, name: node.name };
+    showNotice('已剪切');
+  };
+
+  const handleCopy = (node: FileTreeNode) => {
+    remoteClipboard = { operation: 'copy', path: node.path, name: node.name };
+    showNotice('已复制');
+  };
+
+  const handlePaste = async (node: FileTreeNode) => {
+    if (!remoteClipboard || !data?.tree) return;
+    const destDir = node.type === 'directory' ? node.path : parentDir(node.path);
+    const parentNode = findNode(data.tree, destDir) || node;
+    const uniqueName = getUniqueName(parentNode, remoteClipboard.name);
+    const target = `${destDir}/${uniqueName}`;
+    if (target === remoteClipboard.path) {
+      showNotice('源路径和目标路径相同');
+      return;
+    }
+    await invokeOperation(remoteClipboard.operation, { path: remoteClipboard.path, target });
+    if (remoteClipboard.operation === 'move') {
+      remoteClipboard = null;
+    }
+  };
+
+  const handleDelete = async (node: FileTreeNode) => {
+    if (!window.confirm(`确定要删除 ${node.name} 吗？`)) return;
+    await invokeOperation('delete', { path: node.path });
+  };
+
+  const handleRename = (node: FileTreeNode) => {
+    setInputDialog({ type: 'rename', node, value: node.name });
+  };
+
+  const handleNewFile = (node: FileTreeNode) => {
+    setInputDialog({ type: 'newFile', node, value: '' });
+  };
+
+  const handleNewFolder = (node: FileTreeNode) => {
+    setInputDialog({ type: 'newFolder', node, value: '' });
+  };
+
+  const handleRefresh = () => {
+    refreshTree();
+  };
+
+  const confirmInputDialog = async () => {
+    if (!inputDialog || !data?.tree) return;
+    const { type, node, value } = inputDialog;
+    const name = value.trim();
+    setInputDialog(null);
+    if (!name) return;
+
+    if (type === 'rename') {
+      if (name === node.name) return;
+      await invokeOperation('rename', { path: node.path, newName: name });
+      return;
+    }
+
+    const dirPath = node.type === 'directory' ? node.path : parentDir(node.path);
+    const parentNode = findNode(data.tree, dirPath) || node;
+    const uniqueName = getUniqueName(parentNode, name);
+    const targetPath = `${dirPath}/${uniqueName}`;
+
+    if (type === 'newFile') {
+      await invokeOperation('createFile', { path: targetPath });
+    } else if (type === 'newFolder') {
+      await invokeOperation('createFolder', { path: targetPath });
+    }
+  };
+
+  const handleCopyPath = (node: FileTreeNode) => {
+    navigator.clipboard.writeText(node.path).then(() => showNotice('路径已复制'));
+  };
+
+  const handleCopyRelativePath = (node: FileTreeNode) => {
+    const text = relativePath(data?.rootPath || node.path, node.path);
+    navigator.clipboard.writeText(text).then(() => showNotice('相对路径已复制'));
+  };
+
+  const handleOpenInTerminal = (node: FileTreeNode) => {
+    if (!data?.connection?.host) return;
+    const conn = data.connection;
+    const dirPath = node.type === 'directory' ? node.path : parentDir(node.path);
+    const escaped = `'${dirPath.replace(/'/g, "'\"'\"'")}'`;
+    const options: Record<string, unknown> = {
+      name: `${conn.name} ${conn.host}`,
+      executable: 'ssh',
+      args: [
+        '-p',
+        String(conn.port || 22),
+        '-t',
+        `${conn.username}@${conn.host}`,
+        `cd ${escaped} && exec $SHELL -l`,
+      ],
+    };
+    if (conn.authType === 'password' && conn.password) {
+      options.input = conn.password;
+      options.outputFilter = '[^\\r\\n]*password:\\s*\\r?\\n?';
+    }
+    terminalSDK
+      .createTab(options)
+      .catch((err) => {
+        console.error('[SshFileTreePanel] 打开终端失败:', err);
+        showNotice('打开终端失败');
+      });
+  };
+
+  const handleAddToExplorer = (node: FileTreeNode) => {
+    if (!data || node.type !== 'directory') return;
+    const rootId = `ssh-${data.connectionId}-${node.path.replace(/\//g, '-')}`;
+    const uri = `ssh://${data.connectionId}${node.path}`;
+    dispatch(
+      addWorkspaceFolder({
+        id: rootId,
+        name: `${data.connection.name} · ${node.name}`,
+        source: uri,
+      })
+    );
+    showNotice('已添加到资源管理器');
+  };
+
+  const menuItems: MenuItem[] = useMemo(() => {
+    if (!contextMenu) return [];
+    const node = contextMenu.node;
+    const canOperate = !!data?.connectionId && !!data?.connection?.host;
+    return [
+      {
+        id: 'newFile',
+        label: '新建文件',
+        group: 'new',
+        disabled: !canOperate,
+        onClick: () => handleNewFile(node),
+      },
+      {
+        id: 'newFolder',
+        label: '新建文件夹',
+        group: 'new',
+        disabled: !canOperate,
+        onClick: () => handleNewFolder(node),
+      },
+      { id: 'refresh', label: '刷新', group: 'new', onClick: () => handleRefresh() },
+      { id: 'cut', label: '剪切', group: 'op', disabled: !canOperate, onClick: () => handleCut(node) },
+      { id: 'copy', label: '复制', group: 'op', disabled: !canOperate, onClick: () => handleCopy(node) },
+      {
+        id: 'paste',
+        label: '粘贴',
+        group: 'op',
+        disabled: !canOperate || !remoteClipboard,
+        onClick: () => handlePaste(node),
+      },
+      { id: 'delete', label: '删除', group: 'op', disabled: !canOperate, onClick: () => handleDelete(node) },
+      { id: 'rename', label: '重命名', group: 'op', disabled: !canOperate, onClick: () => handleRename(node) },
+      { id: 'copyPath', label: '复制路径', group: 'path', onClick: () => handleCopyPath(node) },
+      {
+        id: 'copyRelativePath',
+        label: '复制相对路径',
+        group: 'path',
+        onClick: () => handleCopyRelativePath(node),
+      },
+      {
+        id: 'openInTerminal',
+        label: '在终端中打开',
+        group: 'term',
+        disabled: !canOperate,
+        onClick: () => handleOpenInTerminal(node),
+      },
+      {
+        id: 'addToExplorer',
+        label: '添加到资源管理器',
+        group: 'explorer',
+        disabled: !canOperate || node.type !== 'directory',
+        onClick: () => handleAddToExplorer(node),
+      },
+    ];
+  }, [contextMenu, data?.connectionId, data?.connection?.host, data?.rootPath]);
+
+  if (!data) {
+    return (
+      <div className="ssh-file-tree ssh-file-tree--empty">
+        <p>无法解析远程目录结构</p>
+      </div>
+    );
+  }
+
+  const { tree, rootPath, connection } = data;
+
+  return (
+    <div className="ssh-file-tree">
+      <div className="ssh-file-tree__header">
+        <FolderIcon expanded />
+        <div className="ssh-file-tree__heading">
+          <span className="ssh-file-tree__title" title={tree.name}>{tree.name}</span>
+          <span className="ssh-file-tree__path" title={rootPath}>
+            {connection?.host ? `${connection.username}@${connection.host}:${connection.port}` : rootPath}
+          </span>
+        </div>
+      </div>
+      {notice && <div className="ssh-file-tree__notice">{notice}</div>}
+      <div className="ssh-file-tree__body" onContextMenu={(e) => handleContextMenu(e, tree)}>
+        {tree.children?.map((child) => (
+          <TreeNodeItem key={child.path} node={child} depth={0} onContextMenu={handleContextMenu} />
+        ))}
+      </div>
+      {contextMenu && (
+        <ContextMenu
+          items={menuItems}
+          x={contextMenu.x}
+          y={contextMenu.y}
+          visible={!!contextMenu}
+          onClose={closeContextMenu}
+        />
+      )}
+      {inputDialog && (
+        <div className="ssh-file-tree__modal-overlay" onClick={() => setInputDialog(null)}>
+          <div className="ssh-file-tree__modal" onClick={(e) => e.stopPropagation()}>
+            <div className="ssh-file-tree__modal-title">
+              {inputDialog.type === 'rename' ? '重命名' : inputDialog.type === 'newFile' ? '新建文件' : '新建文件夹'}
+            </div>
+            <input
+              className="ssh-file-tree__modal-input"
+              type="text"
+              value={inputDialog.value}
+              autoFocus
+              placeholder={
+                inputDialog.type === 'rename'
+                  ? '新名称'
+                  : inputDialog.type === 'newFile'
+                    ? '文件名称'
+                    : '文件夹名称'
+              }
+              onChange={(e) => setInputDialog({ ...inputDialog, value: e.target.value })}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') confirmInputDialog();
+                if (e.key === 'Escape') setInputDialog(null);
+              }}
+            />
+            <div className="ssh-file-tree__modal-actions">
+              <button className="btn btn-sm" onClick={confirmInputDialog}>确定</button>
+              <button className="btn btn-sm btn-secondary" onClick={() => setInputDialog(null)}>取消</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

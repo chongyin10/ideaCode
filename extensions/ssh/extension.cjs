@@ -72,8 +72,15 @@ var require_api = __commonJS({
               },
               asWebviewUri: (localResource) => `ideacode-webview-resource://${localResource.fsPath}`
             },
-            onDidDispose: (callback) => ({ dispose: () => {
-            } }),
+            onDidDispose: (callback) => {
+              if (!global._webviewDisposeHandlers) global._webviewDisposeHandlers = /* @__PURE__ */ new Map();
+              if (!global._webviewDisposeHandlers.has(panelId)) {
+                global._webviewDisposeHandlers.set(panelId, []);
+              }
+              global._webviewDisposeHandlers.get(panelId).push(callback);
+              return { dispose: () => {
+              } };
+            },
             onDidChangeViewState: (callback) => ({ dispose: () => {
             } }),
             reveal: () => {
@@ -116,7 +123,49 @@ var require_api = __commonJS({
           get: (key, defaultValue) => defaultValue,
           update: () => Promise.resolve()
         }),
-        getWorkspaceFolders: () => Promise.resolve([])
+        getWorkspaceFolders: () => Promise.resolve([]),
+        registerFileSystemProvider: (scheme, provider) => {
+          if (!global._fileSystemProviders) global._fileSystemProviders = /* @__PURE__ */ new Map();
+          global._fileSystemProviders.set(scheme, provider);
+          if (typeof process !== "undefined" && process.send) {
+            process.send({
+              jsonrpc: "2.0",
+              method: "workspace.registerFileSystemProvider",
+              params: { scheme, extensionId: global._currentExtensionId }
+            });
+          }
+          return { dispose: () => global._fileSystemProviders?.delete(scheme) };
+        },
+        addWorkspaceFolder: ({ id, name, uri }) => {
+          if (typeof process !== "undefined" && process.send) {
+            process.send({
+              jsonrpc: "2.0",
+              method: "workspace.addWorkspaceFolder",
+              params: { id, name, uri }
+            });
+          }
+          return Promise.resolve();
+        },
+        removeWorkspaceFolder: ({ id }) => {
+          if (typeof process !== "undefined" && process.send) {
+            process.send({
+              jsonrpc: "2.0",
+              method: "workspace.removeWorkspaceFolder",
+              params: { id }
+            });
+          }
+          return Promise.resolve();
+        },
+        openRemoteFileTree: ({ title, tree }) => {
+          if (typeof process !== "undefined" && process.send) {
+            process.send({
+              jsonrpc: "2.0",
+              method: "workspace.openRemoteFileTree",
+              params: { title, tree }
+            });
+          }
+          return Promise.resolve();
+        }
       },
       commands: {
         registerCommand: (command, handler) => {
@@ -172,6 +221,19 @@ var require_api = __commonJS({
             for (const handler of handlers) {
               handler(message);
             }
+          }
+        }
+        if (msg.method === "webview.dispose" && msg.params) {
+          const { id } = msg.params;
+          const handlers = global._webviewDisposeHandlers?.get(id);
+          if (handlers) {
+            for (const handler of handlers) {
+              try {
+                handler();
+              } catch {
+              }
+            }
+            global._webviewDisposeHandlers.delete(id);
           }
         }
       });
@@ -20303,14 +20365,47 @@ var require_lib2 = __commonJS({
 // extension.js
 var vscode = require_api();
 var fs = require("fs");
+var os = require("os");
 var path = require("path");
 var { Client } = require_lib2();
 var sessions = /* @__PURE__ */ new Map();
 var sshClients = /* @__PURE__ */ new Map();
+var connections = [];
+var globalBroadcast = null;
+function log(level, ...args) {
+  const msg = `[${(/* @__PURE__ */ new Date()).toLocaleTimeString()}] ${args.join(" ")}`;
+  if (level === "error") {
+    console.error(msg);
+  } else {
+    console.log(msg);
+  }
+  if (globalBroadcast) {
+    try {
+      globalBroadcast({ type: "sshLog", level, message: msg });
+    } catch {
+    }
+  }
+}
 function generateId() {
   return `ssh-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
-function getWebviewHtml(extensionPath) {
+function loadDefaultPrivateKey() {
+  const home = os.homedir();
+  const keyFiles = ["id_rsa", "id_ed25519", "id_ecdsa"];
+  for (const file of keyFiles) {
+    const keyPath = path.join(home, ".ssh", file);
+    try {
+      const key = fs.readFileSync(keyPath, "utf-8");
+      if (key.includes("PRIVATE KEY")) {
+        console.log("[SSH Extension] \u4F7F\u7528\u672C\u5730\u9ED8\u8BA4\u79C1\u94A5:", keyPath);
+        return key;
+      }
+    } catch {
+    }
+  }
+  return null;
+}
+function getWebviewHtml(extensionPath, popupSession) {
   const htmlPath = path.join(extensionPath, "webview", "index.html");
   try {
     let html = fs.readFileSync(htmlPath, "utf-8");
@@ -20332,58 +20427,104 @@ function getWebviewHtml(extensionPath) {
         return match;
       }
     });
+    if (popupSession) {
+      const inject = `<script>window.__sshPopupSession = ${JSON.stringify(popupSession).replace(/</g, "\\u003c")}</script>`;
+      html = html.replace("</head>", `${inject}</head>`);
+    }
     return html;
   } catch (err) {
     console.error("[SSH Extension] \u8BFB\u53D6 WebView HTML \u5931\u8D25:", err.message);
     return `<html><body style="color:#fff;background:#1e1e1e;padding:20px;"><h1>SSH \u8FDC\u7A0B\u8FDE\u63A5</h1><p>WebView \u8D44\u6E90\u672A\u627E\u5230\uFF0C\u8BF7\u8FD0\u884C <code>cd web/ssh && npm run build</code></p></body></html>`;
   }
 }
-function registerSshCommands() {
-  vscode.commands.registerCommand("ssh.internal.connect", (config) => {
-    return new Promise((resolve) => {
-      const { id, host, port, username, password, privateKey } = config;
-      console.log("[SSH Extension] \u5F00\u59CB\u8FDE\u63A5:", host, port, username);
-      const client = new Client();
-      sshClients.set(id, client);
-      const connConfig = {
-        host,
-        port: port || 22,
-        username,
-        readyTimeout: 2e4
-      };
-      if (privateKey) {
-        connConfig.privateKey = privateKey;
-      } else if (password) {
-        connConfig.password = password;
-      }
-      client.on("ready", () => {
-        console.log("[SSH Extension] \u8FDE\u63A5\u6210\u529F:", host);
-        resolve({ success: true });
-      });
-      client.on("error", (err) => {
-        console.error("[SSH Extension] \u8FDE\u63A5\u5931\u8D25:", host, err.message);
-        sshClients.delete(id);
-        resolve({ success: false, error: err.message });
-      });
-      client.on("close", () => {
-        console.log("[SSH Extension] \u8FDE\u63A5\u5173\u95ED:", host);
-        sshClients.delete(id);
-      });
-      client.on("keyboard-interactive", (name, instructions, instructionsLang, prompts, finish) => {
-        if (password && prompts.length > 0) {
-          finish([password]);
-        } else {
-          finish([]);
-        }
-      });
+function attemptConnect(id, connConfig, password) {
+  return new Promise((resolve, reject) => {
+    const client = new Client();
+    sshClients.set(id, client);
+    client.on("ready", () => {
+      log("log", "[SSH Extension] \u8FDE\u63A5\u6210\u529F:", connConfig.host);
+      resolve({ success: true });
+    });
+    client.on("error", (err) => {
+      log("error", "[SSH Extension] \u8FDE\u63A5\u5931\u8D25:", connConfig.host, err.message);
       try {
-        client.connect(connConfig);
-      } catch (err) {
-        console.error("[SSH Extension] \u8FDE\u63A5\u5F02\u5E38:", err.message);
+        client.end();
+      } catch {
+      }
+      if (sshClients.get(id) === client) {
         sshClients.delete(id);
-        resolve({ success: false, error: err.message });
+      }
+      reject(err);
+    });
+    client.on("close", () => {
+      log("log", "[SSH Extension] \u8FDE\u63A5\u5173\u95ED:", connConfig.host, "session:", id);
+      if (sshClients.get(id) === client) {
+        sshClients.delete(id);
       }
     });
+    client.on("keyboard-interactive", (name, instructions, instructionsLang, prompts, finish) => {
+      if (password && prompts.length > 0) {
+        finish([password]);
+      } else {
+        finish([]);
+      }
+    });
+    try {
+      client.connect(connConfig);
+    } catch (err) {
+      log("error", "[SSH Extension] \u8FDE\u63A5\u5F02\u5E38:", err.message);
+      if (sshClients.get(id) === client) {
+        sshClients.delete(id);
+      }
+      reject(err);
+    }
+  });
+}
+function registerSshCommands() {
+  vscode.commands.registerCommand("ssh.internal.connect", async (config) => {
+    const { id, host, port, username, password, privateKey } = config;
+    log("log", "[SSH Extension] \u5F00\u59CB\u8FDE\u63A5:", host, port, username);
+    const baseConfig = {
+      host,
+      port: port || 22,
+      username,
+      readyTimeout: 2e4,
+      keepaliveInterval: 3e4,
+      keepaliveCountMax: 3
+    };
+    if (privateKey) {
+      try {
+        return await attemptConnect(id, { ...baseConfig, privateKey }, password);
+      } catch (err) {
+        return { success: false, error: err.message };
+      }
+    }
+    if (password) {
+      try {
+        return await attemptConnect(id, { ...baseConfig, password }, password);
+      } catch (err) {
+        return { success: false, error: err.message };
+      }
+    }
+    const agentSock = process.env.SSH_AUTH_SOCK;
+    if (agentSock) {
+      console.log("[SSH Extension] \u5C1D\u8BD5 ssh-agent:", agentSock);
+      try {
+        return await attemptConnect(id, { ...baseConfig, agent: agentSock }, password);
+      } catch (err) {
+        console.log("[SSH Extension] ssh-agent \u8BA4\u8BC1\u5931\u8D25\uFF0C\u5C1D\u8BD5\u672C\u5730\u9ED8\u8BA4\u79C1\u94A5:", err.message);
+      }
+    }
+    const defaultKey = loadDefaultPrivateKey();
+    if (defaultKey) {
+      console.log("[SSH Extension] \u5C1D\u8BD5\u672C\u5730\u9ED8\u8BA4\u79C1\u94A5");
+      try {
+        return await attemptConnect(id, { ...baseConfig, privateKey: defaultKey }, password);
+      } catch (err) {
+        return { success: false, error: err.message };
+      }
+    }
+    return { success: false, error: "\u672A\u914D\u7F6E\u8BA4\u8BC1\u4FE1\u606F\uFF0C\u4E5F\u672A\u627E\u5230\u53EF\u7528\u7684 ssh-agent \u6216\u672C\u5730\u9ED8\u8BA4\u79C1\u94A5" };
   });
   vscode.commands.registerCommand("ssh.internal.disconnect", (config) => {
     const { id } = config;
@@ -20401,17 +20542,23 @@ function registerSshCommands() {
     return new Promise((resolve) => {
       const { id, command } = config;
       const client = sshClients.get(id);
+      log("log", "[SSH Extension] execute \u8BF7\u6C42:", id, "client \u5B58\u5728:", !!client);
       if (!client) {
+        log("error", "[SSH Extension] execute \u4F1A\u8BDD\u4E0D\u5B58\u5728:", id, "\u5F53\u524D\u4F1A\u8BDD:", Array.from(sshClients.keys()));
         return resolve({ success: false, error: "\u4F1A\u8BDD\u4E0D\u5B58\u5728\u6216\u5DF2\u65AD\u5F00" });
       }
-      client.exec(command, (err, stream) => {
+      client.exec(command, { pty: true }, (err, stream) => {
         if (err) {
           return resolve({ success: false, error: err.message });
         }
         let stdout = "";
         let stderr = "";
         stream.on("close", (code, signal) => {
-          resolve({ success: true, stdout, stderr, code, signal });
+          const success = code === 0;
+          if (!success && !stderr && code !== null) {
+            stderr = `\u547D\u4EE4\u9000\u51FA\u7801: ${code}`;
+          }
+          resolve({ success, stdout, stderr, code, signal });
         });
         stream.on("data", (data) => {
           stdout += data.toString();
@@ -20423,9 +20570,278 @@ function registerSshCommands() {
     });
   });
 }
+function buildRemoteTree(lines) {
+  const entries = [];
+  let rootPath = "";
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const idx = trimmed.indexOf("|");
+    if (idx < 0) continue;
+    const typeChar = trimmed.slice(0, idx);
+    const fullPath = trimmed.slice(idx + 1).trim();
+    if (!fullPath) continue;
+    const type = typeChar === "d" ? "directory" : "file";
+    entries.push({ type, fullPath });
+    if (!rootPath && type === "directory") {
+      rootPath = fullPath;
+    }
+  }
+  if (!rootPath && entries.length > 0) {
+    const parts = entries[0].fullPath.split("/").filter(Boolean);
+    parts.pop();
+    rootPath = `/${parts.join("/")}`;
+  }
+  if (!rootPath) {
+    return { name: "~", path: "~", type: "directory", children: [] };
+  }
+  const root = { name: "~", path: rootPath, type: "directory", children: [] };
+  const nodeMap = /* @__PURE__ */ new Map();
+  nodeMap.set(rootPath, root);
+  entries.sort((a, b) => a.fullPath.length - b.fullPath.length);
+  for (const { type, fullPath } of entries) {
+    if (fullPath === rootPath) continue;
+    const relative = fullPath.startsWith(rootPath + "/") ? fullPath.slice(rootPath.length + 1) : fullPath.startsWith("/") ? fullPath.slice(1) : fullPath;
+    const parts = relative.split("/").filter(Boolean);
+    if (parts.length === 0) continue;
+    let parentPath = rootPath;
+    for (let i = 0; i < parts.length - 1; i++) {
+      parentPath = parentPath + "/" + parts[i];
+      if (!nodeMap.has(parentPath)) {
+        const parentNode = {
+          name: parts[i],
+          path: parentPath,
+          type: "directory",
+          children: []
+        };
+        nodeMap.set(parentPath, parentNode);
+        const grandparentPath = parentPath.slice(0, parentPath.lastIndexOf("/"));
+        const grandparent = nodeMap.get(grandparentPath);
+        if (grandparent) grandparent.children.push(parentNode);
+      }
+    }
+    const name = parts[parts.length - 1];
+    const nodePath = parentPath + "/" + name;
+    const node = {
+      name,
+      path: nodePath,
+      type,
+      children: type === "directory" ? [] : void 0
+    };
+    nodeMap.set(nodePath, node);
+    const parent = nodeMap.get(parentPath);
+    if (parent) parent.children.push(node);
+  }
+  sortRemoteTree(root);
+  return root;
+}
+function sortRemoteTree(node) {
+  if (!node.children) return;
+  node.children.sort((a, b) => {
+    if (a.type === b.type) return a.name.localeCompare(b.name);
+    return a.type === "directory" ? -1 : 1;
+  });
+  node.children.forEach(sortRemoteTree);
+}
+function findConnection(connectionId) {
+  return connections.find((c) => c.id === connectionId);
+}
+function getPrompt(session) {
+  const cwd = session.cwd || "~";
+  if (session.username && session.host) {
+    return `${session.username}@${session.host}:${cwd}$`;
+  }
+  return `${cwd}$`;
+}
+function resolveCwd(current, target) {
+  if (!target) return current;
+  if (target.startsWith("/")) return target;
+  if (target === "~") return "~";
+  if (current === "~") {
+    if (target === ".." || target.startsWith("../")) return "~";
+    return `~/${target.replace(/^\.\.?\//, "")}`;
+  }
+  const parts = current.split("/").filter(Boolean);
+  for (const seg of target.split("/")) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") {
+      parts.pop();
+    } else {
+      parts.push(seg);
+    }
+  }
+  return "/" + parts.join("/");
+}
+function parseSshUri(uri) {
+  const match = String(uri).match(/^ssh:\/\/([^/]+)(\/.*)$/);
+  if (!match) throw new Error(`\u65E0\u6548\u7684 SSH URI: ${uri}`);
+  return { connectionId: match[1], path: match[2] || "/" };
+}
+async function executeOnSession(sessionId, command) {
+  return vscode.commands.executeCommand("ssh.internal.execute", { id: sessionId, command });
+}
+var sshFileSystemProvider = {
+  async readDirectory(uri) {
+    const { connectionId, path: path2 } = parseSshUri(uri);
+    const session = findConnectedSession(connectionId);
+    if (!session) throw new Error("\u6CA1\u6709\u5DF2\u8FDE\u63A5\u7684 SSH \u4F1A\u8BDD");
+    const cmd = `find ${shellEscape(path2)} -maxdepth 1 -mindepth 1 -exec sh -c 'for p; do if [ -d "$p" ]; then echo "d|$(basename "$p")|$p"; else echo "f|$(basename "$p")|$p"; fi; done' sh {} + 2>/dev/null || true`;
+    const result = await executeOnSession(session.id, cmd);
+    const entries = [];
+    for (const line of (result.stdout || "").split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const parts = trimmed.split("|");
+      if (parts.length < 3) continue;
+      const [typeChar, name, fullPath] = parts;
+      entries.push({
+        name,
+        kind: typeChar === "d" ? "directory" : "file",
+        uri: `ssh://${connectionId}${fullPath}`
+      });
+    }
+    entries.sort((a, b) => {
+      if (a.kind === b.kind) return a.name.localeCompare(b.name);
+      return a.kind === "directory" ? -1 : 1;
+    });
+    return entries;
+  },
+  async readFile(uri) {
+    const { connectionId, path: path2 } = parseSshUri(uri);
+    const session = findConnectedSession(connectionId);
+    if (!session) throw new Error("\u6CA1\u6709\u5DF2\u8FDE\u63A5\u7684 SSH \u4F1A\u8BDD");
+    const result = await executeOnSession(session.id, `cat ${shellEscape(path2)}`);
+    if (!result.success) throw new Error(result.error || result.stderr || "\u8BFB\u53D6\u6587\u4EF6\u5931\u8D25");
+    return result.stdout;
+  },
+  async writeFile(uri, content) {
+    const { connectionId, path: path2 } = parseSshUri(uri);
+    const session = findConnectedSession(connectionId);
+    if (!session) throw new Error("\u6CA1\u6709\u5DF2\u8FDE\u63A5\u7684 SSH \u4F1A\u8BDD");
+    const base64 = Buffer.from(content).toString("base64");
+    const result = await executeOnSession(session.id, `echo '${base64}' | base64 -d > ${shellEscape(path2)}`);
+    if (!result.success) throw new Error(result.error || result.stderr || "\u5199\u5165\u6587\u4EF6\u5931\u8D25");
+  },
+  async createDirectory(uri) {
+    const { connectionId, path: path2 } = parseSshUri(uri);
+    const session = findConnectedSession(connectionId);
+    if (!session) throw new Error("\u6CA1\u6709\u5DF2\u8FDE\u63A5\u7684 SSH \u4F1A\u8BDD");
+    const result = await executeOnSession(session.id, `mkdir -p ${shellEscape(path2)}`);
+    if (!result.success) throw new Error(result.error || result.stderr || "\u521B\u5EFA\u76EE\u5F55\u5931\u8D25");
+  },
+  async delete(uri, options = {}) {
+    const { connectionId, path: path2 } = parseSshUri(uri);
+    const session = findConnectedSession(connectionId);
+    if (!session) throw new Error("\u6CA1\u6709\u5DF2\u8FDE\u63A5\u7684 SSH \u4F1A\u8BDD");
+    const cmd = options.recursive ? `rm -rf ${shellEscape(path2)}` : `rm -f ${shellEscape(path2)}`;
+    const result = await executeOnSession(session.id, cmd);
+    if (!result.success) throw new Error(result.error || result.stderr || "\u5220\u9664\u5931\u8D25");
+  },
+  async rename(oldUri, newUri) {
+    const oldInfo = parseSshUri(oldUri);
+    const newInfo = parseSshUri(newUri);
+    if (oldInfo.connectionId !== newInfo.connectionId) {
+      throw new Error("\u4E0D\u652F\u6301\u8DE8\u8FDE\u63A5\u91CD\u547D\u540D");
+    }
+    const session = findConnectedSession(oldInfo.connectionId);
+    if (!session) throw new Error("\u6CA1\u6709\u5DF2\u8FDE\u63A5\u7684 SSH \u4F1A\u8BDD");
+    const result = await executeOnSession(
+      session.id,
+      `mv ${shellEscape(oldInfo.path)} ${shellEscape(newInfo.path)}`
+    );
+    if (!result.success) throw new Error(result.error || result.stderr || "\u91CD\u547D\u540D\u5931\u8D25");
+  },
+  async stat(uri) {
+    const { connectionId, path: path2 } = parseSshUri(uri);
+    const session = findConnectedSession(connectionId);
+    if (!session) return null;
+    const result = await executeOnSession(
+      session.id,
+      `if [ -d ${shellEscape(path2)} ]; then echo "dir"; elif [ -f ${shellEscape(path2)} ]; then stat -c '%s' ${shellEscape(path2)} 2>/dev/null || stat -f '%z' ${shellEscape(path2)} 2>/dev/null || echo "file"; else echo "none"; fi`
+    );
+    const out = (result.stdout || "").trim();
+    if (out === "dir") return { isDirectory: true };
+    if (out === "none") return null;
+    if (out === "file") return { isDirectory: false };
+    const size = parseInt(out, 10);
+    return { isDirectory: false, size: Number.isNaN(size) ? 0 : size };
+  }
+};
+function callFileSystemProvider(scheme, method, args) {
+  if (scheme !== "ssh") throw new Error(`\u672A\u6CE8\u518C\u7684 scheme: ${scheme}`);
+  const fn = sshFileSystemProvider[method];
+  if (typeof fn !== "function") throw new Error(`provider \u65B9\u6CD5\u4E0D\u5B58\u5728: ${method}`);
+  return fn.apply(sshFileSystemProvider, args);
+}
+function findConnectedSession(connectionId) {
+  return Array.from(sessions.values()).find(
+    (s) => s.connectionId === connectionId && s.status === "connected"
+  );
+}
+async function getRemoteFileTree(connectionId) {
+  const conn = findConnection(connectionId);
+  if (!conn) throw new Error("\u8FDE\u63A5\u4E0D\u5B58\u5728");
+  const session = findConnectedSession(connectionId);
+  if (!session) throw new Error("\u6CA1\u6709\u5DF2\u8FDE\u63A5\u7684\u4F1A\u8BDD");
+  const result = await vscode.commands.executeCommand("ssh.internal.execute", {
+    id: session.id,
+    command: "find ~ -maxdepth 3 -printf '%y|%p\\n' 2>/dev/null"
+  });
+  if (!result.success) {
+    throw new Error(result.error || "\u52A0\u8F7D\u76EE\u5F55\u7ED3\u6784\u5931\u8D25");
+  }
+  if (result.code !== 0) {
+    throw new Error(result.stderr || "\u52A0\u8F7D\u76EE\u5F55\u7ED3\u6784\u5931\u8D25");
+  }
+  const tree = buildRemoteTree(result.stdout.split("\n"));
+  return { rootPath: tree.path, tree };
+}
+async function handleFileOperation(payload) {
+  const { operation, connectionId } = payload;
+  const conn = findConnection(connectionId);
+  if (!conn) throw new Error("\u8FDE\u63A5\u4E0D\u5B58\u5728");
+  const session = findConnectedSession(connectionId);
+  if (!session) throw new Error("\u6CA1\u6709\u5DF2\u8FDE\u63A5\u7684\u4F1A\u8BDD");
+  let command = "";
+  if (operation === "delete") {
+    command = `rm -rf ${shellEscape(payload.path)}`;
+  } else if (operation === "rename") {
+    const parent = payload.path.slice(0, payload.path.lastIndexOf("/"));
+    const target = `${parent}/${payload.newName}`;
+    command = `mv ${shellEscape(payload.path)} ${shellEscape(target)}`;
+  } else if (operation === "move") {
+    command = `mv ${shellEscape(payload.path)} ${shellEscape(payload.target)}`;
+  } else if (operation === "copy") {
+    command = `cp -r ${shellEscape(payload.path)} ${shellEscape(payload.target)}`;
+  } else if (operation === "createFile") {
+    command = `touch ${shellEscape(payload.path)}`;
+  } else if (operation === "createFolder") {
+    command = `mkdir -p ${shellEscape(payload.path)}`;
+  } else if (operation === "getTree") {
+    return getRemoteFileTree(connectionId);
+  } else {
+    throw new Error(`\u672A\u77E5\u64CD\u4F5C: ${operation}`);
+  }
+  console.log("[SSH Extension] \u6267\u884C\u6587\u4EF6\u64CD\u4F5C:", command);
+  const result = await vscode.commands.executeCommand("ssh.internal.execute", {
+    id: session.id,
+    command
+  });
+  if (!result.success) {
+    throw new Error(result.error || "\u64CD\u4F5C\u5931\u8D25");
+  }
+  if (result.code !== 0) {
+    throw new Error(result.stderr || `\u64CD\u4F5C\u5931\u8D25\uFF0C\u9000\u51FA\u7801: ${result.code}`);
+  }
+  return { success: true, stdout: result.stdout, stderr: result.stderr };
+}
+function shellEscape(str) {
+  return `'${String(str).replace(/'/g, `'"'"'`)}'`;
+}
 async function activate(context) {
   console.log("[SSH Extension] \u5DF2\u6FC0\u6D3B");
   registerSshCommands();
+  vscode.workspace.registerFileSystemProvider("ssh", sshFileSystemProvider);
   const panel = vscode.window.createWebviewPanel(
     "ssh-connections",
     "SSH \u8FDC\u7A0B\u8FDE\u63A5",
@@ -20437,18 +20853,33 @@ async function activate(context) {
     }
   );
   panel.webview.html = getWebviewHtml(context.extensionPath);
-  let connections = [];
+  const webviewPanels = [panel];
+  const popupPanels = /* @__PURE__ */ new Map();
+  function broadcast(message) {
+    for (const p of webviewPanels) {
+      try {
+        p.webview.postMessage(message);
+      } catch {
+      }
+    }
+  }
+  globalBroadcast = broadcast;
   try {
     const data = await context.globalState.get("ssh.connections", "[]");
     connections = JSON.parse(data);
   } catch {
     connections = [];
   }
-  panel.webview.postMessage({ type: "connections", connections });
-  panel.webview.onDidReceiveMessage(async (message) => {
+  broadcast({ type: "connections", connections });
+  sessions.clear();
+  broadcast({ type: "sessions", sessions: [] });
+  async function handleWebviewMessage(message) {
     switch (message.command) {
       case "loadConnections":
-        panel.webview.postMessage({ type: "connections", connections });
+        broadcast({ type: "connections", connections });
+        break;
+      case "loadSessions":
+        broadcast({ type: "sessions", sessions: Array.from(sessions.values()) });
         break;
       case "addConnection":
       case "updateConnection": {
@@ -20460,28 +20891,32 @@ async function activate(context) {
           if (idx >= 0) connections[idx] = connection;
         }
         await context.globalState.update("ssh.connections", JSON.stringify(connections));
-        panel.webview.postMessage({ type: "connections", connections });
+        broadcast({ type: "connections", connections });
         break;
       }
       case "deleteConnection": {
         connections = connections.filter((c) => c.id !== message.connectionId);
         await context.globalState.update("ssh.connections", JSON.stringify(connections));
-        panel.webview.postMessage({ type: "connections", connections });
+        broadcast({ type: "connections", connections });
         break;
       }
       case "connect": {
         const conn = connections.find((c) => c.id === message.connectionId);
         if (!conn) return;
+        log("log", "[SSH Extension] \u6536\u5230\u8FDE\u63A5\u8BF7\u6C42:", conn.host, conn.username);
         const sessionId = generateId();
         const session = {
           id: sessionId,
           connectionId: conn.id,
           name: conn.name,
+          username: conn.username,
+          host: conn.host,
+          cwd: "~",
           status: "connecting",
           output: [`[${(/* @__PURE__ */ new Date()).toLocaleTimeString()}] \u6B63\u5728\u8FDE\u63A5 ${conn.host}:${conn.port || 22}...`]
         };
         sessions.set(sessionId, session);
-        panel.webview.postMessage({ type: "sessions", sessions: Array.from(sessions.values()) });
+        broadcast({ type: "sessions", sessions: Array.from(sessions.values()) });
         try {
           const result = await vscode.commands.executeCommand("ssh.internal.connect", {
             id: sessionId,
@@ -20492,8 +20927,10 @@ async function activate(context) {
             privateKey: conn.privateKey
           });
           if (result.success) {
+            log("log", "[SSH Extension] \u8FDE\u63A5\u6210\u529F\uFF0CsessionId:", sessionId, "\u5F53\u524D client \u6570:", sshClients.size);
             session.status = "connected";
             session.output.push(`[${(/* @__PURE__ */ new Date()).toLocaleTimeString()}] \u8FDE\u63A5\u6210\u529F`);
+            session.output.push(getPrompt(session));
           } else {
             session.status = "disconnected";
             session.output.push(`[${(/* @__PURE__ */ new Date()).toLocaleTimeString()}] \u8FDE\u63A5\u5931\u8D25: ${result.error}`);
@@ -20502,7 +20939,7 @@ async function activate(context) {
           session.status = "disconnected";
           session.output.push(`[${(/* @__PURE__ */ new Date()).toLocaleTimeString()}] \u8FDE\u63A5\u9519\u8BEF: ${err.message}`);
         }
-        panel.webview.postMessage({ type: "sessions", sessions: Array.from(sessions.values()) });
+        broadcast({ type: "sessions", sessions: Array.from(sessions.values()) });
         break;
       }
       case "disconnect": {
@@ -20514,7 +20951,7 @@ async function activate(context) {
           }
           sess.status = "disconnected";
           sess.output.push(`[${(/* @__PURE__ */ new Date()).toLocaleTimeString()}] \u5DF2\u65AD\u5F00\u8FDE\u63A5`);
-          panel.webview.postMessage({ type: "sessions", sessions: Array.from(sessions.values()) });
+          broadcast({ type: "sessions", sessions: Array.from(sessions.values()) });
         }
         break;
       }
@@ -20527,7 +20964,49 @@ async function activate(context) {
           }
         }
         sessions.delete(message.sessionId);
-        panel.webview.postMessage({ type: "sessions", sessions: Array.from(sessions.values()) });
+        broadcast({ type: "sessions", sessions: Array.from(sessions.values()) });
+        break;
+      }
+      case "openPopupWindow": {
+        const sess = sessions.get(message.sessionId);
+        if (!sess) break;
+        const conn = connections.find((c) => c.id === sess.connectionId);
+        const popupData = { ...sess, connectionName: conn?.name || sess.name };
+        const popupPanel = vscode.window.createWebviewPanel(
+          "ssh-popup",
+          sess.name,
+          { modal: true },
+          {
+            enableScripts: true,
+            extensionId: "ideacode-ssh",
+            extensionPath: context.extensionPath
+          }
+        );
+        popupPanel.webview.html = getWebviewHtml(context.extensionPath, popupData);
+        popupPanel.webview.onDidReceiveMessage(handleWebviewMessage);
+        popupPanel.onDidDispose(() => {
+          const idx = webviewPanels.indexOf(popupPanel);
+          if (idx >= 0) webviewPanels.splice(idx, 1);
+          popupPanels.delete(sess.id);
+        });
+        popupPanels.set(sess.id, popupPanel);
+        webviewPanels.push(popupPanel);
+        break;
+      }
+      case "closePopupWindow": {
+        const pp = popupPanels.get(message.sessionId);
+        if (pp) {
+          popupPanels.delete(message.sessionId);
+          pp.dispose();
+        }
+        break;
+      }
+      case "clearSessionOutput": {
+        const clearSession = sessions.get(message.sessionId);
+        if (clearSession) {
+          clearSession.output = [];
+          broadcast({ type: "sessions", sessions: Array.from(sessions.values()) });
+        }
         break;
       }
       case "openTerminal": {
@@ -20550,30 +21029,89 @@ async function activate(context) {
         }
         break;
       }
+      case "loadRemoteFileTree": {
+        const conn = connections.find((c) => c.id === message.connectionId);
+        if (!conn) return;
+        const session = Array.from(sessions.values()).find(
+          (s) => s.connectionId === conn.id && s.status === "connected"
+        );
+        if (!session) {
+          broadcast({
+            type: "remoteFileTreeError",
+            connectionId: conn.id,
+            error: "\u6CA1\u6709\u5DF2\u8FDE\u63A5\u7684\u4F1A\u8BDD\uFF0C\u8BF7\u5148\u8FDE\u63A5"
+          });
+          break;
+        }
+        broadcast({ type: "remoteFileTreeLoading", connectionId: conn.id });
+        try {
+          const result = await vscode.commands.executeCommand("ssh.internal.execute", {
+            id: session.id,
+            command: `(find ~ -maxdepth 3 -exec sh -c 'for p; do if [ -d "$p" ]; then echo "d|$p"; else echo "f|$p"; fi; done' sh {} +) 2>/dev/null || true`
+          });
+          if (!result.success) {
+            broadcast({
+              type: "remoteFileTreeError",
+              connectionId: conn.id,
+              error: result.error || result.stderr || "\u52A0\u8F7D\u5931\u8D25"
+            });
+            break;
+          }
+          if (result.stderr) {
+            console.warn("[SSH Extension] \u52A0\u8F7D\u76EE\u5F55\u7ED3\u6784 stderr:", result.stderr);
+          }
+          const tree = buildRemoteTree(result.stdout.split("\n"));
+          await vscode.workspace.openRemoteFileTree({
+            title: `${conn.name} \u76EE\u5F55\u7ED3\u6784`,
+            tree: {
+              connectionId: conn.id,
+              rootPath: tree.path,
+              connection: conn,
+              tree
+            }
+          });
+        } catch (err) {
+          broadcast({
+            type: "remoteFileTreeError",
+            connectionId: conn.id,
+            error: err.message
+          });
+        }
+        break;
+      }
       case "execute": {
         const execSession = sessions.get(message.sessionId);
         if (!execSession || execSession.status !== "connected") return;
-        execSession.output.push(`$ ${message.cmd}`);
-        panel.webview.postMessage({ type: "sessions", sessions: Array.from(sessions.values()) });
+        const trimmedCmd = message.cmd.trim();
+        execSession.output.push(`${getPrompt(execSession)} ${trimmedCmd}`);
+        broadcast({ type: "sessions", sessions: Array.from(sessions.values()) });
         try {
           const result = await vscode.commands.executeCommand("ssh.internal.execute", {
             id: message.sessionId,
             command: message.cmd
           });
           if (result.success) {
+            if (trimmedCmd.startsWith("cd ")) {
+              const target = trimmedCmd.slice(3).trim().split(/[\s;&|]/)[0];
+              execSession.cwd = resolveCwd(execSession.cwd, target);
+            }
             if (result.stdout) execSession.output.push(result.stdout);
             if (result.stderr) execSession.output.push(result.stderr);
+            execSession.output.push(getPrompt(execSession));
           } else {
             execSession.output.push(`Error: ${result.error || "Unknown error"}`);
+            execSession.output.push(getPrompt(execSession));
           }
         } catch (err) {
           execSession.output.push(`Error: ${err.message}`);
+          execSession.output.push(getPrompt(execSession));
         }
-        panel.webview.postMessage({ type: "sessions", sessions: Array.from(sessions.values()) });
+        broadcast({ type: "sessions", sessions: Array.from(sessions.values()) });
         break;
       }
     }
-  });
+  }
+  panel.webview.onDidReceiveMessage(handleWebviewMessage);
   context.subscriptions.push({
     dispose: () => {
       for (const client of sshClients.values()) {
@@ -20583,7 +21121,13 @@ async function activate(context) {
         }
       }
       sshClients.clear();
-      panel.dispose();
+      for (const p of webviewPanels) {
+        try {
+          p.dispose();
+        } catch {
+        }
+      }
+      webviewPanels.length = 0;
     }
   });
 }
@@ -20599,4 +21143,4 @@ function deactivate() {
   }
   sessions.clear();
 }
-module.exports = { activate, deactivate };
+module.exports = { activate, deactivate, getRemoteFileTree, handleFileOperation, callFileSystemProvider };

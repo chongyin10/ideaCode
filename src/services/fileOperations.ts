@@ -1,7 +1,19 @@
 import type { FileSource, FileEntry } from './fileService';
-import { isElectron, isPath, isHandle } from './fileService';
+import { isElectron, isPath, isHandle, isRemoteUri } from './fileService';
+import { getFileSystemProvider } from './fileSystemProvider';
+
+function joinChildSource(parentSource: string, name: string): string {
+  return parentSource.replace(/\/+$/, '') + '/' + name;
+}
 
 export async function exists(parentSource: FileSource, name: string): Promise<boolean> {
+  if (isRemoteUri(parentSource)) {
+    const provider = getFileSystemProvider(parentSource);
+    if (!provider) return false;
+    const stat = await provider.stat(joinChildSource(parentSource, name));
+    return stat !== null;
+  }
+
   if (isElectron() && isPath(parentSource)) {
     const result = await window.electronAPI!.fs.stat(parentSource + '/' + name);
     return result !== null;
@@ -24,6 +36,14 @@ export async function exists(parentSource: FileSource, name: string): Promise<bo
 }
 
 export async function createFile(parentSource: FileSource, name: string): Promise<FileEntry> {
+  if (isRemoteUri(parentSource)) {
+    const provider = getFileSystemProvider(parentSource);
+    if (!provider) throw new Error('无法创建文件：未找到远程 provider');
+    const source = joinChildSource(parentSource, name);
+    await provider.writeFile(source, '');
+    return { name, kind: 'file', source };
+  }
+
   if (isElectron() && isPath(parentSource)) {
     const filePath = parentSource + '/' + name;
     await window.electronAPI!.fs.createFile(filePath);
@@ -37,6 +57,14 @@ export async function createFile(parentSource: FileSource, name: string): Promis
 }
 
 export async function createDirectory(parentSource: FileSource, name: string): Promise<FileEntry> {
+  if (isRemoteUri(parentSource)) {
+    const provider = getFileSystemProvider(parentSource);
+    if (!provider) throw new Error('无法创建目录：未找到远程 provider');
+    const source = joinChildSource(parentSource, name);
+    await provider.createDirectory(source);
+    return { name, kind: 'directory', source };
+  }
+
   if (isElectron() && isPath(parentSource)) {
     const dirPath = parentSource + '/' + name;
     await window.electronAPI!.fs.createDir(dirPath);
@@ -50,6 +78,13 @@ export async function createDirectory(parentSource: FileSource, name: string): P
 }
 
 export async function deleteEntry(parentSource: FileSource, name: string, kind: 'file' | 'directory'): Promise<boolean> {
+  if (isRemoteUri(parentSource)) {
+    const provider = getFileSystemProvider(parentSource);
+    if (!provider) return false;
+    await provider.delete(joinChildSource(parentSource, name), { recursive: kind === 'directory' });
+    return true;
+  }
+
   if (isElectron() && isPath(parentSource)) {
     const targetPath = parentSource + '/' + name;
     return window.electronAPI!.fs.delete(targetPath);
@@ -62,6 +97,16 @@ export async function deleteEntry(parentSource: FileSource, name: string, kind: 
 }
 
 export async function renameEntry(parentSource: FileSource, oldName: string, newName: string, kind: 'file' | 'directory'): Promise<boolean> {
+  if (isRemoteUri(parentSource)) {
+    const provider = getFileSystemProvider(parentSource);
+    if (!provider) throw new Error('无法重命名：未找到远程 provider');
+    await provider.rename(
+      joinChildSource(parentSource, oldName),
+      joinChildSource(parentSource, newName)
+    );
+    return true;
+  }
+
   if (isElectron() && isPath(parentSource)) {
     const oldPath = parentSource + '/' + oldName;
     const newPath = parentSource + '/' + newName;
@@ -83,6 +128,22 @@ export async function renameEntry(parentSource: FileSource, oldName: string, new
 }
 
 export async function copyEntry(srcParent: FileSource, srcName: string, destParent: FileSource, destName: string): Promise<boolean> {
+  if (isRemoteUri(srcParent) || isRemoteUri(destParent)) {
+    if (!isRemoteUri(srcParent) || !isRemoteUri(destParent)) {
+      throw new Error('暂不支持本地与远程之间的文件复制');
+    }
+    const provider = getFileSystemProvider(srcParent);
+    if (!provider) throw new Error('无法复制：未找到远程 provider');
+    const srcUri = joinChildSource(srcParent, srcName);
+    const destUri = joinChildSource(destParent, destName);
+    const stat = await provider.stat(srcUri);
+    if (!stat) throw new Error('无法复制：源不存在');
+    if (stat.isDirectory) throw new Error('远程目录复制暂不支持');
+    const content = await provider.readFile(srcUri);
+    await provider.writeFile(destUri, content);
+    return true;
+  }
+
   if (isElectron() && isPath(srcParent) && isPath(destParent)) {
     const srcPath = srcParent + '/' + srcName;
     const destPath = destParent + '/' + destName;

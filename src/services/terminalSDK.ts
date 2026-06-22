@@ -125,6 +125,8 @@ export const terminalSDK = {
               store.dispatch(setTabReady({ id: tabId, pid: result.id, cwd: config.cwd || '' }));
             }
           }, 3000);
+        } else {
+          store.dispatch(setTabReady({ id: tabId, pid: result.id, cwd: config.cwd || '' }));
         }
         return { tabId, processId: result.id, success: true };
       }
@@ -138,6 +140,11 @@ export const terminalSDK = {
         error: err instanceof Error ? err.message : String(err),
       };
     }
+  },
+
+  /** 向指定终端进程发送输入 */
+  sendInput(processId: number, data: string) {
+    return sendInput(processId, data);
   },
 
   /** 关闭终端 Tab */

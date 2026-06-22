@@ -38,6 +38,133 @@ function generateId() {
   return `ssh-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+interface SessionPopupWindowProps {
+  session: SshSession;
+  onExecute: (sessionId: string, command: string) => void;
+  onClose: () => void;
+}
+
+function SessionPopupWindow({ session, onExecute, onClose }: SessionPopupWindowProps) {
+  const terminalRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; type: 'terminal' | 'input' } | null>(null);
+
+  useEffect(() => {
+    if (terminalRef.current) {
+      terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
+    }
+  }, [session.output]);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    const closeMenu = () => setContextMenu(null);
+    window.addEventListener('click', closeMenu);
+    return () => window.removeEventListener('click', closeMenu);
+  }, [contextMenu]);
+
+  const handleCopy = async () => {
+    const text = window.getSelection()?.toString() || '';
+    if (text) {
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch { /* ignore */ }
+    }
+    setContextMenu(null);
+  };
+
+  const handleClear = () => {
+    const vscode = getVsCodeApi();
+    if (vscode) {
+      vscode.postMessage({ command: 'clearSessionOutput', sessionId: session.id });
+    }
+    setContextMenu(null);
+  };
+
+  const handlePaste = async () => {
+    const input = inputRef.current;
+    if (!input) return;
+    try {
+      const text = await navigator.clipboard.readText();
+      const start = input.selectionStart || 0;
+      const end = input.selectionEnd || 0;
+      const value = input.value;
+      input.value = value.slice(0, start) + text + value.slice(end);
+      const pos = start + text.length;
+      input.setSelectionRange(pos, pos);
+      input.focus();
+    } catch { /* ignore */ }
+    setContextMenu(null);
+  };
+
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const target = e.target as HTMLElement;
+    const isInput = target.closest('.command-input') !== null || target.tagName === 'INPUT';
+    setContextMenu({ x: e.clientX, y: e.clientY, type: isInput ? 'input' : 'terminal' });
+  };
+
+  return (
+    <div className="session-popup-content" onContextMenu={handleContextMenu}>
+      <div className="session-popup__terminal session-popup__terminal--popup" ref={terminalRef}>
+        {session.output.length === 0 && (
+          <div className="terminal-empty-hint">终端内容已清空</div>
+        )}
+        {session.output.map((line, idx) => (
+          <pre key={idx} className="terminal-line">{line}</pre>
+        ))}
+      </div>
+      {session.status === 'connected' && (
+        <div className="command-bar">
+          <input
+            ref={inputRef}
+            type="text"
+            className="command-input"
+            placeholder="输入命令..."
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                onExecute(session.id, e.currentTarget.value);
+                e.currentTarget.value = '';
+              }
+            }}
+          />
+        </div>
+      )}
+      {contextMenu && (() => {
+        const menuWidth = 120;
+        const inputMenuHeight = 36;
+        const terminalMenuHeight = 104;
+        const menuHeight = contextMenu.type === 'input' ? inputMenuHeight : terminalMenuHeight;
+        let x = contextMenu.x;
+        let y = contextMenu.y;
+        if (x + menuWidth > window.innerWidth) {
+          x = Math.max(0, window.innerWidth - menuWidth);
+        }
+        if (y + menuHeight > window.innerHeight) {
+          y = Math.max(0, y - menuHeight);
+        }
+        return (
+          <div
+            className="context-menu"
+            style={{ left: x, top: y }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {contextMenu.type === 'input' ? (
+              <div className="context-menu__item" onClick={handlePaste}>粘贴</div>
+            ) : (
+              <>
+                <div className="context-menu__item" onClick={handleCopy}>复制</div>
+                <div className="context-menu__item" onClick={handleClear}>清除</div>
+                <div className="context-menu__separator" />
+                <div className="context-menu__item" onClick={onClose}>关闭</div>
+              </>
+            )}
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
 function App() {
   const [connections, setConnections] = useState<SshConnection[]>(loadConnections);
   const [sessions, setSessions] = useState<SshSession[]>([]);
@@ -57,6 +184,13 @@ function App() {
     privateKey: '',
   });
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [popupSessionId, setPopupSessionId] = useState<string | null>(null);
+  const [fileTreeStatus, setFileTreeStatus] = useState<
+    | { type: 'loading'; connectionId: string }
+    | { type: 'error'; connectionId: string; message: string }
+    | null
+  >(null);
+  const [logs, setLogs] = useState<string[]>([]);
   const terminalRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const formRef = useRef<HTMLDivElement>(null);
   const hasMountedRef = useRef(false);
@@ -118,11 +252,35 @@ function App() {
             s.id === sessionId ? { ...s, output: [...s.output, line as string] } : s
           )
         );
+      } else if (message.type === 'remoteFileTreeLoading') {
+        setFileTreeStatus({ type: 'loading', connectionId: message.connectionId as string });
+      } else if (message.type === 'remoteFileTreeError') {
+        setFileTreeStatus({
+          type: 'error',
+          connectionId: message.connectionId as string,
+          message: (message.error as string) || '加载目录结构失败',
+        });
+      } else if (message.type === 'sshLog') {
+        const logMsg = (message.message as string) || '';
+        setLogs((prev) => {
+          const next = [...prev, logMsg];
+          return next.length > 30 ? next.slice(next.length - 30) : next;
+        });
       }
     };
 
     window.addEventListener('message', handleMessage);
-    vscode.postMessage({ command: 'loadConnections' });
+
+    // 检测是否在 IDE Modal 弹窗中运行
+    const popupSession = (window as unknown as { __sshPopupSession?: SshSession & { connectionName?: string } }).__sshPopupSession;
+    if (popupSession) {
+      setPopupSessionId(popupSession.id);
+      setSessions([popupSession]);
+    } else {
+      vscode.postMessage({ command: 'loadConnections' });
+      vscode.postMessage({ command: 'loadSessions' });
+    }
+
     return () => window.removeEventListener('message', handleMessage);
   }, []);
 
@@ -217,6 +375,16 @@ function App() {
     if (vscode) vscode.postMessage({ command: 'openTerminal', connectionId: conn.id });
   };
 
+  const handleOpenPopup = (sessionId: string) => {
+    const vscode = getVsCodeApi();
+    if (vscode) vscode.postMessage({ command: 'openPopupWindow', sessionId });
+  };
+
+  const handleLoadRemoteFileTree = (conn: SshConnection) => {
+    const vscode = getVsCodeApi();
+    if (vscode) vscode.postMessage({ command: 'loadRemoteFileTree', connectionId: conn.id });
+  };
+
   const getConnectionName = (connectionId: string) => {
     return connections.find((c) => c.id === connectionId)?.name || connectionId;
   };
@@ -248,15 +416,36 @@ function App() {
   };
 
   return (
-    <div className="ssh-panel">
-      <div className="section">
+    <div className={`ssh-panel ${popupSessionId ? 'ssh-panel--popup' : ''}`}>
+      {popupSessionId ? (
+        <SessionPopupWindow
+          session={sessions.find((s) => s.id === popupSessionId)!}
+          onExecute={handleExecute}
+          onClose={() => {
+            const vscode = getVsCodeApi();
+            if (vscode) {
+              vscode.postMessage({ command: 'closePopupWindow', sessionId: popupSessionId });
+            }
+          }}
+        />
+      ) : (
+        <>
+          <div className="section">
         <div className="section-header section-header--collapsible" onClick={() => toggleSection('connections')}>
           <span className={`section-chevron ${expandedSections.connections ? 'expanded' : ''}`}>▶</span>
           <span>SSH 连接</span>
           <span className="count-badge">{connections.length}</span>
         </div>
         {expandedSections.connections && (
-        <div className="connection-grid">
+        <>
+          {fileTreeStatus && (
+            <div className={`file-tree-status file-tree-status--${fileTreeStatus.type}`}>
+              {fileTreeStatus.type === 'loading'
+                ? `正在加载 ${connections.find((c) => c.id === fileTreeStatus.connectionId)?.name || ''} 的目录结构...`
+                : `加载 ${connections.find((c) => c.id === fileTreeStatus.connectionId)?.name || ''} 目录结构失败：${fileTreeStatus.message}`}
+            </div>
+          )}
+          <div className="connection-grid">
           {connections.length === 0 ? (
             <div className="empty-state">
               <p>暂无 SSH 连接</p>
@@ -295,19 +484,40 @@ function App() {
                         终端
                       </button>
                     )}
-                    <button className="btn btn-sm btn-secondary" onClick={() => handleEdit(conn)}>
-                      编辑
-                    </button>
-                    <button className="btn btn-sm btn-danger" onClick={() => handleDelete(conn.id)}>
-                      删除
-                    </button>
+                    <div className="more-menu">
+                      <button className="btn btn-sm btn-secondary more-menu__btn" title="更多">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                          <circle cx="12" cy="6" r="2" />
+                          <circle cx="12" cy="12" r="2" />
+                          <circle cx="12" cy="18" r="2" />
+                        </svg>
+                      </button>
+                      <div className="more-menu__dropdown">
+                        {connected && (
+                          <div
+                            className="more-menu__item"
+                            onClick={() => handleLoadRemoteFileTree(conn)}
+                          >
+                            可视化目录结构
+                          </div>
+                        )}
+                        {connected && <div className="more-menu__divider" />}
+                        <div className="more-menu__item" onClick={() => handleEdit(conn)}>
+                          编辑
+                        </div>
+                        <div className="more-menu__item more-menu__item--danger" onClick={() => handleDelete(conn.id)}>
+                          删除
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               );
             })
           )}
         </div>
-        )}
+        </>)
+        }
       </div>
 
       <div className="section" ref={formRef}>
@@ -393,8 +603,9 @@ function App() {
                 type="password"
                 value={form.password}
                 onChange={(e) => setForm({ ...form, password: e.target.value })}
-                placeholder="输入密码"
+                placeholder="输入密码（留空则自动尝试本地 SSH 私钥或 ssh-agent）"
               />
+              <div className="form-hint">留空时将自动读取 ~/.ssh/id_rsa 等默认私钥，或尝试 SSH Agent。</div>
             </div>
           ) : (
             <div className="form-row">
@@ -436,6 +647,15 @@ function App() {
                     <span className={`session-status ${session.status}`} />
                     <span className="session-name">{getConnectionName(session.connectionId)}</span>
                     <div className="session-actions">
+                      <button
+                        className="icon-btn"
+                        title="弹出窗口"
+                        onClick={(e) => { e.stopPropagation(); handleOpenPopup(session.id); }}
+                      >
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
+                        </svg>
+                      </button>
                       {session.status === 'connected' && (
                         <button className="icon-btn" title="断开" onClick={(e) => { e.stopPropagation(); handleDisconnect(session.id); }}>■</button>
                       )}
@@ -472,6 +692,22 @@ function App() {
           </div>
         )}
       </div>
+
+      {logs.length > 0 && (
+        <div className="section">
+          <div className="section-header">
+            <span>SSH 操作日志</span>
+            <button className="btn btn-sm btn-link section-header__action" onClick={() => setLogs([])}>清空</button>
+          </div>
+          <div className="ssh-log">
+            {logs.map((log, idx) => (
+              <div key={idx} className="ssh-log__line">{log}</div>
+            ))}
+          </div>
+        </div>
+      )}
+        </>
+      )}
     </div>
   );
 }

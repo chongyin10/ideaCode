@@ -51,7 +51,7 @@
   padding: 7px 12px 6px;
   font-size: 12px;
   color: #969696;
-  cursor: pointer;
+  cursor: default;
   background-color: transparent;
   border: none;
   display: flex;

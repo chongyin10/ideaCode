@@ -28,6 +28,7 @@ import TabBar from '../components/TabBar';
 import MonacoEditor from '../components/MonacoEditor';
 import DiffEditorPanel from '../components/DiffEditorPanel';
 import ExtensionDetail from '../components/ExtensionDetail';
+import SshFileTreePanel from '../components/SshFileTreePanel';
 import ConfirmDialog, { type ConfirmResult } from '../components/ConfirmDialog';
 import QuickOpen from '../components/QuickOpen';
 import GitSetupPanel from '../components/GitSetupPanel';
@@ -670,7 +671,7 @@ function Home() {
             onContextMenu={(e, id) => handleTabContextMenu(e, id, groupIndex)}
             onPin={() => dispatch(pinPreviewFile())}
             onReorder={(fromId, toId, position) => dispatch(reorderTab({ fromId, toId, position }))}
-            onSplitView={file?.language === 'extension' ? undefined : () => dispatch(toggleSplitView())}
+            onSplitView={file?.language === 'extension' || file?.language === 'ssh-file-tree' ? undefined : () => dispatch(toggleSplitView())}
             splitActive={splitView}
             focused={focused}
             loadingFiles={loadingFiles}
@@ -680,6 +681,8 @@ function Home() {
             {file ? (
               file.language === 'extension' ? (
                 <ExtensionDetail key={`ext-${file.id}-${group.id}`} extensionId={file.id.replace('extension://', '')} />
+              ) : file.language === 'ssh-file-tree' ? (
+                <SshFileTreePanel key={`ssh-tree-${file.id}-${group.id}`} content={file.content} fileId={file.id} />
               ) : file.isDiff && file.diffData ? (
                 <DiffEditorPanel key={`diff-${file.id}-${group.id}`} diffData={file.diffData} groupId={group.id} />
               ) : (

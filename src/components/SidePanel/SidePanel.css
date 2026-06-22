@@ -284,6 +284,29 @@
   opacity: 1;
 }
 
+/* 远程工作区根目录：间距与样式优化 */
+.explorer-section--remote {
+  margin-top: 6px;
+}
+
+.explorer-section--remote .explorer-section__header {
+  min-height: 24px;
+  padding: 3px 6px;
+  cursor: default;
+  text-transform: none;
+  letter-spacing: 0;
+  gap: 6px;
+}
+
+.explorer-section--remote .explorer-section__tools {
+  opacity: 1;
+}
+
+.explorer-section--remote .explorer-header__icon {
+  width: 20px;
+  height: 20px;
+}
+
 .explorer-section__content {
   padding-bottom: 0;
   overflow-y: auto;

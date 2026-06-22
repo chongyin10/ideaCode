@@ -39,6 +39,14 @@ class ExtensionHostManager {
       env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
     });
 
+    // 将扩展宿主日志转发到主进程控制台，方便调试
+    this.hostProcess.stdout?.on('data', (data) => {
+      process.stdout.write(`[ExtensionHost] ${data}`);
+    });
+    this.hostProcess.stderr?.on('data', (data) => {
+      process.stderr.write(`[ExtensionHost] ${data}`);
+    });
+
     this.hostProcess.on('message', (message) => {
       this.handleHostMessage(message);
     });

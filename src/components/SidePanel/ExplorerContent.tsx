@@ -28,6 +28,7 @@ import {
   clearExpandPaths,
   toggleExpandDir,
   activateFile,
+  removeWorkspaceFolder,
 } from '../../store/slices/workspaceSlice';
 import { setShowCloneForm, refreshGitStatus as refreshGitSliceStatus } from '../../store/slices/gitSlice';
 import { switchPanel } from '../../store/slices/layoutSlice';
@@ -38,6 +39,7 @@ import {
   isPath,
   isElectron,
   isSameSource,
+  isRemoteUri,
 } from '../../services/fileService';
 import {
   exists,
@@ -144,6 +146,7 @@ const ExplorerContent = () => {
   const rootSource = useAppSelector((state) => state.workspace.rootSource);
   const rootName = useAppSelector((state) => state.workspace.rootName);
   const entries = useAppSelector((state) => state.workspace.entries);
+  const remoteRoots = useAppSelector((state) => state.workspace.remoteRoots);
   const activeFileSource = useAppSelector((state) => state.workspace.activeFileSource);
   const gitStaged = useAppSelector((s) => s.git.staged);
   const gitChanges = useAppSelector((s) => s.git.changes);
@@ -285,12 +288,12 @@ const ExplorerContent = () => {
 
   const handleBlankContextMenu = useCallback(
     (e: React.MouseEvent) => {
-      if (!rootSource) return;
+      if (!rootSource && remoteRoots.length === 0) return;
       if (e.currentTarget === e.target) {
-        openContextMenu(e, null, rootSource);
+        openContextMenu(e, null, rootSource || remoteRoots[0]!.source);
       }
     },
-    [openContextMenu, rootSource]
+    [openContextMenu, rootSource, remoteRoots]
   );
 
   // ─── 新建操作 ───
@@ -486,11 +489,11 @@ const ExplorerContent = () => {
   }, []);
 
   const buildMenuItems = useCallback((): MenuItem[] => {
-    if (!rootSource) return [];
+    if (!rootSource && remoteRoots.length === 0) return [];
     const { targetEntry, targetParentSource } = contextMenu;
-    const clipboard = getFileClipboard();
+    const defaultRootSource: FileSource = rootSource || remoteRoots[0]!.source;
 
-    const safeParentSource = targetParentSource || rootSource;
+    const safeParentSource: FileSource = targetParentSource || defaultRootSource;
 
     const isMultiSelect = selectedEntries.length > 1;
     const activeTargets = isMultiSelect
@@ -504,15 +507,15 @@ const ExplorerContent = () => {
         ? targetEntry.source
         : targetEntry
         ? safeParentSource
-        : rootSource;
+        : defaultRootSource;
 
-    const canPasteHere = clipboard !== null;
+    const canPasteHere = clipboardState !== null;
     const pasteTargetSource =
       targetEntry?.kind === 'directory'
         ? targetEntry.source
         : targetEntry
         ? safeParentSource
-        : rootSource;
+        : defaultRootSource;
 
     const items: MenuItem[] = [
       {
@@ -543,10 +546,10 @@ const ExplorerContent = () => {
           icon: <FolderOpenIcon size={14} strokeWidth={1.5} />,
           group: '1_new',
           order: 3,
-          disabled: !isElectron() || isMultiSelect,
+          disabled: !isElectron() || isMultiSelect || isRemoteUri(targetEntry.source),
           onClick: wrapWithClickTracking('reveal', async () => {
             try {
-              if (isPath(targetEntry.source)) {
+              if (isPath(targetEntry.source) && !isRemoteUri(targetEntry.source)) {
                 await revealInExplorer(targetEntry.source);
               }
             } catch (err) {
@@ -629,9 +632,9 @@ const ExplorerContent = () => {
           icon: <Link size={14} strokeWidth={1.5} />,
           group: '4_path',
           order: 9,
-          disabled: !isPath(targetEntry.source) || !isPath(rootSource) || isMultiSelect,
+          disabled: !isPath(targetEntry.source) || !rootSource || !isPath(rootSource) || isMultiSelect,
           onClick: wrapWithClickTracking('copy-relative-path', () => {
-            if (isPath(targetEntry.source) && isPath(rootSource)) {
+            if (rootSource && isPath(targetEntry.source) && isPath(rootSource)) {
               const rel = targetEntry.source.replace(rootSource + '/', '');
               navigator.clipboard.writeText(rel).catch(() => {});
             }
@@ -739,8 +742,8 @@ const ExplorerContent = () => {
     [openContextMenu]
   );
 
-  const renderRootInlineInput = useCallback(() => {
-    if (!rootSource || !pendingCreate || !isSameSource(pendingCreate.parentSource, rootSource)) return null;
+  const renderInlineInput = useCallback((parentSource: FileSource | null) => {
+    if (!parentSource || !pendingCreate || !isSameSource(pendingCreate.parentSource, parentSource)) return null;
     return (
       <div className="tree-item inline-create-item" style={{ paddingLeft: 12 }}>
         <span className="tree-item__indent" />
@@ -753,17 +756,17 @@ const ExplorerContent = () => {
         </span>
         <InlineInput
           placeholder={pendingCreate.type === 'file' ? t('explorer.inputPlaceholder.fileName') : t('explorer.inputPlaceholder.folderName')}
-          onConfirm={(name) => handleCreateConfirm(rootSource, pendingCreate.type, name)}
+          onConfirm={(name) => handleCreateConfirm(parentSource, pendingCreate.type, name)}
           onCancel={handleCreateCancel}
         />
       </div>
     );
-  }, [pendingCreate, rootSource, handleCreateConfirm, handleCreateCancel, t]);
+  }, [pendingCreate, handleCreateConfirm, handleCreateCancel, t]);
 
   return (
     <div className="folder-tree" onContextMenu={handleBlankContextMenu}>
       {/* 空状态 */}
-      {!rootSource && (
+      {!rootSource && remoteRoots.length === 0 && (
         <div className="side-panel__actions">
           <div className="explorer-empty">
             <p className="explorer-empty__text">{t('explorer.empty.title')}</p>
@@ -781,7 +784,7 @@ const ExplorerContent = () => {
         </div>
       )}
 
-      {rootSource && (
+      {(rootSource || remoteRoots.length > 0) && (
         <>
           {/* ── 打开的编辑器 ── */}
           <div className="explorer-section">
@@ -827,6 +830,7 @@ const ExplorerContent = () => {
               保证“打开的编辑器”始终固定在顶部不被遮罩 */}
           <div className="folder-tree__scrollable" ref={scrollableRef}>
             {/* ── IDEACODE 项目结构 ── */}
+            {rootSource && (
             <div className={`explorer-section explorer-section--main ${!projectExpanded || entries.length === 0 ? 'explorer-section--collapsed' : ''}`}>
               <div
                 className="explorer-section__header"
@@ -917,12 +921,71 @@ const ExplorerContent = () => {
                           onToggleExpand={stableOnToggleExpand}
                         />
                       ))}
-                      {renderRootInlineInput()}
+                      {renderInlineInput(rootSource)}
                     </>
                   )}
                 </div>
               )}
             </div>
+            )}
+
+            {/* ── 远程工作区根目录 ── */}
+            {remoteRoots.map((root) => {
+              const rootEntry: FileEntry = { name: root.name, kind: 'directory', source: root.source };
+              return (
+                <div key={root.id} className="explorer-section explorer-section--remote">
+                  <div className="explorer-section__header">
+                    <span className="explorer-section__title" title={String(root.source)}>{root.name}</span>
+                    <span className="explorer-section__tools">
+                      <button
+                        className="explorer-header__icon"
+                        title={t('explorer.header.refresh')}
+                        onClick={() => notifyChange(root.source)}
+                      >
+                        <RefreshCw size={14} strokeWidth={1.5} />
+                      </button>
+                      <button
+                        className="explorer-header__icon"
+                        title="从资源管理器移除"
+                        onClick={() => dispatch(removeWorkspaceFolder(root.id))}
+                      >
+                        <Trash2 size={14} strokeWidth={1.5} />
+                      </button>
+                    </span>
+                  </div>
+                  <div className="explorer-section__content">
+                    <FileTree
+                      entry={rootEntry}
+                      level={0}
+                      activeSource={activeFileSource}
+                      onOpenFile={stableOnOpenFile}
+                      parentSource={root.source}
+                      rootSource={root.source}
+                      onFindInFiles={handleFindInFiles}
+                      onContextMenu={stableOnContextMenu}
+                      pendingCreate={pendingCreate}
+                      onCreateConfirm={handleCreateConfirm}
+                      onCreateCancel={handleCreateCancel}
+                      pendingRename={pendingRename}
+                      onRenameConfirm={handleRenameConfirm}
+                      onRenameCancel={handleRenameCancel}
+                      lastOperation={lastOperation}
+                      clipboardItems={clipboardState?.items}
+                      selectedEntries={selectedEntries.map((s) => s.entry)}
+                      onItemSelect={handleItemSelect}
+                      gitStatus={gitStatus}
+                      expandPaths={expandPaths}
+                      expandedDirs={expandedDirs}
+                      onToggleExpand={stableOnToggleExpand}
+                      onMoveFile={handleMoveFile}
+                      relativePath={`remote-root-${root.id}`}
+                    />
+                    {renderInlineInput(root.source)}
+                  </div>
+                </div>
+              );
+            })}
+
             {projectExpanded && timelineExpanded && (
               <div
                 className={`explorer-section__resize-handle ${resizingSection === 'timeline' ? 'is-resizing' : ''}`}

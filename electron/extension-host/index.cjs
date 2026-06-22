@@ -88,6 +88,8 @@ class ExtensionManager {
     const ext = this.extensions.get(extId);
     if (!ext || ext.active) return false;
 
+    const prevExtId = global._currentExtensionId;
+    global._currentExtensionId = extId;
     try {
       const mainPath = path.join(ext.path, ext.manifest.main);
       const module = require(mainPath);
@@ -103,6 +105,8 @@ class ExtensionManager {
     } catch (err) {
       console.error(`[ExtensionHost] 激活扩展失败 ${extId}:`, err.message);
       return false;
+    } finally {
+      global._currentExtensionId = prevExtId;
     }
     return false;
   }
@@ -225,6 +229,17 @@ class ExtensionManager {
       path: ext.path,
       active: ext.active,
     };
+  }
+
+  async invokeExtension(extId, method, args = []) {
+    const ext = this.extensions.get(extId);
+    if (!ext) throw new Error(`扩展未找到: ${extId}`);
+    const mainPath = path.join(ext.path, ext.manifest.main);
+    const module = require(mainPath);
+    if (typeof module[method] !== 'function') {
+      throw new Error(`扩展方法未找到: ${method}`);
+    }
+    return await module[method].apply(module, args);
   }
 }
 
@@ -550,6 +565,12 @@ rpc.on('ext.getAll', async () => {
 rpc.on('ext.get', async (params) => {
   const { extId } = params;
   return { extension: manager.getExtension(extId) };
+});
+
+// 调用扩展导出的方法
+rpc.on('ext.invoke', async (params) => {
+  const { extId, method, args } = params;
+  return await manager.invokeExtension(extId, method, args);
 });
 
 // 扩展宿主健康检查

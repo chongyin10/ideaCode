@@ -1,5 +1,12 @@
 import { FileContentCache } from '../utils/algorithms';
 import { WTinyLFU } from '../utils/algorithms/wTinyLFU';
+import {
+  getFileSystemProvider,
+  getUriScheme,
+  parseRemoteUri,
+  joinRemoteUri,
+  type FileSystemEntry,
+} from './fileSystemProvider';
 
 export type FileSource = FileSystemHandle | string;
 
@@ -19,6 +26,18 @@ export function isHandle(source: FileSource): source is FileSystemHandle {
 
 export function isElectron(): boolean {
   return typeof window !== 'undefined' && !!window.electronAPI?.isElectron;
+}
+
+export function isRemoteUri(source: FileSource): source is string {
+  return typeof source === 'string' && !!getUriScheme(source);
+}
+
+export function toRemoteUri(scheme: string, authority: string, path: string): string {
+  return joinRemoteUri(scheme, authority, path);
+}
+
+export function remoteUriParts(source: string): { scheme: string; authority: string; path: string } | null {
+  return parseRemoteUri(source);
 }
 
 /* ─── 文件内容缓存（双模式：LRU + W-TinyLFU）─── */
@@ -74,6 +93,24 @@ export async function openDirectory(): Promise<{ source: FileSource; name: strin
 }
 
 export async function readDirectory(parentSource: FileSource): Promise<FileEntry[]> {
+  if (isRemoteUri(parentSource)) {
+    const provider = getFileSystemProvider(parentSource);
+    if (!provider) {
+      throw new Error(`未找到远程文件系统 provider: ${parentSource}`);
+    }
+    const entries = await provider.readDirectory(parentSource);
+    return entries
+      .map((e: FileSystemEntry) => ({
+        name: e.name,
+        kind: e.kind,
+        source: e.uri,
+      }))
+      .sort((a, b) => {
+        if (a.kind === b.kind) return a.name.localeCompare(b.name);
+        return a.kind === 'directory' ? -1 : 1;
+      });
+  }
+
   if (isElectron() && isPath(parentSource)) {
     const entries = await window.electronAPI!.fs.readDir(parentSource);
     return entries
@@ -109,6 +146,14 @@ export async function readDirectory(parentSource: FileSource): Promise<FileEntry
 }
 
 export async function readFile(fileSource: FileSource): Promise<string> {
+  if (isRemoteUri(fileSource)) {
+    const provider = getFileSystemProvider(fileSource);
+    if (!provider) {
+      throw new Error(`未找到远程文件系统 provider: ${fileSource}`);
+    }
+    return provider.readFile(fileSource);
+  }
+
   if (isElectron() && isPath(fileSource)) {
     try {
       const stat = await window.electronAPI!.fs.stat(fileSource);
@@ -211,6 +256,15 @@ export async function watchDirectory(
 /* ─── 文件写入 ─── */
 
 export async function writeFile(fileSource: FileSource, content: string): Promise<void> {
+  if (isRemoteUri(fileSource)) {
+    const provider = getFileSystemProvider(fileSource);
+    if (!provider) {
+      throw new Error(`未找到远程文件系统 provider: ${fileSource}`);
+    }
+    await provider.writeFile(fileSource, content);
+    return;
+  }
+
   if (isElectron() && isPath(fileSource)) {
     await window.electronAPI!.fs.writeFile(fileSource, content);
     // 写入后更新缓存（避免下次读取到旧内容）

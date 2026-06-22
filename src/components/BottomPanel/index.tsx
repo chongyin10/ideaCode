@@ -210,7 +210,7 @@ const BottomPanel = () => {
     if (!bottomPanelVisible && terminal.panelVisible) {
       dispatch(setPanelVisible(false));
     }
-    if ((bottomPanelVisible || terminal.panelVisible) && allTabs.length === 0) {
+    if (bottomPanelVisible && allTabs.length === 0) {
       handleCreateTab();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -252,6 +252,7 @@ const BottomPanel = () => {
 
     if (result.success && result.id) {
       dispatch(setTabProcessId({ id: tabId, processId: result.id }));
+      dispatch(setTabReady({ id: tabId, pid: result.id, cwd: cwd || '' }));
     } else {
       dispatch(setTabExited({ id: tabId, exitCode: -1 }));
     }
@@ -359,6 +360,7 @@ const BottomPanel = () => {
         createTerminal({ cwd, executable: profile?.path, args: profile?.args }).then((result) => {
           if (result.success && result.id) {
             dispatch(setTabProcessId({ id: newPane.terminalId, processId: result.id }));
+            dispatch(setTabReady({ id: newPane.terminalId, pid: result.id, cwd: cwd || '' }));
           }
         });
       }

@@ -124,6 +124,7 @@ const initExtensionBridge = async () => {
 };
 
 if (typeof requestIdleCallback !== 'undefined') {
+  // 插件/扩展初始化完全异步，不阻塞首屏渲染与主线程事件循环
   requestIdleCallback(() => initExtensionBridge().catch(console.error), { timeout: 5000 });
 } else {
   setTimeout(() => initExtensionBridge().catch(console.error), 500);

@@ -1,6 +1,6 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import type { FileEntry, FileSource } from '../../services/fileService';
-import { isSameSource, readFile, readDirectory, writeFile, isPath } from '../../services/fileService';
+import { isSameSource, readFile, readDirectory, writeFile, isPath, isRemoteUri } from '../../services/fileService';
 import { addRecentProject, getRecentProjects, removeRecentProject } from '../../services/fileHistory';
 import type { RecentProject, GitStatusMap } from '../../types/electron';
 
@@ -22,6 +22,12 @@ export interface SearchHighlight {
   keyword: string;
   line: number;
   column: number;
+}
+
+export interface WorkspaceRoot {
+  id: string;
+  name: string;
+  source: FileSource;
 }
 
 export interface ClipboardItem {
@@ -89,6 +95,8 @@ interface WorkspaceState {
   settingsVisible: boolean;
   /** 当前已不存在的打开文件 ID 集合（如切换分支后文件被删除） */
   missingFileIds: string[];
+  /** 远程/外部工作区根目录列表 */
+  remoteRoots: WorkspaceRoot[];
 }
 
 const initialState: WorkspaceState = {
@@ -115,6 +123,7 @@ const initialState: WorkspaceState = {
   diffView: null,
   settingsVisible: false,
   missingFileIds: [],
+  remoteRoots: [],
 };
 
 /* ─── 工具函数 ─── */
@@ -139,6 +148,55 @@ function getTopOfHistory(stack: string[], exclude: string | null): string | unde
 
 function activeGroup(state: WorkspaceState): EditorGroup {
   return state.editorGroups[state.activeGroupIndex];
+}
+
+function insertOpenedFile(state: WorkspaceState, file: OpenedFile) {
+  if (!state.openedFiles.find((f) => f.id === file.id)) {
+    state.openedFiles.push({ ...file, isPreview: true });
+  }
+  const group = activeGroup(state);
+
+  if (group.fileIds.includes(file.id)) {
+    group.activeFileId = file.id;
+    group.tabHistory = pushToHistory(group.tabHistory, file.id);
+    syncGlobalActive(state);
+    return;
+  }
+
+  const activeFile = state.openedFiles.find((f) => f.id === group.activeFileId);
+  if (activeFile?.isPreview && !activeFile?.isDiff) {
+    const activeIdx = group.fileIds.indexOf(group.activeFileId!);
+    group.fileIds[activeIdx] = file.id;
+    group.tabHistory = removeFromHistory(group.tabHistory, group.activeFileId!);
+    group.activeFileId = file.id;
+    group.tabHistory = pushToHistory(group.tabHistory, file.id);
+    syncGlobalActive(state);
+    return;
+  }
+
+  const previewFileId = group.fileIds.find((fid) => {
+    const f = state.openedFiles.find((of) => of.id === fid);
+    return f?.isPreview && !f?.isDiff;
+  });
+  if (previewFileId) {
+    const previewIdx = group.fileIds.indexOf(previewFileId);
+    group.fileIds[previewIdx] = file.id;
+    group.tabHistory = removeFromHistory(group.tabHistory, previewFileId);
+    group.activeFileId = file.id;
+    group.tabHistory = pushToHistory(group.tabHistory, file.id);
+    syncGlobalActive(state);
+    return;
+  }
+
+  const activeIdx = group.activeFileId ? group.fileIds.indexOf(group.activeFileId) : -1;
+  if (activeIdx >= 0) {
+    group.fileIds.splice(activeIdx + 1, 0, file.id);
+  } else {
+    group.fileIds.push(file.id);
+  }
+  group.activeFileId = file.id;
+  group.tabHistory = pushToHistory(group.tabHistory, file.id);
+  syncGlobalActive(state);
 }
 
 /** 同步 activeFileId / activeFileSource 到焦点组 */
@@ -238,13 +296,13 @@ export const loadDirectory = createAsyncThunk(
   'workspace/loadDirectory',
   async ({ source, name }: { source: FileSource; name: string }, { dispatch }) => {
     const entries = await readDirectory(source);
-    if (isPath(source)) {
+    if (isPath(source) && !isRemoteUri(source)) {
       try { await addRecentProject(source, name); } catch { /* 忽略 */ }
       // 启动 tsserver 语言服务
       try { window.electronAPI?.tsserver?.start(source); } catch { /* tsserver 未可用 */ }
+      dispatch(refreshGitStatus());
+      dispatch(refreshAllFilePaths(source));
     }
-    dispatch(refreshGitStatus());
-    dispatch(refreshAllFilePaths(source));
     return { source, name, entries };
   }
 );
@@ -319,12 +377,15 @@ export const saveFile = createAsyncThunk(
     const mirrorKey = `${id}::${gIdx}`;
     const contentToSave = state.mirrorContent[mirrorKey] ?? file.content;
     await writeFile(file.source, contentToSave);
-    dispatch(refreshGitStatus());
-    // 同步刷新 Git Slice 状态（FileTree 读取此 slice）
-    try {
-      const { refreshGitStatus: refreshGitSliceStatus } = await import('./gitSlice');
-      dispatch(refreshGitSliceStatus());
-    } catch { /* gitSlice 可能未初始化 */ }
+    // 仅本地文件才刷新 Git 状态
+    if (!isRemoteUri(file.source)) {
+      dispatch(refreshGitStatus());
+      // 同步刷新 Git Slice 状态（FileTree 读取此 slice）
+      try {
+        const { refreshGitStatus: refreshGitSliceStatus } = await import('./gitSlice');
+        dispatch(refreshGitSliceStatus());
+      } catch { /* gitSlice 可能未初始化 */ }
+    }
     return { id, groupIndex: gIdx, content: contentToSave };
   }
 );
@@ -381,7 +442,7 @@ export const checkMissingFiles = createAsyncThunk(
     if (!fs) return [];
     const results = await Promise.all(
       state.openedFiles.map(async (f) => {
-        if (typeof f.source !== 'string') return null;
+        if (typeof f.source !== 'string' || isRemoteUri(f.source)) return null;
         try {
           const stat = await fs.stat(f.source);
           return stat ? null : f.id;
@@ -403,7 +464,7 @@ export const refreshOpenedFiles = createAsyncThunk(
     if (!fs) return [];
     const updates: { id: string; content: string }[] = [];
     for (const file of state.openedFiles) {
-      if (typeof file.source !== 'string') continue;
+      if (typeof file.source !== 'string' || isRemoteUri(file.source)) continue;
       if (file.isDirty) continue;
       try {
         const stat = await fs.stat(file.source);
@@ -428,6 +489,31 @@ const workspaceSlice = createSlice({
   reducers: {
     setSettingsVisible: (state, action) => {
       state.settingsVisible = action.payload as boolean;
+    },
+    addWorkspaceFolder: (state, action) => {
+      const root = action.payload as WorkspaceRoot;
+      if (!state.remoteRoots.find((r) => r.id === root.id)) {
+        state.remoteRoots.push(root);
+        const expandPath = `remote-root-${root.id}`;
+        if (!state.expandedDirs.includes(expandPath)) {
+          state.expandedDirs.push(expandPath);
+        }
+      }
+    },
+    removeWorkspaceFolder: (state, action) => {
+      const id = action.payload as string;
+      const removed = state.remoteRoots.find((r) => r.id === id);
+      state.remoteRoots = state.remoteRoots.filter((r) => r.id !== id);
+      // 关闭属于该远程根的所有已打开文件
+      if (removed) {
+        const rootUriPrefix = String(removed.source).replace(/\/$/, '') + '/';
+        state.openedFiles = state.openedFiles.filter((f) => {
+          if (isRemoteUri(f.source)) {
+            return !String(f.source).startsWith(rootUriPrefix);
+          }
+          return true;
+        });
+      }
     },
     closeSettings: (state) => {
       state.settingsVisible = false;
@@ -502,6 +588,10 @@ const workspaceSlice = createSlice({
       group.activeFileId = id;
       group.tabHistory = pushToHistory(group.tabHistory, id);
       syncGlobalActive(state);
+    },
+
+    openVirtualFile: (state, action) => {
+      insertOpenedFile(state, action.payload as OpenedFile);
     },
 
     navigateTabHistory: (state, action) => {
@@ -909,53 +999,7 @@ const workspaceSlice = createSlice({
       })
       .addCase(openExtensionDetail.fulfilled, (state, action) => {
         if (!action.payload) return;
-        const file = action.payload;
-        if (!state.openedFiles.find((f) => f.id === file.id)) {
-          state.openedFiles.push({ ...file, isPreview: true });
-        }
-        const group = activeGroup(state);
-
-        if (group.fileIds.includes(file.id)) {
-          group.activeFileId = file.id;
-          group.tabHistory = pushToHistory(group.tabHistory, file.id);
-          syncGlobalActive(state);
-          return;
-        }
-
-        const activeFile = state.openedFiles.find((f) => f.id === group.activeFileId);
-        if (activeFile?.isPreview && !activeFile?.isDiff) {
-          const activeIdx = group.fileIds.indexOf(group.activeFileId!);
-          group.fileIds[activeIdx] = file.id;
-          group.tabHistory = removeFromHistory(group.tabHistory, group.activeFileId!);
-          group.activeFileId = file.id;
-          group.tabHistory = pushToHistory(group.tabHistory, file.id);
-          syncGlobalActive(state);
-          return;
-        }
-
-        const previewFileId = group.fileIds.find((fid) => {
-          const f = state.openedFiles.find((of) => of.id === fid);
-          return f?.isPreview && !f?.isDiff;
-        });
-        if (previewFileId) {
-          const previewIdx = group.fileIds.indexOf(previewFileId);
-          group.fileIds[previewIdx] = file.id;
-          group.tabHistory = removeFromHistory(group.tabHistory, previewFileId);
-          group.activeFileId = file.id;
-          group.tabHistory = pushToHistory(group.tabHistory, file.id);
-          syncGlobalActive(state);
-          return;
-        }
-
-        const activeIdx = group.activeFileId ? group.fileIds.indexOf(group.activeFileId) : -1;
-        if (activeIdx >= 0) {
-          group.fileIds.splice(activeIdx + 1, 0, file.id);
-        } else {
-          group.fileIds.push(file.id);
-        }
-        group.activeFileId = file.id;
-        group.tabHistory = pushToHistory(group.tabHistory, file.id);
-        syncGlobalActive(state);
+        insertOpenedFile(state, action.payload);
       })
       .addCase(fetchRecentProjects.fulfilled, (state, action) => {
         state.recentProjects = action.payload;
@@ -1011,7 +1055,8 @@ export const {
   clearClipboard, setPendingSearchQuery, expandToFile, clearExpandPaths,
   toggleExpandDir, toggleSplitView, collapseAllGroups, setActiveGroup, saveEditorSnapshot, setGroupRatio, equalizeGroupRatios, reorderTab,
   openDiffView, closeDiffView, updateDiffView, setFileLanguage,
-  setSettingsVisible, closeSettings, setMissingFileIds,
+  setSettingsVisible, closeSettings, setMissingFileIds, openVirtualFile,
+  addWorkspaceFolder, removeWorkspaceFolder,
 } = workspaceSlice.actions;
 
 export default workspaceSlice.reducer;
