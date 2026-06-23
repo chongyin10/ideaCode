@@ -352,6 +352,15 @@ function registerGitHandlers() {
       return false;
     }
   });
+
+  ipcMain.handle(Channels.GIT_GET_REPO_ROOT, async (_event, dirPath) => {
+    try {
+      const root = await execGit('git rev-parse --show-toplevel', dirPath, 3000);
+      return root || null;
+    } catch {
+      return null;
+    }
+  });
 }
 
 module.exports = { registerGitHandlers };

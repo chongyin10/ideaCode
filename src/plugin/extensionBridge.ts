@@ -15,10 +15,12 @@
  * 4. 管理 WebView 面板（插件自定义 UI）
  */
 
+import path from 'path';
 import type { Store } from '@reduxjs/toolkit';
 import type { RootState } from '../store';
-import { openFile, openVirtualFile, addWorkspaceFolder, removeWorkspaceFolder } from '../store/slices/workspaceSlice';
-import { addPanelToOrder, removePanelFromOrder } from '../store/slices/layoutSlice';
+import { openFile, openVirtualFile, addWorkspaceFolder, removeWorkspaceFolder, setFileContent, markFileSaved, toggleAiEditMode } from '../store/slices/workspaceSlice';
+import { addPanelToOrder, removePanelFromOrder, registerDockableItem, unregisterDockableItem } from '../store/slices/layoutSlice';
+import { readFile as fsReadFile, writeFile as fsWriteFile, isPath } from '../services/fileService';
 import { getPluginManager } from './core';
 import type { PluginManifest } from './types';
 import { terminalSDK, type TerminalCreateOptions } from '../services/terminalSDK';
@@ -53,7 +55,7 @@ export interface ExtensionManifest {
     commands?: Array<{ command: string; title: string; category?: string; icon?: string }>;
     menus?: Record<string, Array<{ command: string; group?: string; order?: number; when?: string }>>;
     configuration?: { title: string; properties: Record<string, unknown> };
-    views?: Record<string, Array<{ id: string; name: string; when?: string }>>;
+    views?: Record<string, Array<{ id: string; name: string; when?: string; actions?: Array<{ command: string; title?: string; icon?: string; tooltip?: string }> }>>;
     viewsContainers?: Record<string, Array<{ id: string; title: string; icon: string }>>;
   };
   dependencies?: Record<string, string>;
@@ -125,7 +127,7 @@ export class ExtensionBridge {
     await this.scanExtensions();
 
     this.isReady = true;
-    console.log('[ExtensionBridge] 扩展桥接已初始化');
+    console.log('[ExtensionBridge] 扩展桥接已初始化', this.isReady);
   }
 
   private async _waitForHostReady(timeout = 10000): Promise<void> {
@@ -165,8 +167,12 @@ export class ExtensionBridge {
   private _setupRpcHandlers(): void {
     // UI 消息
     this.rpcHandlers.set('ui.showMessage', (params) => {
-      const { message, type } = params as { message: string; type: string };
+      const { message, type } = params as { message: string; type: 'info' | 'warning' | 'error' };
       console.log(`[Extension] ${type}: ${message}`);
+      // 使用原生 alert 作为临时通知方案（TODO: 替换为 toast 系统）
+      if (typeof window !== 'undefined' && message) {
+        try { window.alert(`[${type?.toUpperCase() || 'INFO'}] ${message}`); } catch { /* ignore */ }
+      }
       return { shown: true };
     });
 
@@ -279,7 +285,7 @@ export class ExtensionBridge {
     this.rpcHandlers.set('configuration.get', (params) => {
       const { section } = params as { section: string };
       const settings = this.store.getState().settings;
-      return (settings as Record<string, unknown>)[section] || {};
+      return (settings as unknown as Record<string, unknown>)[section] || {};
     });
 
     // 存储 API
@@ -304,19 +310,16 @@ export class ExtensionBridge {
     });
 
     // 密钥存储 API
-    this.rpcHandlers.set('secrets.get', (params) => {
-      const { extensionId, key } = params as { extensionId: string; key: string };
+    this.rpcHandlers.set('secrets.get', () => {
       // 使用安全的存储方式（如 keytar）
       return { value: null };
     });
 
-    this.rpcHandlers.set('secrets.store', (params) => {
-      const { extensionId, key, value } = params as { extensionId: string; key: string; value: string };
+    this.rpcHandlers.set('secrets.store', () => {
       return { stored: true };
     });
 
-    this.rpcHandlers.set('secrets.delete', (params) => {
-      const { extensionId, key } = params as { extensionId: string; key: string };
+    this.rpcHandlers.set('secrets.delete', () => {
       return { deleted: true };
     });
 
@@ -533,6 +536,181 @@ export class ExtensionBridge {
       this.store.dispatch(openTerminalModal({ tabId, title }));
       return { opened: true };
     });
+
+    /* ─── LifeAiCode AI 助手 ─── */
+
+    /**
+     * lifeAiCode.applyChanges — 用户确认 AI 建议后，执行文件写入
+     *
+     * 核心设计原则：
+     * - 只有此 RPC 方法可以写入文件
+     * - 只有在用户通过 WebView 明确接受建议后，此方法才会被调用
+     * - 每次写入前都会做安全检查（路径有效性）
+     */
+    /**
+     * lifeAiCode.editCode — AI 直接编辑当前编辑器内容
+     *
+     * 仅在 aiEditMode=true 时可用。
+     * 直接修改 Monaco Editor buffer + Redux 状态。
+     */
+    this.rpcHandlers.set('lifeAiCode.editCode', async (params) => {
+      const { action, text, filePath: _filePath, startLine, startCol, endLine, endCol } = params as {
+        action: 'setValue' | 'insertText' | 'replaceRange';
+        text: string;
+        filePath?: string;
+        startLine?: number;
+        startCol?: number;
+        endLine?: number;
+        endCol?: number;
+      };
+
+      // 检查 AI 编辑模式是否开启
+      const aiEditMode = this.store.getState().workspace.aiEditMode;
+      if (!aiEditMode) {
+        return { success: false, error: 'AI 编辑模式未开启，请在状态栏切换' };
+      }
+
+      try {
+        const { getMonacoEditorActions } = require('../services/monacoEditorBridge');
+        const actions = getMonacoEditorActions();
+
+        if (!actions || !actions.getEditor()) {
+          return { success: false, error: '没有活动的编辑器实例' };
+        }
+
+        switch (action) {
+          case 'setValue':
+            actions.setValue(text);
+            break;
+          case 'insertText':
+            actions.insertText(text);
+            break;
+          case 'replaceRange':
+            if (startLine == null || endLine == null) {
+              return { success: false, error: 'replaceRange 需要 startLine/endLine' };
+            }
+            actions.replaceRange(
+              startLine, startCol || 1,
+              endLine, endCol || 1,
+              text
+            );
+            break;
+          default:
+            return { success: false, error: `未知操作: ${action}` };
+        }
+
+        console.log('[LifeAiCode] AI 已编辑代码:', action, text.slice(0, 50));
+        return { success: true };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error('[LifeAiCode] editCode 失败:', msg);
+        return { success: false, error: msg };
+      }
+    });
+
+    this.rpcHandlers.set('lifeAiCode.toggleEditMode', async () => {
+      this.store.dispatch(toggleAiEditMode());
+      const isEditMode = this.store.getState().workspace.aiEditMode;
+      return { enabled: isEditMode };
+    });
+
+    this.rpcHandlers.set('lifeAiCode.applyChanges', async (params) => {
+      const {
+        filePath,
+        content,
+        original,
+        modified,
+      } = params as {
+        filePath: string;
+        content?: string;
+        original?: string | string[];
+        modified?: string | string[];
+      };
+
+      if (!filePath) {
+        console.error('[LifeAiCode] applyChanges: 缺少 filePath');
+        return { success: false, error: '缺少 filePath' };
+      }
+
+      // 安全检查：解析真实路径，确保在工作区内
+      const workspaceRoot = this.store.getState().workspace.rootSource;
+      if (!workspaceRoot || !isPath(workspaceRoot)) {
+        console.error('[LifeAiCode] applyChanges: 没有打开工作区或工作区路径无效', filePath);
+        return { success: false, error: '没有打开工作区' };
+      }
+
+      const normalizedTarget = path.resolve(filePath);
+      const normalizedRoot = path.resolve(workspaceRoot);
+      if (!normalizedTarget.startsWith(normalizedRoot)) {
+        console.error('[LifeAiCode] applyChanges: 拒绝写入工作区外', filePath);
+        return { success: false, error: '拒绝写入工作区外' };
+      }
+
+      try {
+        let newContent: string;
+
+        if (content !== undefined) {
+          // 旧协议/全量写入
+          newContent = content;
+        } else {
+          // 安全 find-and-replace：基于当前文件内容逐条替换
+          const originals = Array.isArray(original) ? original : original !== undefined ? [original] : [];
+          const modifieds = Array.isArray(modified) ? modified : modified !== undefined ? [modified] : [];
+
+          if (originals.length === 0 || originals.length !== modifieds.length) {
+            return { success: false, error: 'original 与 modified 参数不匹配' };
+          }
+
+          let currentContent = '';
+          try {
+            currentContent = await fsReadFile(filePath);
+          } catch (readErr) {
+            const msg = readErr instanceof Error ? readErr.message : String(readErr);
+            console.error('[LifeAiCode] applyChanges: 读取文件失败', msg);
+            return { success: false, error: `读取文件失败: ${msg}` };
+          }
+
+          newContent = currentContent;
+          for (let i = 0; i < originals.length; i += 1) {
+            const from = originals[i];
+            const to = modifieds[i];
+            if (from === to || !from) continue;
+            if (!newContent.includes(from)) {
+              console.warn('[LifeAiCode] applyChanges: 原始代码未找到，跳过:', filePath);
+              continue;
+            }
+            newContent = newContent.replace(from, to);
+          }
+
+          if (newContent === currentContent) {
+            console.warn('[LifeAiCode] applyChanges: 文件内容无变化:', filePath);
+            return { success: false, error: '文件内容无变化，未写入' };
+          }
+        }
+
+        // 使用文件服务写入文件
+        await fsWriteFile(filePath, newContent);
+
+        // 更新 Redux 状态
+        const state = this.store.getState().workspace;
+        const openedFile = state.openedFiles.find((f) => {
+          const src = typeof f.source === 'string' ? f.source : '';
+          return src === filePath;
+        });
+
+        if (openedFile) {
+          this.store.dispatch(setFileContent({ id: openedFile.id, content: newContent }));
+          this.store.dispatch(markFileSaved(openedFile.id));
+        }
+
+        console.log('[LifeAiCode] 已应用变更到:', filePath);
+        return { success: true };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error('[LifeAiCode] 写入文件失败:', msg);
+        return { success: false, error: msg };
+      }
+    });
   }
 
   /* ─── IPC 监听 ─── */
@@ -653,6 +831,14 @@ export class ExtensionBridge {
             icon: container.icon,
             extensionId: extId,
           }));
+          this.store.dispatch(registerDockableItem({
+            id: container.id,
+            title: container.title,
+            icon: container.icon,
+            location: 'left',
+            type: 'viewContainer',
+            sourceContainerId: container.id,
+          }));
           this.store.dispatch(addPanelToOrder(container.id));
         }
       }
@@ -664,6 +850,7 @@ export class ExtensionBridge {
               name: view.name,
               containerId,
               extensionId: extId,
+              actions: view.actions,
             }));
           }
         }
@@ -702,6 +889,7 @@ export class ExtensionBridge {
     if (manifest.contributes?.viewsContainers?.activitybar) {
       for (const container of manifest.contributes.viewsContainers.activitybar) {
         this.store.dispatch(unregisterViewContainer(container.id));
+        this.store.dispatch(unregisterDockableItem(container.id));
         this.store.dispatch(removePanelFromOrder(container.id));
       }
     }

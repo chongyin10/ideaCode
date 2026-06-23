@@ -81,6 +81,7 @@ const Channels = {
   GIT_CLONE: 'git:clone',
   GIT_CLONE_PROGRESS: 'git:cloneProgress',
   GIT_IS_REPO: 'git:isRepo',
+  GIT_GET_REPO_ROOT: 'git:getRepoRoot',
   GIT_STATUS_CHANGED: 'git:statusChanged',
 
   /* ─── tsserver LSP ─── */

@@ -65,8 +65,8 @@ export function useElectronEvents() {
     cleanups.push(unsubBlur);
 
     /* ── 窗口状态变化 ── */
-    const unsubState = api.window.onStateChanged((data) => {
-      // console.log('[Electron] 窗口状态变化', data);
+    const unsubState = api.window.onStateChanged((_data) => {
+      // console.log('[Electron] 窗口状态变化', _data);
     });
     cleanups.push(unsubState);
 

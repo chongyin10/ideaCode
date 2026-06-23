@@ -135,6 +135,8 @@ export interface PluginUiApi {
   registerStatusBarItem: (id: string, options: { text: string; tooltip?: string; command?: string }) => () => void;
   /** 注册侧边栏面板 */
   registerPanel: (id: string, options: { title: string; render: () => HTMLElement }) => () => void;
+  /** 显示/打开已注册的侧边栏面板或扩展视图 */
+  showPanel: (id: string) => void;
   /** 显示通知消息 */
   showMessage: (message: string, type?: 'info' | 'warning' | 'error') => void;
   /** 显示输入框 */

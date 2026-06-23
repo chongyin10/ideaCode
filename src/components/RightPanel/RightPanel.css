@@ -1,87 +1,88 @@
+/* ══════════════════════════════════════════════════
+   RightPanel — 右侧面板样式
+   ══════════════════════════════════════════════════ */
+
+/* ─── 基础容器 ─── */
+
 .right-panel {
   position: relative;
-  width: 0;
-  opacity: 0;
-  overflow: hidden;
-  flex-shrink: 0;
-  background-color: #252526;
   display: flex;
   flex-direction: column;
-  border-left: none;
-  box-sizing: border-box;
-  /* 禁用宽度动画：右侧面板展开/拖拽时终端只收到一次 resize，避免 xterm 频繁重排出错 */
-  transition: opacity 0.2s ease;
-}
-
-.right-panel.is-visible {
-  opacity: 1;
+  background: #1e1e1e;
   border-left: 1px solid rgba(255, 255, 255, 0.06);
-  box-shadow:
-    -4px 0 14px rgba(0, 0, 0, 0.35),
-    -1px 0 4px rgba(0, 0, 0, 0.2);
-}
-
-.right-panel.is-resizing {
-  transition: none;
-}
-
-/* 最大化时：填满 ActivityBar+SidePanel 之外的全部空间 */
-.right-panel.is-maximized {
-  flex: 1 !important;
-  width: auto !important;
-  z-index: 50;
-  box-shadow: -4px 0 24px rgba(0, 0, 0, 0.5);
-}
-
-.right-panel__resize-handle {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: 4px;
-  cursor: ew-resize;
-  z-index: 10;
-  background: transparent;
-  transition: background-color 0.2s ease, box-shadow 0.2s ease;
-}
-
-.right-panel__resize-handle:hover {
-  background-color: rgba(0, 122, 204, 0.25);
-}
-
-.right-panel__resize-handle.is-resizing {
-  background-color: rgba(0, 122, 204, 0.45);
-  box-shadow: -1px 0 4px rgba(0, 122, 204, 0.25);
-}
-
-.right-panel__tab-bar {
-  height: 32px;
-  padding: 0 8px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  background-color: #252526;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+  flex-shrink: 0;
+  width: 0;
   opacity: 0;
   transform: translateX(6px);
   transition:
-    opacity 0.2s ease 0.05s,
-    transform 0.2s cubic-bezier(0.4, 0, 0.2, 1) 0.05s;
+    width 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.2s ease,
+    transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.right-panel.is-visible .right-panel__tab-bar {
+.right-panel.is-visible {
+  width: 260px;
   opacity: 1;
   transform: translateX(0);
 }
 
+.right-panel.is-maximized {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  width: auto !important;
+  z-index: 1000;
+  border-left: none;
+}
+
+.right-panel.is-resizing {
+  transition: none !important;
+}
+
+/* ─── 拖拽调整手柄 ─── */
+
+.right-panel__resize-handle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 4px;
+  cursor: ew-resize;
+  z-index: 10;
+  background: transparent;
+  transition: background-color 0.15s ease;
+}
+
+.right-panel__resize-handle:hover {
+  background-color: rgba(0, 122, 204, 0.5);
+}
+
+/* ─── tab 栏 ─── */
+
+.right-panel__tab-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 32px;
+  padding: 0 8px;
+  background: #252526;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  user-select: none;
+  flex-shrink: 0;
+}
+
 .right-panel__tabs {
-  flex: 1;
-  min-width: 0;
   display: flex;
   align-items: center;
   gap: 2px;
+  flex: 1;
+  min-width: 0;
   overflow-x: auto;
-  overflow-y: hidden;
+  scrollbar-width: none;
 }
 
 .right-panel__tabs::-webkit-scrollbar {
@@ -89,35 +90,32 @@
 }
 
 .right-panel__tab {
-  height: 24px;
-  padding: 0 8px 0 10px;
+  height: 22px;
+  padding: 0 10px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 6px;
-  font-size: 11px;
-  color: #858585;
-  white-space: nowrap;
   cursor: pointer;
-  border-radius: 4px 4px 0 0;
-  border-bottom: 2px solid transparent;
+  border-radius: 4px;
+  color: #858585;
+  font-size: 11px;
+  user-select: none;
+  white-space: nowrap;
   transition:
-    color 0.12s ease,
     background-color 0.12s ease,
-    border-color 0.12s ease;
+    color 0.12s ease;
 }
 
 .right-panel__tab:hover {
+  background-color: rgba(255, 255, 255, 0.06);
   color: #cccccc;
-  background-color: rgba(255, 255, 255, 0.04);
 }
 
 .right-panel__tab.active {
+  background-color: rgba(255, 255, 255, 0.08);
   color: #ffffff;
-  border-bottom-color: #007acc;
 }
 
-/* 拖拽重排样式 */
 .right-panel__tab[draggable="true"]:active {
   cursor: grabbing;
 }
@@ -158,35 +156,29 @@
 }
 
 .right-panel__tab-name {
-  user-select: none;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
+  max-width: 120px;
 }
 
 .right-panel__tab-close {
-  width: 14px;
-  height: 14px;
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
   padding: 0;
-  background: none;
+  margin-left: 2px;
   border: none;
+  border-radius: 3px;
+  background: transparent;
   color: #858585;
   cursor: pointer;
-  border-radius: 3px;
-  opacity: 0;
-  transition:
-    opacity 0.12s ease,
-    color 0.12s ease,
-    background-color 0.12s ease;
+  opacity: 0.7;
+  transition: all 0.12s ease;
 }
 
-.right-panel__tab:hover .right-panel__tab-close,
-.right-panel__tab.active .right-panel__tab-close {
+.right-panel__tab:hover .right-panel__tab-close {
   opacity: 1;
 }
 
@@ -201,6 +193,19 @@
   align-items: center;
   gap: 2px;
   margin-left: 8px;
+}
+
+.right-panel__actions-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.right-panel__actions-separator {
+  width: 1px;
+  height: 14px;
+  background: rgba(255, 255, 255, 0.15);
+  margin: 0 6px;
 }
 
 .right-panel__action-btn {
@@ -238,10 +243,129 @@
 }
 
 .right-panel__placeholder {
+  width: 100%;
   height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
   color: #858585;
-  font-size: 13px;
+  font-size: 12px;
+}
+
+/* ─── 历史记录弹出层 ─── */
+
+.right-panel__action-popover-anchor {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.right-panel__history-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 280px;
+  max-height: 360px;
+  display: flex;
+  flex-direction: column;
+  background: #252526;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  z-index: 100;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateY(-6px) scale(0.98);
+  pointer-events: none;
+  transition:
+    opacity 0.15s ease,
+    transform 0.15s ease;
+}
+
+.right-panel__history-popover--open {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
+
+.right-panel__history-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  flex-shrink: 0;
+}
+
+.right-panel__history-search-icon {
+  color: #858585;
+  flex-shrink: 0;
+}
+
+.right-panel__history-search-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #cccccc;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.right-panel__history-search-input::placeholder {
+  color: #666666;
+}
+
+.right-panel__history-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px;
+}
+
+.right-panel__history-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+}
+
+.right-panel__history-item:hover {
+  background-color: rgba(255, 255, 255, 0.06);
+}
+
+.right-panel__history-item-title {
+  color: #cccccc;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.right-panel__history-item-preview {
+  color: #858585;
+  font-size: 11px;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.right-panel__history-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #666666;
+  font-size: 11px;
+}
+
+.right-panel__history-empty {
+  padding: 24px 12px;
+  text-align: center;
+  color: #666666;
+  font-size: 12px;
 }

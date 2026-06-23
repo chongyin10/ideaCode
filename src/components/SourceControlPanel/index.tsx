@@ -156,18 +156,25 @@ const SourceControlPanel = () => {
   // 监听 .git 目录文件变更，确保外部/终端命令完成后尽快同步
   useEffect(() => {
     if (!rootPath || !window.electronAPI?.fs?.watch) return;
-    const gitDir = `${rootPath.replace(/\/$/, '')}/.git`;
     let mounted = true;
-    window.electronAPI.fs.watch(gitDir)
-      .then((result) => {
-        if (!mounted && !result.alreadyWatching) {
-          window.electronAPI?.fs?.unwatch(gitDir).catch(() => {});
-        }
-      })
-      .catch(() => {});
+    let watchedDir: string | null = null;
+
+    (async () => {
+      const repoRoot = await gitService.getRepoRoot(rootPath);
+      if (!mounted || !repoRoot) return;
+      const gitDir = `${repoRoot.replace(/\/$/, '')}/.git`;
+      watchedDir = gitDir;
+      const result = await window.electronAPI!.fs.watch(gitDir);
+      if (!mounted && !result.alreadyWatching) {
+        window.electronAPI?.fs?.unwatch(gitDir).catch(() => {});
+      }
+    })();
+
     return () => {
       mounted = false;
-      window.electronAPI?.fs?.unwatch(gitDir).catch(() => {});
+      if (watchedDir) {
+        window.electronAPI?.fs?.unwatch(watchedDir).catch(() => {});
+      }
     };
   }, [rootPath]);
 

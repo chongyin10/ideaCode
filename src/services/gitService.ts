@@ -109,9 +109,11 @@ export const gitService = {
     return gitApi()?.getBehindAhead(dirPath) ?? { ahead: 0, behind: 0 };
   },
 
-  /** 丢弃文件更改（支持单文件或批量） */
+  /** 丢弃文件更改（支持单文件或批量，底层目前只处理第一个文件） */
   async discard(dirPath: string, files: string | string[]): Promise<void> {
-    await gitApi()?.discard(dirPath, files);
+    const file = Array.isArray(files) ? files[0] : files;
+    if (!file) return;
+    await gitApi()?.discard(dirPath, file);
   },
 
   /** 初始化 Git 仓库 */
@@ -127,5 +129,10 @@ export const gitService = {
   /** 检查是否为 Git 仓库 */
   async isRepo(dirPath: string): Promise<boolean> {
     return gitApi()?.isRepo(dirPath) ?? false;
+  },
+
+  /** 获取当前目录所在 Git 仓库的根目录（向上查找） */
+  async getRepoRoot(dirPath: string): Promise<string | null> {
+    return gitApi()?.getRepoRoot(dirPath) ?? null;
   },
 };

@@ -18,9 +18,11 @@ import type {
 } from './types';
 import type { RootState } from '../store';
 import { openFile } from '../store/slices/workspaceSlice';
+import { switchPanel, setSidePanelVisible } from '../store/slices/layoutSlice';
 import { readFile, writeFile as fsWriteFile, readDirectory } from '../services/fileService';
 import { getPluginManager } from './core';
 import { getMenuManager } from './menuManager';
+import { getMonacoEditorActions } from '../services/monacoEditorBridge';
 
 /**
  * 创建插件上下文
@@ -149,6 +151,10 @@ export function createPluginContext(
       // TODO: 实现面板注册
       return () => console.log(`[Plugin] 注销面板: ${id}`);
     },
+    showPanel: (id) => {
+      store.dispatch(switchPanel(id as Parameters<typeof switchPanel>[0]));
+      store.dispatch(setSidePanelVisible(true));
+    },
     showMessage: (message, type = 'info') => {
       console.log(`[Plugin ${type}] ${message}`);
       // TODO: 实现 toast 通知系统
@@ -177,22 +183,32 @@ export function createPluginContext(
       return activeFile?.content ?? null;
     },
     setValue: (value) => {
-      const state = store.getState();
-      const activeFile = state.workspace.openedFiles.find(
-        (f) => f.id === state.workspace.activeFileId
-      );
-      if (activeFile) {
-        // TODO: 需要 MonacoEditor 暴露设置值的方法
-        console.log(`[Plugin] 设置编辑器内容: ${value.substring(0, 50)}...`);
+      const actions = getMonacoEditorActions();
+      if (actions) {
+        actions.setValue(value);
+      } else {
+        // 回退到 Redux 状态更新（无编辑器实例时）
+        const state = store.getState();
+        const activeFile = state.workspace.openedFiles.find(
+          (f) => f.id === state.workspace.activeFileId
+        );
+        if (activeFile) {
+          const { setFileContent } = require('../store/slices/workspaceSlice');
+          store.dispatch(setFileContent({ id: activeFile.id, content: value }));
+        }
       }
     },
     insertText: (text) => {
-      console.log(`[Plugin] 插入文本: ${text}`);
-      // TODO: 需要 MonacoEditor 暴露插入文本的方法
+      const actions = getMonacoEditorActions();
+      if (actions) {
+        actions.insertText(text);
+      }
     },
     gotoLine: (line, column = 1) => {
-      console.log(`[Plugin] 跳转到行: ${line}, 列: ${column}`);
-      // TODO: 需要 MonacoEditor 暴露跳转方法
+      const actions = getMonacoEditorActions();
+      if (actions) {
+        actions.gotoLine(line, column);
+      }
     },
     onDidChangeContent: (callback) => {
       const getContent = () => {

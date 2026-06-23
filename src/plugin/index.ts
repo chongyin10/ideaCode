@@ -35,6 +35,7 @@ export type {
  * 示例插件：Hello World
  * 展示插件的基本结构和 API 使用方式
  */
+export { lifeAiCodePlugin } from './aiPlugin';
 export const helloWorldPlugin: import('./types').Plugin = {
   manifest: {
     id: 'com.ideacode.hello-world',

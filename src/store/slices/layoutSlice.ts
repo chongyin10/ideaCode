@@ -2,6 +2,17 @@ import { createSlice } from '@reduxjs/toolkit';
 
 export type PanelId = 'explorer' | 'search' | 'git' | 'debug' | 'extensions' | string;
 export type BottomTabId = 'terminal' | 'problems' | 'output' | 'debug-console' | 'ports' | 'gitlens';
+export type DockLocation = 'left' | 'right' | 'bottom';
+
+export interface DockableItem {
+  id: string;
+  title: string;
+  icon: string;
+  location: DockLocation;
+  type: 'explorer' | 'search' | 'git' | 'debug' | 'extensions' | 'terminal' | 'output' | 'problems' | 'debug-console' | 'ports' | 'gitlens' | 'viewContainer' | 'custom';
+  sourceContainerId?: string;
+  sourceViewId?: string;
+}
 
 export const DEFAULT_SIDEBAR_WIDTH = 260;
 export const MIN_SIDEBAR_WIDTH = 150;
@@ -12,6 +23,24 @@ export const DEFAULT_PANEL_ORDER: PanelId[] = ['explorer', 'search', 'git', 'deb
 
 /** 底部面板 tab 默认顺序 */
 export const DEFAULT_BOTTOM_TAB_ORDER: BottomTabId[] = ['problems', 'output', 'debug-console', 'terminal', 'ports', 'gitlens'];
+
+/** 统一的 dockable items 默认配置 */
+const DEFAULT_DOCKABLE_ITEMS: DockableItem[] = [
+  { id: 'explorer', title: 'activityBar.explorer', icon: '$(files)', location: 'left', type: 'explorer' },
+  { id: 'search', title: 'activityBar.search', icon: '$(search)', location: 'left', type: 'search' },
+  { id: 'git', title: 'activityBar.sourceControl', icon: '$(git-branch)', location: 'left', type: 'git' },
+  { id: 'debug', title: 'activityBar.runAndDebug', icon: '$(bug)', location: 'left', type: 'debug' },
+  { id: 'extensions', title: 'activityBar.extensions', icon: '$(blocks)', location: 'left', type: 'extensions' },
+
+  { id: 'right-kimi-code', title: 'KIMI CODE', icon: '$(sparkles)', location: 'right', type: 'custom' },
+
+  { id: 'problems', title: 'bottomPanel.problems', icon: '$(alert-circle)', location: 'bottom', type: 'problems' },
+  { id: 'output', title: 'bottomPanel.output', icon: '$(panel-top-open)', location: 'bottom', type: 'output' },
+  { id: 'debug-console', title: 'bottomPanel.debugConsole', icon: '$(bug)', location: 'bottom', type: 'debug-console' },
+  { id: 'terminal', title: 'bottomPanel.terminal', icon: '$(terminal)', location: 'bottom', type: 'terminal' },
+  { id: 'ports', title: 'bottomPanel.ports', icon: '$(plug)', location: 'bottom', type: 'ports' },
+  { id: 'gitlens', title: 'bottomPanel.gitlens', icon: '$(git-branch)', location: 'bottom', type: 'gitlens' },
+];
 
 interface LayoutState {
   sidePanelVisible: boolean;
@@ -26,6 +55,9 @@ interface LayoutState {
   activeBottomTab: BottomTabId;
   /** 底部面板 tab 顺序（可拖拽重排） */
   bottomTabOrder: BottomTabId[];
+  /** 统一的 dockable items（左/右/底三区共享） */
+  dockableItems: DockableItem[];
+  activeRightItem: string;
 }
 
 const initialState: LayoutState = {
@@ -38,6 +70,8 @@ const initialState: LayoutState = {
   bottomPanelVisible: false,
   bottomTabOrder: [...DEFAULT_BOTTOM_TAB_ORDER],
   activeBottomTab: 'terminal',
+  dockableItems: [...DEFAULT_DOCKABLE_ITEMS],
+  activeRightItem: 'right-kimi-code',
 };
 
 const layoutSlice = createSlice({
@@ -157,6 +191,102 @@ const layoutSlice = createSlice({
       const insertIdx = position === 'after' ? newToIdx + 1 : newToIdx;
       order.splice(insertIdx, 0, fromId);
     },
+
+    // ── 统一 dockable items ──
+    registerDockableItem: (state, action) => {
+      const item = action.payload as DockableItem;
+      const idx = state.dockableItems.findIndex((i) => i.id === item.id);
+      if (idx >= 0) {
+        state.dockableItems[idx] = item;
+      } else {
+        state.dockableItems.push(item);
+      }
+    },
+    unregisterDockableItem: (state, action) => {
+      const id = action.payload as string;
+      state.dockableItems = state.dockableItems.filter((i) => i.id !== id);
+    },
+    moveDockableItem: (state, action) => {
+      const { id, targetLocation, targetId, position = 'after' } = action.payload as {
+        id: string;
+        targetLocation: DockLocation;
+        targetId?: string;
+        position?: 'before' | 'after';
+      };
+      const item = state.dockableItems.find((i) => i.id === id);
+      if (!item) return;
+      item.location = targetLocation;
+
+      if (targetId && targetId !== id) {
+        const items = state.dockableItems;
+        const fromIdx = items.findIndex((i) => i.id === id);
+        const toIdx = items.findIndex((i) => i.id === targetId);
+        if (fromIdx !== -1 && toIdx !== -1) {
+          items.splice(fromIdx, 1);
+          const newToIdx = items.findIndex((i) => i.id === targetId);
+          const insertIdx = position === 'after' ? newToIdx + 1 : newToIdx;
+          items.splice(insertIdx, 0, item);
+        }
+      }
+
+      // 同步兼容旧字段
+      if (targetLocation === 'left' && !state.panelOrder.includes(id)) {
+        state.panelOrder.push(id);
+      }
+      if (targetLocation !== 'left') {
+        state.panelOrder = state.panelOrder.filter((p) => p !== id);
+      }
+      if (targetLocation === 'bottom' && !state.bottomTabOrder.includes(id as BottomTabId)) {
+        state.bottomTabOrder.push(id as BottomTabId);
+      }
+      if (targetLocation !== 'bottom') {
+        state.bottomTabOrder = state.bottomTabOrder.filter((b) => b !== id);
+      }
+      if (targetLocation === 'right') {
+        state.activeRightItem = id;
+        state.rightPanelVisible = true;
+      }
+      if (targetLocation === 'bottom') {
+        state.activeBottomTab = id as BottomTabId;
+        state.bottomPanelVisible = true;
+      }
+      if (targetLocation === 'left') {
+        state.activePanel = id;
+        state.sidePanelVisible = true;
+      }
+
+      // 如果当前激活项被移出原区域，切换到该区域其他可用项
+      const leftItems = state.dockableItems.filter((i) => i.location === 'left');
+      if (!leftItems.find((i) => i.id === state.activePanel)) {
+        state.activePanel = leftItems[0]?.id || 'explorer';
+      }
+      const bottomItems = state.dockableItems.filter((i) => i.location === 'bottom');
+      if (!bottomItems.find((i) => i.id === state.activeBottomTab)) {
+        state.activeBottomTab = (bottomItems[0]?.id as BottomTabId) || 'terminal';
+      }
+      const rightItems = state.dockableItems.filter((i) => i.location === 'right');
+      if (!rightItems.find((i) => i.id === state.activeRightItem)) {
+        state.activeRightItem = rightItems[0]?.id || '';
+      }
+    },
+    reorderDockableItem: (state, action) => {
+      const { fromId, toId, position = 'after' } = action.payload as {
+        fromId: string; toId: string; position?: 'before' | 'after';
+      };
+      if (fromId === toId) return;
+      const items = state.dockableItems;
+      const fromIdx = items.findIndex((i) => i.id === fromId);
+      const toIdx = items.findIndex((i) => i.id === toId);
+      if (fromIdx === -1 || toIdx === -1) return;
+      const [item] = items.splice(fromIdx, 1);
+      const newToIdx = items.findIndex((i) => i.id === toId);
+      const insertIdx = position === 'after' ? newToIdx + 1 : newToIdx;
+      items.splice(insertIdx, 0, item);
+    },
+    switchRightItem: (state, action) => {
+      state.activeRightItem = action.payload as string;
+      state.rightPanelVisible = true;
+    },
   },
 });
 
@@ -175,5 +305,10 @@ export const {
   removePanelFromOrder,
   reorderPanel,
   reorderBottomTab,
+  registerDockableItem,
+  unregisterDockableItem,
+  moveDockableItem,
+  reorderDockableItem,
+  switchRightItem,
 } = layoutSlice.actions;
 export default layoutSlice.reducer;

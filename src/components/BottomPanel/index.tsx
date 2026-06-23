@@ -5,16 +5,19 @@
  * 本组件负责：tab UI、终端实例挂载/切换、状态管理。
  */
 
-import { useState, useCallback, useMemo, useRef, useEffect, type ElementType } from 'react';
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Plus, X, Trash2, Search, Bookmark, SplitSquareVertical,
   Maximize2, Minimize2, Terminal, ChevronDown,
   Wifi, WifiOff, Copy, ClipboardPaste, Sparkles,
-  AlertCircle, PanelTopOpen, Bug, Plug, GitBranch, Pencil,
+  PanelTopOpen, Pencil,
 } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
-import { toggleBottomPanel, setBottomPanelVisible, switchBottomTab, reorderBottomTab, type BottomTabId } from '../../store/slices/layoutSlice';
+import {
+  toggleBottomPanel, setBottomPanelVisible, switchBottomTab,
+  moveDockableItem, reorderDockableItem, type BottomTabId, type DockLocation,
+} from '../../store/slices/layoutSlice';
 import {
   addTab, removeTab, setTabProcessId, setTabReady, setTabExited,
   setPanelVisible, setPanelHeight, toggleMaximize as toggleMaximizeAction,
@@ -30,50 +33,46 @@ import {
   clearTerminal, setTerminalBroadcastMode,
 } from '../../services/terminalManager';
 import { notifyPanelResizeStart, notifyPanelResizeEnd } from '../../services/panelResizeNotifier';
+import { DockableContent } from '../DockableContent';
 import TerminalInstance, { type TerminalInstanceHandle } from '../Terminal/TerminalInstance';
 import ContextMenu, { type MenuItem } from '../ContextMenu';
 import type { TerminalOutputEvent, TerminalProfile } from '../../types/electron';
 import './BottomPanel.css';
 
+const DOCK_MIME = 'application/lifeai-dock-item';
+
 /* ─── 常量 ─── */
 const MIN_PANEL_HEIGHT = 100;
 const MAX_PANEL_HEIGHT_RATIO = 0.85;
 
-/* ─── 数据结构 ─── */
-interface BottomTab {
-  id: BottomTabId;
-  name: string;
-  icon: ElementType;
-}
-
-const useBottomTabs = (): BottomTab[] => {
-  const { t } = useTranslation();
-  return useMemo(
-    () => [
-      { id: 'problems', name: t('bottomPanel.problems'), icon: AlertCircle },
-      { id: 'output', name: t('bottomPanel.output'), icon: PanelTopOpen },
-      { id: 'debug-console', name: t('bottomPanel.debugConsole'), icon: Bug },
-      { id: 'terminal', name: t('bottomPanel.terminal'), icon: Terminal },
-      { id: 'ports', name: t('bottomPanel.ports'), icon: Plug },
-      { id: 'gitlens', name: t('bottomPanel.gitlens'), icon: GitBranch },
-    ],
-    [t]
+function CrossAreaBottomContent({ activeBottomTab }: { activeBottomTab: BottomTabId }) {
+  const item = useAppSelector((s) => s.layout.dockableItems.find((i) => i.id === activeBottomTab));
+  if (!item) return null;
+  const standardIds = new Set(['terminal', 'problems', 'output', 'debug-console', 'ports', 'gitlens']);
+  if (standardIds.has(item.id)) return null;
+  return (
+    <div className="bottom-panel__cross-area" style={{ display: 'flex', flex: 1, flexDirection: 'column', overflow: 'hidden' }}>
+      <DockableContent item={item} />
+    </div>
   );
-};
+}
 
 const BottomPanel = () => {
   const { t } = useTranslation();
   const dispatch = useAppDispatch();
-  const allBottomTabs = useBottomTabs();
-  const { bottomPanelVisible, activeBottomTab, bottomTabOrder } = useAppSelector((s) => s.layout);
+  const { bottomPanelVisible, activeBottomTab, dockableItems } = useAppSelector((s) => s.layout);
   const terminal = useAppSelector((s) => s.terminal);
   const rootSource = useAppSelector((s) => s.workspace.rootSource);
 
-  // 按 bottomTabOrder 排序的 tab 列表
+  // 按 dockableItems 过滤出的底部 tab 列表（底部不显示图标，避免多个 tab 图标重复）
   const bottomTabs = useMemo(() => {
-    const tabMap = new Map(allBottomTabs.map(t => [t.id, t]));
-    return bottomTabOrder.map(id => tabMap.get(id)).filter((t): t is BottomTab => !!t);
-  }, [allBottomTabs, bottomTabOrder]);
+    return dockableItems
+      .filter((i) => i.location === 'bottom')
+      .map((item) => ({
+        id: item.id as BottomTabId,
+        name: t(item.title) || item.title,
+      }));
+  }, [dockableItems, t]);
 
   // ── 底部 tab 拖拽重排状态 ──
   const [draggingBottomTab, setDraggingBottomTab] = useState<BottomTabId | null>(null);
@@ -385,15 +384,26 @@ const BottomPanel = () => {
   }, [dispatch]);
 
   // ── 底部 tab 拖拽重排 ──
+  const buildDragData = (id: string, source: DockLocation) => JSON.stringify({ id, source });
+  const readDragData = (e: React.DragEvent): { id: string; source: DockLocation } | null => {
+    try {
+      const data = e.dataTransfer.getData(DOCK_MIME);
+      if (data) return JSON.parse(data);
+    } catch { /* ignore */ }
+    return null;
+  };
+  const hasDockData = (e: React.DragEvent) => e.dataTransfer.types.includes(DOCK_MIME);
+
   const handleBottomTabDragStart = useCallback((e: React.DragEvent, tabId: BottomTabId) => {
     setDraggingBottomTab(tabId);
     draggingBottomTabRef.current = tabId;
     e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', tabId);
+    e.dataTransfer.setData(DOCK_MIME, buildDragData(tabId, 'bottom'));
   }, []);
 
   const handleBottomTabDragOver = useCallback((e: React.DragEvent, tabId: BottomTabId) => {
-    if (!draggingBottomTabRef.current || draggingBottomTabRef.current === tabId) return;
+    // dragover 阶段不能可靠读取 getData，改由 types 判断
+    if (!hasDockData(e) || draggingBottomTabRef.current === tabId) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -405,21 +415,46 @@ const BottomPanel = () => {
   const handleBottomTabDrop = useCallback((e: React.DragEvent, tabId: BottomTabId) => {
     e.preventDefault();
     e.stopPropagation();
-    if (!draggingBottomTabRef.current) return;
-    const fromId = draggingBottomTabRef.current;
-    if (fromId !== tabId) {
-      dispatch(reorderBottomTab({ fromId, toId: tabId, position: dragOverBottomPos }));
+    const dragData = readDragData(e);
+    if (!dragData) {
+      resetBottomDrag();
+      return;
     }
-    setDraggingBottomTab(null);
-    setDragOverBottomTab(null);
-    draggingBottomTabRef.current = null;
+    const fromId = dragData.id;
+    if (fromId === tabId) {
+      resetBottomDrag();
+      return;
+    }
+    if (dragData.source === 'bottom') {
+      dispatch(reorderDockableItem({ fromId, toId: tabId, position: dragOverBottomPos }));
+    } else {
+      dispatch(moveDockableItem({ id: fromId, targetLocation: 'bottom', targetId: tabId, position: dragOverBottomPos }));
+      dispatch(switchBottomTab(fromId as BottomTabId));
+    }
+    resetBottomDrag();
   }, [dispatch, dragOverBottomPos]);
 
+  const handleContainerDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    const dragData = readDragData(e);
+    if (!dragData || dragData.source === 'bottom') {
+      resetBottomDrag();
+      return;
+    }
+    dispatch(moveDockableItem({ id: dragData.id, targetLocation: 'bottom' }));
+    dispatch(switchBottomTab(dragData.id as BottomTabId));
+    resetBottomDrag();
+  }, [dispatch]);
+
   const handleBottomTabDragEnd = useCallback(() => {
+    resetBottomDrag();
+  }, []);
+
+  const resetBottomDrag = () => {
     setDraggingBottomTab(null);
     setDragOverBottomTab(null);
     draggingBottomTabRef.current = null;
-  }, []);
+  };
 
   /* ─── 面板尺寸 ─── */
   const panelHeightRef = useRef(terminal.panelHeight);
@@ -547,26 +582,32 @@ const BottomPanel = () => {
 
       {/* 头部工具栏 */}
       <div className="bottom-panel__header">
-        <div className="bottom-panel__tab-bar">
-          {bottomTabs.map((tab) => {
-            const Icon = tab.icon;
-            return (
-              <div
-                key={tab.id}
-                className={`bottom-panel__tab ${tab.id === activeBottomTab ? 'active' : ''} ${draggingBottomTab === tab.id ? 'bottom-panel__tab--dragging' : ''} ${dragOverBottomTab === tab.id ? `bottom-panel__tab--drag-over bottom-panel__tab--drag-${dragOverBottomPos}` : ''}`}
-                draggable
-                onDragStart={(e) => handleBottomTabDragStart(e, tab.id)}
-                onDragOver={(e) => handleBottomTabDragOver(e, tab.id)}
-                onDrop={(e) => handleBottomTabDrop(e, tab.id)}
-                onDragEnd={handleBottomTabDragEnd}
-                onClick={() => handleSwitchBottomTab(tab.id)}
-                title={tab.name}
-              >
-                <Icon size={12} strokeWidth={1.5} className="bottom-panel__tab-icon" />
-                <span className="bottom-panel__tab-name">{tab.name}</span>
-              </div>
-            );
-          })}
+        <div
+          className="bottom-panel__tab-bar"
+          onDragOver={(e) => {
+            // 只要拖的是 dock item 就允许进入容器，drop 时再按 source 处理
+            if (hasDockData(e)) {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = 'move';
+            }
+          }}
+          onDrop={handleContainerDrop}
+        >
+          {bottomTabs.map((tab) => (
+            <div
+              key={tab.id}
+              className={`bottom-panel__tab ${tab.id === activeBottomTab ? 'active' : ''} ${draggingBottomTab === tab.id ? 'bottom-panel__tab--dragging' : ''} ${dragOverBottomTab === tab.id ? `bottom-panel__tab--drag-over bottom-panel__tab--drag-${dragOverBottomPos}` : ''}`}
+              draggable
+              onDragStart={(e) => handleBottomTabDragStart(e, tab.id)}
+              onDragOver={(e) => handleBottomTabDragOver(e, tab.id)}
+              onDrop={(e) => handleBottomTabDrop(e, tab.id)}
+              onDragEnd={handleBottomTabDragEnd}
+              onClick={() => handleSwitchBottomTab(tab.id)}
+              title={tab.name}
+            >
+              <span className="bottom-panel__tab-name">{tab.name}</span>
+            </div>
+          ))}
         </div>
 
         <div className="bottom-panel__actions">
@@ -794,6 +835,7 @@ const BottomPanel = () => {
       <div className="bottom-panel__placeholder" style={{ display: activeBottomTab === 'debug-console' ? 'flex' : 'none' }}>{t('bottomPanel.debugConsolePanel')}</div>
       <div className="bottom-panel__placeholder" style={{ display: activeBottomTab === 'ports' ? 'flex' : 'none' }}>{t('bottomPanel.portsPanel')}</div>
       <div className="bottom-panel__placeholder" style={{ display: activeBottomTab === 'gitlens' ? 'flex' : 'none' }}>GITLENS</div>
+      <CrossAreaBottomContent activeBottomTab={activeBottomTab} />
 
       {/* 终端右键菜单 */}
       {terminalContextMenu && (

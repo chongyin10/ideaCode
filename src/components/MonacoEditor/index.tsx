@@ -8,6 +8,7 @@ import type { SearchHighlight, EditorSnapshot } from '../../store/slices/workspa
 import { tsService } from '../../services/tsLanguageService';
 import { ensureLanguage } from '../../services/languageLoader';
 import { eventBus } from '../../utils/eventBus';
+import { registerMonacoEditor, unregisterMonacoEditor } from '../../services/monacoEditorBridge';
 import './MonacoEditor.css';
 
 // JSX/HTML/TS 语法高亮 + tsserver 语义高亮统一由 Monaco 内置 tokenizer / semantic tokens
@@ -668,6 +669,8 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
       }
       lspDisposablesRef.current.forEach((d) => d.dispose());
       lspDisposablesRef.current = [];
+      // 注销全局编辑器桥接
+      unregisterMonacoEditor();
       // 释放当前分屏独占的 Monaco model，避免泄漏
       if (currentModelPath && monacoRef.current) {
         try {
@@ -1068,7 +1071,7 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
           // 注册语义高亮 provider（semantic tokens），让方法/变量/类型等按语义着色
           // 使用 onMount 开头预取的 semTokensPrefetch 结果，消除首次高亮延迟
           // 注意：不 await 预取结果，避免阻塞 onMount。provider 回调中自行 await。
-          let semanticTokensLegend = null;
+          let semanticTokensLegend: { tokenTypes: string[]; tokenModifiers: string[] } | null = null;
           // 尝试从预取结果获取 legend（非阻塞）
           semTokensPrefetch?.then((firstTokens) => {
             if (firstTokens?.resultId) {
@@ -1188,6 +1191,9 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
         }));
 
         contextMenuDisposables.forEach((d) => lspDisposablesRef.current.push(d));
+
+        // ── 注册到全局桥接层（供 Plugin/AI 访问）──
+        registerMonacoEditor(editor, monaco);
       }}
       options={{
         minimap: { enabled: focused && minimapEnabled, showSlider: 'always' },

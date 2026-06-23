@@ -8,7 +8,7 @@ import { store } from './store'
 import router from './router'
 import { createPluginManager } from './plugin'
 import { createPluginContext } from './plugin'
-import { helloWorldPlugin } from './plugin'
+import { helloWorldPlugin, lifeAiCodePlugin } from './plugin'
 import { createExtensionBridge } from './plugin/extensionBridge'
 import './i18n'
 import './index.css'
@@ -97,10 +97,12 @@ const pluginManager = createPluginManager((pluginId, manifest) =>
 
 // 注册示例插件
 pluginManager.register(helloWorldPlugin.manifest);
+pluginManager.register(lifeAiCodePlugin.manifest);
 
 // 延迟激活插件（浏览器空闲时）
 const activatePlugins = () => {
   pluginManager.activate(helloWorldPlugin).catch(console.error);
+  pluginManager.activate(lifeAiCodePlugin).catch(console.error);
 };
 
 if (typeof requestIdleCallback !== 'undefined') {

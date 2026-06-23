@@ -21,22 +21,28 @@ const WebViewPanel = ({ html, panelId, extensionPath }: WebViewPanelProps) => {
     if (!iframe) return;
 
     // 注入 VSCode WebView API 兼容层，使插件 WebView 能调用 acquireVsCodeApi
+    // 注意：acquireVsCodeApi 必须是单例，否则 WebView 每次渲染都会拿到新对象，
+    // 触发依赖它的 useEffect 反复执行（如无限发送 requestConfig）。
     const vscodeApiScript = `
 <script>
 (function() {
   var state = {};
+  var api = null;
   window.acquireVsCodeApi = function() {
-    return {
-      postMessage: function(message) {
-        window.parent.postMessage(message, '*');
-      },
-      getState: function() {
-        return state;
-      },
-      setState: function(newState) {
-        state = newState;
-      }
-    };
+    if (!api) {
+      api = {
+        postMessage: function(message) {
+          window.parent.postMessage(message, '*');
+        },
+        getState: function() {
+          return state;
+        },
+        setState: function(newState) {
+          state = newState;
+        }
+      };
+    }
+    return api;
   };
 })();
 </script>
@@ -120,7 +126,7 @@ const WebViewPanel = ({ html, panelId, extensionPath }: WebViewPanelProps) => {
       <iframe
         ref={iframeRef}
         className="webview-panel__iframe"
-        sandbox="allow-scripts allow-same-origin"
+        sandbox="allow-scripts allow-same-origin allow-popups"
         allowFullScreen
         title={panelId}
       />

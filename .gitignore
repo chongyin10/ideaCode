@@ -27,3 +27,7 @@ source
 dist_open
 .qoder
 extensions/ssh/webview-dist
+extensions/ssh/webview
+
+# LifeAiCode: extensions/ 下的产物完全由 web/lifeAiCode/ 源码构建产生
+extensions/lifeAiCode/

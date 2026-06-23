@@ -204,7 +204,8 @@ class ExtensionHostManager {
         case 'tree.unregister':
         case 'webviewView.register':
         case 'webviewView.unregister':
-        case 'terminal.create': {
+        case 'terminal.create':
+        case 'lifeAiCode.applyChanges': {
           // 广播到渲染进程处理 WebView / 终端
           this.windowManager.broadcast(Channels.EXTENSION_MESSAGE, {
             method,

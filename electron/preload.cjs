@@ -221,6 +221,7 @@ const electronAPI = {
     onCloneProgress: (callback) => onChannel(Channels.GIT_CLONE_PROGRESS, callback),
     onStatusChanged: (callback) => onChannel(Channels.GIT_STATUS_CHANGED, callback),
     isRepo: (dirPath) => ipcRenderer.invoke(Channels.GIT_IS_REPO, dirPath),
+    getRepoRoot: (dirPath) => ipcRenderer.invoke(Channels.GIT_GET_REPO_ROOT, dirPath),
   },
 
   /** tsserver LSP — TypeScript 语言服务 */

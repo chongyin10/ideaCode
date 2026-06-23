@@ -99,6 +99,8 @@ interface WorkspaceState {
   missingFileIds: string[];
   /** 远程/外部工作区根目录列表 */
   remoteRoots: WorkspaceRoot[];
+  /** AI 编辑模式：true=AI可直接编辑代码 false=AI只给建议 */
+  aiEditMode: boolean;
 }
 
 const initialState: WorkspaceState = {
@@ -126,6 +128,7 @@ const initialState: WorkspaceState = {
   settingsVisible: false,
   missingFileIds: [],
   remoteRoots: [],
+  aiEditMode: true,
 };
 
 /* ─── 工具函数 ─── */
@@ -399,6 +402,13 @@ export const refreshGitStatus = createAsyncThunk(
     if (!state.rootSource || !isPath(state.rootSource)) return {};
     if (!window.electronAPI?.git) return {};
     try {
+      // 仅当工作区根目录确实位于某个 Git 仓库内（且是该仓库本身或子目录）时才获取状态
+      const repoRoot = await window.electronAPI.git.getRepoRoot(state.rootSource);
+      if (!repoRoot) return {};
+      const normalizedRoot = state.rootSource.replace(/\\/g, '/').replace(/\/$/, '');
+      const normalizedRepo = repoRoot.replace(/\\/g, '/').replace(/\/$/, '');
+      // 仅当工作区根目录本身就是 Git 仓库根目录时才显示状态
+      if (normalizedRoot !== normalizedRepo) return {};
       const result = await window.electronAPI.git.getStatus(state.rootSource);
       // 合并所有分类为扁平 map，保持旧 API 兼容
       return { ...result.staged, ...result.changes, ...result.merge, ...result.untracked };
@@ -940,6 +950,9 @@ const workspaceSlice = createSlice({
       const file = state.openedFiles.find((f) => f.id === id);
       if (file) file.readOnly = !file.readOnly;
     },
+    toggleAiEditMode: (state) => {
+      state.aiEditMode = !state.aiEditMode;
+    },
   },
 
   extraReducers: (builder) => {
@@ -1064,7 +1077,7 @@ export const {
   toggleExpandDir, toggleSplitView, collapseAllGroups, setActiveGroup, saveEditorSnapshot, setGroupRatio, equalizeGroupRatios, reorderTab,
   openDiffView, closeDiffView, updateDiffView, setFileLanguage,
   setSettingsVisible, closeSettings, setMissingFileIds, openVirtualFile,
-  addWorkspaceFolder, removeWorkspaceFolder, toggleFileReadOnly,
+  addWorkspaceFolder, removeWorkspaceFolder, toggleFileReadOnly, toggleAiEditMode,
 } = workspaceSlice.actions;
 
 export default workspaceSlice.reducer;

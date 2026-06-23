@@ -240,6 +240,7 @@ const DiffEditorPanel = ({ diffData, groupId }: DiffEditorPanelProps) => {
             enableSplitViewResizing: true,
             renderOverviewRuler: true,
             diffWordWrap: 'off' as const,
+            // @ts-expect-error Monaco 类型未声明 semanticHighlighting.enabled，但运行时支持
             'semanticHighlighting.enabled': semanticHighlightingEnabled,
           }}
         />

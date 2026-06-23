@@ -7,11 +7,20 @@ export interface ExtensionViewContainer {
   extensionId: string;
 }
 
+export interface ExtensionViewAction {
+  command: string;
+  title?: string;
+  icon?: string;
+  tooltip?: string;
+  type?: 'button' | 'switch';
+}
+
 export interface ExtensionView {
   id: string;
   name: string;
   containerId: string;
   extensionId: string;
+  actions?: ExtensionViewAction[];
 }
 
 export interface ExtensionWebViewPanel {

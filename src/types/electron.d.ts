@@ -238,6 +238,7 @@ export interface ElectronAPI {
     onCloneProgress: (callback: (data: string) => void) => () => void;
     onStatusChanged: (callback: (data: { cwd: string }) => void) => () => void;
     isRepo: (dirPath: string) => Promise<boolean>;
+    getRepoRoot: (dirPath: string) => Promise<string | null>;
   };
 
   /** tsserver LSP */

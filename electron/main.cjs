@@ -1,4 +1,9 @@
 const { app } = require('electron');
+
+// 抑制 Electron 安全警告与部分 DevTools CDP 无关错误
+process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = 'true';
+app.commandLine.appendSwitch('disable-features', 'AutofillServerCommunication,AutofillEnable');
+
 const { WindowManager } = require('./main/windowManager.cjs');
 const { TrayManager } = require('./main/tray.cjs');
 const { LifecycleManager } = require('./main/lifecycle.cjs');

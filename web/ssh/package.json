@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build && npm run copy:extension",
+    "build": "tsc && vite build && npm run copy:extension && npm run build:extension",
     "copy:extension": "node scripts/copy-to-extension.cjs",
+    "build:extension": "node scripts/build-extension.cjs",
     "preview": "vite preview"
   },
   "dependencies": {

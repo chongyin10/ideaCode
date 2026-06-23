@@ -1,0 +1,53 @@
+{
+  "name": "ideacode-ssh",
+  "displayName": "SSH Remote",
+  "description": "SSH 远程连接插件，支持通过 WebView 管理 SSH 连接",
+  "version": "1.0.0",
+  "publisher": "ideacode",
+  "main": "extension.cjs",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "ssh-explorer",
+          "title": "SSH 远程",
+          "icon": "$(terminal)"
+        }
+      ]
+    },
+    "views": {
+      "ssh-explorer": [
+        {
+          "id": "ssh-connections",
+          "name": "SSH 连接"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "ssh.connect",
+        "title": "SSH: 连接",
+        "category": "SSH",
+        "icon": "$(play)"
+      },
+      {
+        "command": "ssh.disconnect",
+        "title": "SSH: 断开连接",
+        "category": "SSH",
+        "icon": "$(debug-stop)"
+      }
+    ]
+  },
+  "dependencies": {
+    "ssh2": "^1.17.0"
+  },
+  "scripts": {
+    "build": "node build.cjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1"
+  }
+}

@@ -1,5 +1,5 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
-import type { GitBranch, GitRemote, GitBehindAhead } from '../../types/electron';
+import type { GitBranch, GitRemote, GitBehindAhead, GitStatusResult } from '../../types/electron';
 import { gitService } from '../../services/gitService';
 
 /* ─── State ─── */
@@ -52,13 +52,24 @@ function getRootPath(state: GitRootState): string | null {
   return typeof root === 'string' ? root : null;
 }
 
+async function getWorkspaceRepoRoot(root: string): Promise<string | null> {
+  const repoRoot = await gitService.getRepoRoot(root);
+  if (!repoRoot) return null;
+  const normalizedRoot = root.replace(/\\/g, '/').replace(/\/$/, '');
+  const normalizedRepo = repoRoot.replace(/\\/g, '/').replace(/\/$/, '');
+  // 只有当前打开的工作区根目录本身就是 Git 仓库根目录时，才启用 Git 功能
+  return normalizedRoot === normalizedRepo ? normalizedRepo : null;
+}
+
 export const refreshGitStatus = createAsyncThunk(
   'git/refreshStatus',
   async (_: void, { getState }) => {
     const root = getRootPath(getState() as GitRootState);
-    if (!root) return null;
+    if (!root) return { isRepo: false };
+    const repoRoot = await getWorkspaceRepoRoot(root);
+    if (!repoRoot) return { isRepo: false };
     const result = await gitService.getStatus(root);
-    return result;
+    return { isRepo: true, ...result };
   }
 );
 
@@ -66,13 +77,15 @@ export const refreshBranch = createAsyncThunk(
   'git/refreshBranch',
   async (_: void, { getState }) => {
     const root = getRootPath(getState() as GitRootState);
-    if (!root) return null;
+    if (!root) return { isRepo: false, branch: '', behindAhead: { ahead: 0, behind: 0 }, remotes: [] };
+    const repoRoot = await getWorkspaceRepoRoot(root);
+    if (!repoRoot) return { isRepo: false, branch: '', behindAhead: { ahead: 0, behind: 0 }, remotes: [] };
     const [branch, behindAhead, remotes] = await Promise.all([
       gitService.getBranch(root),
       gitService.getBehindAhead(root).catch(() => ({ ahead: 0, behind: 0 })),
       gitService.listRemotes(root),
     ]);
-    return { branch, behindAhead, remotes };
+    return { isRepo: true, branch, behindAhead, remotes };
   }
 );
 
@@ -80,8 +93,11 @@ export const refreshBranches = createAsyncThunk(
   'git/refreshBranches',
   async (_: void, { getState }) => {
     const root = getRootPath(getState() as GitRootState);
-    if (!root) return [];
-    return gitService.listBranches(root);
+    if (!root) return { isRepo: false, branches: [] };
+    const repoRoot = await getWorkspaceRepoRoot(root);
+    if (!repoRoot) return { isRepo: false, branches: [] };
+    const branches = await gitService.listBranches(root);
+    return { isRepo: true, branches };
   }
 );
 
@@ -89,8 +105,11 @@ export const refreshLog = createAsyncThunk(
   'git/refreshLog',
   async (_: void, { getState }) => {
     const root = getRootPath(getState() as GitRootState);
-    if (!root) return [];
-    return gitService.getLog(root);
+    if (!root) return { isRepo: false, log: [] };
+    const repoRoot = await getWorkspaceRepoRoot(root);
+    if (!repoRoot) return { isRepo: false, log: [] };
+    const log = await gitService.getLog(root);
+    return { isRepo: true, log };
   }
 );
 
@@ -98,8 +117,11 @@ export const refreshStashes = createAsyncThunk(
   'git/refreshStashes',
   async (_: void, { getState }) => {
     const root = getRootPath(getState() as GitRootState);
-    if (!root) return [];
-    return gitService.stashList(root);
+    if (!root) return { isRepo: false, stashes: [] };
+    const repoRoot = await getWorkspaceRepoRoot(root);
+    if (!repoRoot) return { isRepo: false, stashes: [] };
+    const stashes = await gitService.stashList(root);
+    return { isRepo: true, stashes };
   }
 );
 
@@ -328,28 +350,40 @@ const gitSlice = createSlice({
   extraReducers: (builder) => {
     builder
       .addCase(refreshGitStatus.fulfilled, (state, action) => {
-        if (action.payload) {
-          state.staged = action.payload.staged;
-          state.changes = action.payload.changes;
-          state.merge = action.payload.merge;
-          state.untracked = action.payload.untracked;
+        const payload = action.payload;
+        if (!payload || !payload.isRepo) {
+          state.staged = {};
+          state.changes = {};
+          state.merge = {};
+          state.untracked = {};
+          return;
         }
+        const result = payload as GitStatusResult & { isRepo: true };
+        state.staged = result.staged;
+        state.changes = result.changes;
+        state.merge = result.merge;
+        state.untracked = result.untracked;
       })
       .addCase(refreshBranch.fulfilled, (state, action) => {
-        if (action.payload) {
-          state.branch = action.payload.branch;
-          state.behindAhead = action.payload.behindAhead;
-          state.remotes = action.payload.remotes;
+        const payload = action.payload;
+        if (!payload || !payload.isRepo) {
+          state.branch = '';
+          state.behindAhead = { ahead: 0, behind: 0 };
+          state.remotes = [];
+          return;
         }
+        state.branch = payload.branch;
+        state.behindAhead = payload.behindAhead;
+        state.remotes = payload.remotes;
       })
       .addCase(refreshBranches.fulfilled, (state, action) => {
-        if (action.payload) state.branches = action.payload;
+        state.branches = action.payload?.isRepo ? (action.payload as { isRepo: true; branches: GitBranch[] }).branches : [];
       })
       .addCase(refreshLog.fulfilled, (state, action) => {
-        if (action.payload) state.log = action.payload;
+        state.log = action.payload?.isRepo ? (action.payload as { isRepo: true; log: string[] }).log : [];
       })
       .addCase(refreshStashes.fulfilled, (state, action) => {
-        if (action.payload) state.stashes = action.payload;
+        state.stashes = action.payload?.isRepo ? (action.payload as { isRepo: true; stashes: string[] }).stashes : [];
       })
       // loading / error for all thunks
       .addMatcher(

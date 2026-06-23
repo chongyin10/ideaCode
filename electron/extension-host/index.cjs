@@ -648,6 +648,84 @@ rpc.on('terminal.created', async () => ({ received: true }));
 rpc.on('terminal.data', async () => ({ received: true }));
 rpc.on('terminal.exit', async () => ({ received: true }));
 
+/* ─── LifeAiCode RPC 路由 ─── */
+// 将渲染进程发来的 lifeAiCode 请求转发到对应的扩展命令处理器
+function dispatchLifeAiCode(method, params) {
+  // 映射到 lifeAiCode 内部命令
+  const cmdMap = {
+    'lifeAiCode.internal.processMessage':   'lifeAiCode.internal.processMessage',
+    'lifeAiCode.internal.explainCode':      'lifeAiCode.internal.explainCode',
+    'lifeAiCode.internal.suggestRefactor':  'lifeAiCode.internal.suggestRefactor',
+    'lifeAiCode.internal.accept':           'lifeAiCode.internal.accept',
+    'lifeAiCode.internal.reject':           'lifeAiCode.internal.reject',
+    'lifeAiCode.internal.previewDiff':      'lifeAiCode.internal.previewDiff',
+    'lifeAiCode.internal.setEditMode':      'lifeAiCode.internal.setEditMode',
+  };
+  
+  const cmd = cmdMap[method];
+  if (cmd && global._lifeAiCodeCommandHandlers && global._lifeAiCodeCommandHandlers.has(cmd)) {
+    const handler = global._lifeAiCodeCommandHandlers.get(cmd);
+    return Promise.resolve(handler(params));
+  }
+  
+  // 转发为 commands.execute
+  if (global._lifeAiCodeCommandHandlers && global._lifeAiCodeCommandHandlers.has(method)) {
+    const handler = global._lifeAiCodeCommandHandlers.get(method);
+    return Promise.resolve(handler(params));
+  }
+  
+  return Promise.resolve({ notFound: true });
+}
+
+const lifeAiCodeMethods = [
+  'lifeAiCode.internal.processMessage',
+  'lifeAiCode.internal.explainCode',
+  'lifeAiCode.internal.suggestRefactor',
+  'lifeAiCode.internal.accept',
+  'lifeAiCode.internal.reject',
+  'lifeAiCode.internal.previewDiff',
+  'lifeAiCode.internal.configure',
+  'lifeAiCode.internal.testConnection',
+  'lifeAiCode.internal.setEditMode',
+];
+
+// 处理 commands.execute（如 lifeAiCode.ask）
+rpc.on('commands.execute', async (params) => {
+  const { command, args = [] } = params || {};
+  if (command && global._lifeAiCodeCommandHandlers && global._lifeAiCodeCommandHandlers.has(command)) {
+    const handler = global._lifeAiCodeCommandHandlers.get(command);
+    try {
+      const result = await handler(...args);
+      return { executed: true, result };
+    } catch (err) {
+      return { executed: false, error: err.message };
+    }
+  }
+  return { executed: false, error: `命令未找到: ${command}` };
+});
+
+for (const method of lifeAiCodeMethods) {
+  rpc.on(method, async (params) => {
+    return dispatchLifeAiCode(method, params);
+  });
+}
+
+/* ─── webview.message 路由 ─── */
+// 从渲染进程发来的 webview 消息，转发到扩展注册的消息处理器
+rpc.on('webview.message', async (params) => {
+  const { id, message } = params || {};
+  if (!id || !message) return { forwarded: false };
+  
+  // 通过扩展的 api.js 注册的全局处理器转发
+  const handlers = global._lifeAiCodeWebviewHandlers?.get(id);
+  if (handlers) {
+    for (const handler of handlers) {
+      try { handler(message); } catch (e) { console.error('[ExtensionHost] webview handler error:', e); }
+    }
+  }
+  return { forwarded: !!handlers };
+});
+
 console.log('[ExtensionHost] 扩展宿主已启动，等待连接...');
 
 // 发送 host.ready 通知

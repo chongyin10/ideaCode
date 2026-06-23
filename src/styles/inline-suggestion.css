@@ -1,0 +1,50 @@
+/**
+ * InlineSuggestion 装饰器样式
+ *
+ * 这些样式注入到 Monaco Editor 的 shadow DOM 中。
+ * 通过 Monaco 的 `defineTheme` 或 CSS 样式表注册。
+ */
+
+.inline-suggestion-line {
+  background-color: rgba(79, 193, 255, 0.06);
+  border-left: 3px solid transparent;
+  transition: all 0.15s ease;
+}
+
+.inline-suggestion-line--active {
+  background-color: rgba(79, 193, 255, 0.1);
+  border-left: 3px solid #4fc1ff;
+}
+
+.inline-suggestion-glyph {
+  background: rgba(79, 193, 255, 0.3);
+  width: 4px !important;
+  height: 100% !important;
+  margin-left: 2px;
+  border-radius: 1px;
+}
+
+.inline-suggestion-glyph--active {
+  background: #4fc1ff;
+  width: 4px !important;
+  height: 100% !important;
+  margin-left: 2px;
+  border-radius: 1px;
+}
+
+.inline-suggestion-label {
+  background: #4fc1ff;
+  color: #fff;
+  font-size: 10px;
+  padding: 0 6px;
+  border-radius: 3px;
+  margin-left: 4px;
+  letter-spacing: 0.3px;
+  font-weight: 500;
+  user-select: none;
+  cursor: pointer;
+}
+
+.inline-suggestion-before {
+  opacity: 0.9;
+}

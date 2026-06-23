@@ -1,0 +1,107 @@
+{
+  "name": "lifeAiCode",
+  "displayName": "LifeAiCode",
+  "description": "AI 代码辅助工具 — 只读分析，提供智能建议，不直接修改代码",
+  "version": "1.0.0",
+  "publisher": "ideacode",
+  "main": "extension.cjs",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "lifeAiCode",
+          "title": "LifeAiCode",
+          "icon": "$(sparkles)"
+        }
+      ]
+    },
+    "views": {
+      "lifeAiCode": [
+        {
+          "id": "lifeAiCode-chat",
+          "name": "LifeAiCode",
+          "actions": [
+            { "command": "lifeAiCode.newChat", "icon": "➕", "tooltip": "新建会话" },
+            { "command": "lifeAiCode.showHistory", "icon": "🕐", "tooltip": "历史记录" },
+            { "command": "lifeAiCode.openConfig", "icon": "⚙️", "tooltip": "配置" },
+            { "command": "lifeAiCode.toggleReadonly", "type": "switch", "tooltip": "只读模式" }
+          ]
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "lifeAiCode.ask",
+        "title": "LifeAiCode: 提问",
+        "category": "LifeAiCode",
+        "icon": "$(chat)"
+      },
+      {
+        "command": "lifeAiCode.explain",
+        "title": "LifeAiCode: 解释代码",
+        "category": "LifeAiCode",
+        "icon": "$(lightbulb)"
+      },
+      {
+        "command": "lifeAiCode.refactor",
+        "title": "LifeAiCode: 建议重构",
+        "category": "LifeAiCode",
+        "icon": "$(wand)"
+      },
+      {
+        "command": "lifeAiCode.accept",
+        "title": "LifeAiCode: 接受建议",
+        "category": "LifeAiCode",
+        "icon": "$(check)"
+      },
+      {
+        "command": "lifeAiCode.reject",
+        "title": "LifeAiCode: 拒绝建议",
+        "category": "LifeAiCode",
+        "icon": "$(x)"
+      },
+      {
+        "command": "lifeAiCode.previewDiff",
+        "title": "LifeAiCode: 预览差异",
+        "category": "LifeAiCode",
+        "icon": "$(diff)"
+      }
+    ],
+    "configuration": {
+      "title": "LifeAiCode",
+      "properties": {
+        "lifeAiCode.provider": {
+          "type": "string",
+          "default": "openai",
+          "enum": ["openai", "anthropic", "ollama"],
+          "description": "LLM Provider"
+        },
+        "lifeAiCode.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "API Key（也可通过环境变量设置）"
+        },
+        "lifeAiCode.model": {
+          "type": "string",
+          "default": "",
+          "description": "使用的模型名称，留空则使用 Provider 默认模型"
+        },
+        "lifeAiCode.readonly": {
+          "type": "boolean",
+          "default": true,
+          "description": "只读模式：AI 绝不直接修改代码"
+        }
+      }
+    }
+  },
+  "dependencies": {},
+  "scripts": {
+    "build": "node build.cjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1"
+  }
+}

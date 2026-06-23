@@ -141,30 +141,41 @@ function registerFsHandlers() {
       return { success: true, alreadyWatching: true };
     }
 
-    const watcher = fsSync.watch(
-      watchPath,
-      { recursive: true },
-      (eventType, filename) => {
-        // 向所有窗口推送文件变更通知（后台模式也能收到）
-        BrowserWindow.getAllWindows().forEach((win) => {
-          if (!win.isDestroyed()) {
-            win.webContents.send(Channels.FS_CHANGE, {
-              eventType,
-              filename,
-              path: watchPath,
-              timestamp: Date.now(),
-            });
-          }
-        });
+    // 目标路径不存在时直接返回错误，避免 FSWatcher 抛 ENOENT
+    if (!fsSync.existsSync(watchPath)) {
+      console.warn(`[FS_WATCH] 路径不存在，跳过监听: ${watchPath}`);
+      return { success: false, reason: '路径不存在', error: '路径不存在' };
+    }
 
-        // 若变更发生在 Git 仓库内，触发 Source Control 刷新
-        const changedPath = filename ? path.join(watchPath, filename) : watchPath;
-        triggerGitRefresh(changedPath);
-      }
-    );
+    try {
+      const watcher = fsSync.watch(
+        watchPath,
+        { recursive: true },
+        (eventType, filename) => {
+          // 向所有窗口推送文件变更通知（后台模式也能收到）
+          BrowserWindow.getAllWindows().forEach((win) => {
+            if (!win.isDestroyed()) {
+              win.webContents.send(Channels.FS_CHANGE, {
+                eventType,
+                filename,
+                path: watchPath,
+                timestamp: Date.now(),
+              });
+            }
+          });
 
-    watchers.set(watchPath, watcher);
-    return { success: true };
+          // 若变更发生在 Git 仓库内，触发 Source Control 刷新
+          const changedPath = filename ? path.join(watchPath, filename) : watchPath;
+          triggerGitRefresh(changedPath);
+        }
+      );
+
+      watchers.set(watchPath, watcher);
+      return { success: true };
+    } catch (err) {
+      console.error(`[FS_WATCH] 监听失败 ${watchPath}:`, err.message);
+      return { success: false, reason: err.message, error: err.message };
+    }
   });
 
   ipcMain.handle(Channels.FS_UNWATCH, async (_event, watchPath) => {
