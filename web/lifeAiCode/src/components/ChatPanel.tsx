@@ -3,7 +3,7 @@ import type { ChatMessage, Suggestion, CodeContext, WebViewRequest, ExtensionMes
 import { PROVIDER_META, getConnectionStatusColor } from '../types';
 import { SuggestionList } from './SuggestionList';
 import { ContentBlocks } from './ContentBlocks';
-import { ShieldCheck } from 'lucide-react';
+import { ShieldCheck, Brain, ArrowDown, User, Sparkles, Paperclip, Send, MessageSquare, Loader2 } from 'lucide-react';
 
 function getVsCodeApi() {
   if (typeof window !== 'undefined' && window.acquireVsCodeApi) {
@@ -14,6 +14,13 @@ function getVsCodeApi() {
 
 function generateId(): string {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function finalizeSteps(content: string): string {
+  // 对话结束时，把仍在运行或未写 status 的步骤标记为完成，防止 spinner 一直转
+  return content
+    .replace(/<step\b([^>]*)status=["']running["']([^>]*)>/gi, '<step$1status="done"$2>')
+    .replace(/<step\b(?![^>]*\bstatus=["'])([^>]*?)(\/?)>/gi, '<step$1 status="done"$2>');
 }
 
 /* ─── 聊天历史管理 ─── */
@@ -72,11 +79,15 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
   const [error, setError] = useState<string | null>(null);
   const [aiEditMode, setAiEditMode] = useState(true);
   const [autoAccept, setAutoAccept] = useState(false);
+  const [thinkingEnabled, setThinkingEnabled] = useState(true);
   const [showConfigPicker, setShowConfigPicker] = useState(false);
   const [history, setHistory] = useState<ChatHistoryItem[]>(loadHistory);
   const [showHistory, setShowHistory] = useState(false);
+  const [shellOutputs, setShellOutputs] = useState<Record<string, { output: string; status: 'running' | 'success' | 'error' }>>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const [userScrolledUp, setUserScrolledUp] = useState(false);
   const configPickerRef = useRef<HTMLDivElement>(null);
   const historyRef = useRef<HTMLDivElement>(null);
   const vscode = getVsCodeApi();
@@ -97,10 +108,26 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
     return () => document.removeEventListener('mousedown', close);
   }, [showConfigPicker, showHistory]);
 
-  // 自动滚动到底部
+  // 自动滚动到底部（仅在用户未主动上滑时即时跟随，避免平滑滚动导致按钮抖动）
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    if (!userScrolledUp) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+    }
+  }, [messages, userScrolledUp]);
+
+  // 监听滚动，判断用户是否主动离开底部
+  useEffect(() => {
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    const threshold = 80;
+    const handleScroll = () => {
+      const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+      setUserScrolledUp(distance > threshold);
+    };
+    el.addEventListener('scroll', handleScroll);
+    handleScroll();
+    return () => el.removeEventListener('scroll', handleScroll);
+  }, []);
 
   // 聚焦输入框
   useEffect(() => {
@@ -115,15 +142,18 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
 
       switch (msg.type) {
         case 'chatResponse': {
+          const finalContent = msg.done ? finalizeSteps(msg.content) : msg.content;
           setMessages((prev) => {
-            const existing = prev.find((m) => m.id === msg.id);
+            // AI 真正开始返回时，移除所有占位消息
+            const noPlaceholder = prev.filter((m) => !m.placeholder);
+            const existing = noPlaceholder.find((m) => m.id === msg.id);
             if (existing) {
-              return prev.map((m) =>
-                m.id === msg.id ? { ...m, content: msg.content, streaming: !msg.done } : m
+              return noPlaceholder.map((m) =>
+                m.id === msg.id ? { ...m, content: finalContent, streaming: !msg.done } : m
               );
             }
-            return [...prev, {
-              id: msg.id, role: 'assistant', content: msg.content,
+            return [...noPlaceholder, {
+              id: msg.id, role: 'assistant', content: finalContent,
               timestamp: Date.now(), streaming: !msg.done,
             }];
           });
@@ -132,15 +162,15 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
         }
         case 'suggestions': {
           setMessages((prev) => {
-            const lastMsg = prev[prev.length - 1];
+            const noPlaceholder = prev.filter((m) => !m.placeholder);
+            const lastMsg = noPlaceholder[noPlaceholder.length - 1];
             if (lastMsg && lastMsg.role === 'assistant') {
-              return prev.map((m, i) =>
-                i === prev.length - 1 ? { ...m, suggestions: msg.suggestions, streaming: false } : m
+              return noPlaceholder.map((m, i) =>
+                i === noPlaceholder.length - 1 ? { ...m, suggestions: msg.suggestions, streaming: false } : m
               );
             }
-            return prev;
+            return noPlaceholder;
           });
-          // 全局自动接受/拒绝开关
           if (msg.suggestions.length > 0) {
             setTimeout(() => {
               msg.suggestions.forEach((s) => {
@@ -184,6 +214,8 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
           break;
         }
         case 'error': {
+          // 错误时也清掉占位
+          setMessages((prev) => prev.filter((m) => !m.placeholder));
           setError(msg.message);
           setIsProcessing(false);
           break;
@@ -195,12 +227,14 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
         case 'newChat': {
           // 保存当前对话到历史并清空
           setMessages((prevMessages) => {
-            if (prevMessages.length > 0) {
+            // 保存历史前过滤掉占位消息
+            const realMessages = prevMessages.filter((m) => !m.placeholder);
+            if (realMessages.length > 0) {
               const item: ChatHistoryItem = {
                 id: `chat-${Date.now()}`,
-                title: historyTitle(prevMessages),
+                title: historyTitle(realMessages),
                 timestamp: Date.now(),
-                messages: [...prevMessages],
+                messages: realMessages,
               };
               setHistory((prevHistory) => {
                 const updated = [item, ...prevHistory.filter((h) => h.id !== item.id)];
@@ -221,21 +255,29 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
           setShowHistory((prev) => !prev);
           break;
         }
+        case 'shellUpdate': {
+          setShellOutputs((prev) => ({
+            ...prev,
+            [msg.id]: { output: msg.output, status: msg.status },
+          }));
+          break;
+        }
       }
     };
 
     window.addEventListener('message', handler);
     return () => window.removeEventListener('message', handler);
-  }, [onOpenConfig]);
+  }, [onOpenConfig, autoAccept]);
 
   // 新开对话：保存当前对话到历史，然后清空
   const newChat = useCallback(() => {
-    if (messages.length > 0) {
+    const realMessages = messages.filter((m) => !m.placeholder);
+    if (realMessages.length > 0) {
       const item: ChatHistoryItem = {
         id: `chat-${Date.now()}`,
-        title: historyTitle(messages),
+        title: historyTitle(realMessages),
         timestamp: Date.now(),
-        messages: [...messages],
+        messages: realMessages,
       };
       const updated = [item, ...history.filter((h) => h.id !== item.id)];
       setHistory(updated);
@@ -256,23 +298,35 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
 
     setError(null);
     const userMsg: ChatMessage = { id: generateId(), role: 'user', content: text.trim(), timestamp: Date.now() };
-    setMessages((prev) => [...prev, userMsg]);
+    // 占位消息：填充用户提交到 AI 返回第一个字符之间的时间空隙
+    const placeholderMsg: ChatMessage = {
+      id: `placeholder-${Date.now()}`,
+      role: 'assistant',
+      content: '',
+      timestamp: Date.now(),
+      placeholder: true,
+    };
+    setMessages((prev) => [...prev, userMsg, placeholderMsg]);
     setInput('');
     setIsProcessing(true);
 
     if (!vscode) {
       setTimeout(() => {
-        setMessages((prev) => [...prev, {
-          id: generateId(), role: 'assistant',
-          content: '> ⚠️ AI 服务需要通过 Extension Host 连接。\n\n请在 IDEACODE 中运行此扩展以获得完整的 AI 辅助功能。',
-          timestamp: Date.now(),
-        }]);
+        setMessages((prev) => [
+          // 移除占位消息
+          ...prev.filter((m) => !m.placeholder),
+          {
+            id: generateId(), role: 'assistant',
+            content: '> ⚠️ AI 服务需要通过 Extension Host 连接。\n\n请在 IDEACODE 中运行此扩展以获得完整的 AI 辅助功能。',
+            timestamp: Date.now(),
+          },
+        ]);
         setIsProcessing(false);
       }, 500);
       return;
     }
 
-    vscode.postMessage({ command: 'sendMessage', text: text.trim(), context } as WebViewRequest);
+    vscode.postMessage({ command: 'sendMessage', text: text.trim(), context, thinkingEnabled } as WebViewRequest);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -302,69 +356,166 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
   const contextFile = context?.activeFile?.filePath;
   const fileName = contextFile ? contextFile.split('/').pop() || contextFile : '';
 
+  const providerLabel = activeMeta?.label;
+  const modelLabel = activeConfig?.model;
+
+  const formatMessageTime = (ts: number) => {
+    const d = new Date(ts);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+
+  const handleRegenerate = () => {
+    if (vscode && messages.length >= 2) {
+      const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
+      if (lastUserMsg) {
+        vscode.postMessage({ command: 'sendMessage', text: lastUserMsg.content, context, thinkingEnabled } as WebViewRequest);
+      }
+    }
+  };
+
   return (
     <div className={`lifeAiCode-panel ${isPopup ? 'lifeAiCode-panel--popup' : ''}`}>
-      {/* 顶部标题栏由 IDE extension-view__header 提供，WebView 不再渲染自己的 header */}
-      <div className="messages-container">
+      <div className="messages-container" ref={messagesContainerRef}>
         {messages.length === 0 ? (
           <div className="empty-state">
-            <div className="empty-state__icon">
-              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" opacity="0.3">
-                <circle cx="12" cy="12" r="10"/>
-                <path d="M12 6v6l4 2"/>
-              </svg>
+            <div className="empty-state__logo">
+              <Sparkles size={28} color="#fff" strokeWidth={2} />
             </div>
-            <div className="empty-state__text">{aiEditMode ? '编辑模式' : '只读模式'}</div>
+            <div className="empty-state__title">开始与 AI 对话</div>
             <div className="empty-state__hint">
               {aiEditMode
                 ? '编辑模式 — AI 可以直接修改当前文件代码，请确认后再使用。'
                 : '只读模式 — AI 分析代码并提供建议，不会直接修改你的代码。'}
             </div>
+
+            <div className="empty-state__suggestions">
+              <button className="empty-state__suggestion" onClick={() => setInput('解释当前文件的主要功能')}>
+                <span className="empty-state__suggestion-icon">
+                  <MessageSquare size={12} strokeWidth={2} />
+                </span>
+                <span>解释当前文件的主要功能</span>
+              </button>
+              <button className="empty-state__suggestion" onClick={() => setInput('找出可能存在的 bug 并修复')}>
+                <span className="empty-state__suggestion-icon">
+                  <ShieldCheck size={12} strokeWidth={2} />
+                </span>
+                <span>找出可能存在的 bug 并修复</span>
+              </button>
+              <button className="empty-state__suggestion" onClick={() => setInput('优化性能并解释改进点')}>
+                <span className="empty-state__suggestion-icon">
+                  <Sparkles size={12} strokeWidth={2} />
+                </span>
+                <span>优化性能并解释改进点</span>
+              </button>
+              <button className="empty-state__suggestion" onClick={() => setInput('为这段代码添加单元测试')}>
+                <span className="empty-state__suggestion-icon">
+                  <Paperclip size={12} strokeWidth={2} />
+                </span>
+                <span>为这段代码添加单元测试</span>
+              </button>
+            </div>
+
             {!activeConfig?.verified && (
-              <div className="empty-state__action">
-                <button className="kc-btn" onClick={onOpenConfig}>
-                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2">
-                    <circle cx="6" cy="6" r="4.5"/>
-                    <path d="M6 3.5v5M3.5 6h5"/>
-                  </svg>
-                  配置 AI 服务商
-                </button>
-              </div>
+              <button className="config-btn config-btn--primary" style={{ marginTop: 8 }} onClick={onOpenConfig}>
+                <Sparkles size={13} strokeWidth={2} />
+                配置 AI 服务商
+              </button>
             )}
           </div>
         ) : (
-          messages.map((msg, idx) => (
+          messages.map((msg) => {
+            // 占位消息：渲染独立的"准备中"提示
+            if (msg.placeholder) {
+              return <PreparingPlaceholder key={msg.id} />;
+            }
+            return (
             <div key={msg.id} className={`message-row message-row--${msg.role}`}>
-              <div className="message-content">
-                <div className="message-bubble">
-                  <ContentBlocks content={msg.content} />
-                  {msg.streaming && (
-                    <div className="typing-indicator"><span /><span /><span /></div>
+              <div className="message-inner">
+                {/* Avatar */}
+                {msg.role === 'assistant' ? (
+                  <div className="message-avatar message-avatar--assistant">
+                    <Sparkles size={16} strokeWidth={2} />
+                  </div>
+                ) : (
+                  <div className="message-avatar message-avatar--user">
+                    <User size={16} strokeWidth={2} />
+                  </div>
+                )}
+
+                {/* Body */}
+                <div className="message-body">
+                  {/* Header (only for assistant) */}
+                  {msg.role === 'assistant' && (
+                    <div className="assistant-header">
+                      <span className="assistant-header__name">AI Assistant</span>
+                      <span className="assistant-header__divider" />
+                      <span className="assistant-header__meta">{formatMessageTime(msg.timestamp)}</span>
+                      {providerLabel && (
+                        <>
+                          <span className="assistant-header__divider" />
+                          <span className="assistant-header__meta">{providerLabel}</span>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Content */}
+                  <ContentBlocks
+                    content={msg.content}
+                    role={msg.role}
+                    shellOutputs={shellOutputs}
+                    completed={!msg.streaming}
+                    providerLabel={msg.role === 'assistant' ? providerLabel : undefined}
+                    modelLabel={msg.role === 'assistant' ? modelLabel : undefined}
+                    onCopy={msg.role === 'assistant' ? (text) => navigator.clipboard.writeText(text).catch(() => {}) : undefined}
+                    onRegenerate={msg.role === 'assistant' && !msg.streaming ? handleRegenerate : undefined}
+                    onExecuteShell={(id, shellCommand) => {
+                      vscode?.postMessage({ command: 'executeShell', id, shellCommand, cwd: context?.workspaceRoot || '' } as WebViewRequest);
+                    }}
+                    onOptionClick={(text) => sendMessage(text)}
+                  />
+
+                  {/* Suggestions */}
+                  {msg.suggestions && msg.suggestions.length > 0 && (
+                    <SuggestionList
+                      suggestions={msg.suggestions}
+                      onAccept={handleAcceptSuggestion}
+                      onReject={handleRejectSuggestion}
+                      onPreviewDiff={handlePreviewDiff}
+                    />
                   )}
                 </div>
-                {msg.suggestions && msg.suggestions.length > 0 && (
-                  <SuggestionList
-                    suggestions={msg.suggestions}
-                    onAccept={handleAcceptSuggestion}
-                    onReject={handleRejectSuggestion}
-                    onPreviewDiff={handlePreviewDiff}
-                  />
-                )}
               </div>
             </div>
-          ))
+            );
+          })
         )}
 
         {error && <div className="error-message">⚠️ {error}</div>}
         <div ref={messagesEndRef} />
       </div>
 
-      {/* 输入区 — KILO CODE 风格卡片式输入框 */}
-      <div className="chat-input-bar">
-        <div className="chat-input-wrapper">
+      {/* Scroll to bottom button */}
+      {userScrolledUp && (
+        <button
+          className="scroll-to-bottom"
+          title="回到底部"
+          onClick={() => {
+            setUserScrolledUp(false);
+            messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+          }}
+        >
+          <ArrowDown size={16} strokeWidth={2} />
+        </button>
+      )}
+
+      {/* Input bar */}
+      <div className="input-bar">
+        <div className="input-wrapper">
           <textarea
             ref={inputRef}
-            className="chat-input"
+            className="input-textarea"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -372,23 +523,18 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
             disabled={isProcessing}
             rows={1}
           />
-          <div className="chat-input-toolbar">
-            <div className="chat-input-tags">
+          <div className="input-toolbar">
+            <div className="input-tags">
               {fileName && (
-                <button className="input-tag-btn input-tag-btn--file" title={contextFile}>
-                  <svg width="10" height="10" viewBox="0 0 12 12" fill="currentColor">
-                    <path d="M2 1.5A.5.5 0 012.5 1h4.586a.5.5 0 01.353.146l2.415 2.415a.5.5 0 01.146.353V10.5a.5.5 0 01-.5.5h-7a.5.5 0 01-.5-.5v-9z"/>
-                  </svg>
-                  Code
-                  <svg width="8" height="8" viewBox="0 0 10 10" fill="currentColor" className="input-tag-btn__arrow">
-                    <path d="M2 3l3 4 3-4z" />
-                  </svg>
+                <button className="input-tag" title={contextFile}>
+                  <Paperclip size={11} strokeWidth={2} />
+                  {fileName}
                 </button>
               )}
-              {/* 配置选择器 — 底部模型下拉 */}
-              <div className="kc-config-selector kc-config-selector--inline" ref={configPickerRef}>
+              {/* Config selector */}
+              <div className="kc-config-selector" ref={configPickerRef} style={{ position: 'relative' }}>
                 <button
-                  className="input-tag-btn input-tag-btn--model"
+                  className="input-tag input-tag--model"
                   title={activeConfig ? `${activeMeta?.label || '未知'}: ${activeConfig.model || activeConfig.name}` : '未配置'}
                   onClick={() => setShowConfigPicker(!showConfigPicker)}
                 >
@@ -397,81 +543,88 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
                   }} />
                   {activeMeta?.label || '未配置'}
                   {activeConfig?.model && ` / ${activeConfig.model}`}
-                  <svg width="8" height="8" viewBox="0 0 10 10" fill="currentColor" className="input-tag-btn__arrow">
-                    <path d="M2 3l3 4 3-4z" />
-                  </svg>
                 </button>
 
                 {showConfigPicker && (
-                  <div className="kc-config-dropdown kc-config-dropdown--up">
+                  <div className="kc-dropdown">
                     {configs.map((cfg) => {
                       const m = PROVIDER_META[cfg.provider];
                       return (
                         <button
                           key={cfg.id}
-                          className={`kc-config-option ${cfg.id === activeConfig?.id ? 'kc-config-option--active' : ''}`}
+                          className={`kc-dropdown__item ${cfg.id === activeConfig?.id ? 'kc-dropdown__item--active' : ''}`}
                           onClick={() => { onSwitchConfig(cfg.id); setShowConfigPicker(false); }}
                         >
-                          <span className="kc-config-option__indicator" style={{ background: getConnectionStatusColor(cfg.connectionStatus) }} />
-                          <span className="kc-config-option__name">{cfg.name || m?.label || cfg.provider}</span>
-                          <span className="kc-config-option__model">{cfg.model}</span>
-                          {cfg.verified && <span className="kc-config-option__check">✓</span>}
+                          <span className="kc-dropdown__item-title">
+                            {cfg.name || m?.label || cfg.provider}
+                          </span>
+                          <span className="kc-dropdown__item-meta">{cfg.model} · {m?.label}</span>
                         </button>
                       );
                     })}
                     {configs.length === 0 && (
-                      <div className="kc-config-empty">暂无配置</div>
+                      <div className="kc-dropdown__header">暂无配置</div>
                     )}
-                    <div className="kc-config-divider" />
-                    <button className="kc-config-manage" onClick={() => { setShowConfigPicker(false); onOpenConfig(); }}>
-                      <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
-                        <path d="M6 0a.5.5 0 01.5.5V5h4.5a.5.5 0 010 1H6.5v4.5a.5.5 0 01-1 0V6H1a.5.5 0 010-1h4.5V.5A.5.5 0 016 0z"/>
-                      </svg>
+                    <div className="kc-dropdown__divider" />
+                    <button className="kc-dropdown__manage" onClick={() => { setShowConfigPicker(false); onOpenConfig(); }}>
+                      <Sparkles size={13} strokeWidth={2} />
                       管理配置
                     </button>
                   </div>
                 )}
               </div>
             </div>
-            <div className="chat-input-actions">
+            <div className="input-actions">
               <button
-                className={`kc-icon-btn kc-icon-btn--tool ${autoAccept ? 'kc-icon-btn--active' : ''}`}
-                title={autoAccept ? '自动全部接受建议' : '自动全部拒绝建议'}
+                className={`input-icon-btn ${thinkingEnabled ? 'input-icon-btn--active' : ''}`}
+                title={thinkingEnabled ? '思考模式已开启' : '思考模式已关闭'}
+                onClick={() => setThinkingEnabled(!thinkingEnabled)}
+              >
+                <Brain size={15} strokeWidth={1.8} />
+              </button>
+              <button
+                className={`input-icon-btn ${autoAccept ? 'input-icon-btn--active' : ''}`}
+                title={autoAccept ? '自动接受已开启' : '自动接受已关闭'}
                 onClick={() => setAutoAccept(!autoAccept)}
               >
-                <ShieldCheck size={14} strokeWidth={1.5} />
+                <ShieldCheck size={15} strokeWidth={1.8} />
               </button>
               <button
-                className="kc-icon-btn kc-icon-btn--tool"
-                title="添加上下文"
-                disabled={!fileName}
-              >
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <path d="M7 2v10M2 7h10"/>
-                </svg>
-              </button>
-              <button
-                className="kc-icon-btn kc-icon-btn--tool"
-                title="复制输入内容"
-                onClick={() => { navigator.clipboard.writeText(input).catch(() => {}); }}
-                disabled={!input}
-              >
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <rect x="3" y="3" width="7" height="7" rx="1"/>
-                  <path d="M10 1h2a1 1 0 011 1v2"/>
-                </svg>
-              </button>
-              <button
-                className="kc-send-btn"
+                className="input-send"
                 onClick={() => sendMessage(input)}
                 disabled={!input.trim() || isProcessing}
                 title="发送"
               >
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
-                  <path d="M1.61 1.12a.5.5 0 01.53.07l10 7a.5.5 0 010 .82l-10 7A.5.5 0 011.5 15V1a.5.5 0 01.11-.88z"/>
-                </svg>
+                <Send size={15} strokeWidth={2} />
               </button>
             </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────── */
+/*  准备中占位（用户提交后 → AI 真实返回前的过渡态）                   */
+/* ─────────────────────────────────────────────────────────────────── */
+
+function PreparingPlaceholder() {
+  return (
+    <div className="message-row message-row--assistant">
+      <div className="message-inner">
+        <div className="message-avatar message-avatar--assistant preparing-avatar">
+          <Sparkles size={16} strokeWidth={2} />
+        </div>
+        <div className="message-body">
+          <div className="preparing-placeholder">
+            <span className="preparing-placeholder__icon">
+              <Loader2 size={13} strokeWidth={2.4} />
+            </span>
+            <span className="preparing-placeholder__text">正在准备回复</span>
+            <span className="preparing-placeholder__dots">
+              <span /><span /><span />
+            </span>
           </div>
         </div>
       </div>

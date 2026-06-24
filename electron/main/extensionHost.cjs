@@ -24,6 +24,10 @@ class ExtensionHostManager {
     this.messageId = 0;
     /** @type {Map<number, {resolve: Function, reject: Function}>} */
     this.pendingRequests = new Map();
+    /** 渲染进程请求-响应 id 计数器 */
+    this.rendererRequestId = 0;
+    /** @type {Map<number, {resolve: Function, reject: Function}>} */
+    this.pendingRendererRequests = new Map();
   }
 
   /**
@@ -136,6 +140,64 @@ class ExtensionHostManager {
   }
 
   /**
+   * 向渲染进程发送请求并等待响应（Extension Host → Main → Renderer）
+   */
+  requestRenderer(method, params, timeout = 10000) {
+    return new Promise((resolve, reject) => {
+      const windows = this.windowManager.getAllWindows().filter((w) => !w.isDestroyed());
+      if (windows.length === 0) {
+        reject(new Error('没有可用的渲染进程窗口'));
+        return;
+      }
+
+      const focused = windows.find((w) => w.isFocused());
+      const target = focused || windows[0];
+      const reqId = ++this.rendererRequestId;
+      this.pendingRendererRequests.set(reqId, { resolve, reject });
+
+      const timer = setTimeout(() => {
+        if (this.pendingRendererRequests.has(reqId)) {
+          this.pendingRendererRequests.delete(reqId);
+          reject(new Error(`渲染进程请求超时: ${method}`));
+        }
+      }, timeout);
+
+      // 避免内存泄漏：清理计时器引用
+      const originalResolve = resolve;
+      const originalReject = reject;
+      resolve = (value) => {
+        clearTimeout(timer);
+        originalResolve(value);
+      };
+      reject = (reason) => {
+        clearTimeout(timer);
+        originalReject(reason);
+      };
+      this.pendingRendererRequests.set(reqId, { resolve, reject });
+
+      target.webContents.send(Channels.EXTENSION_HOST_REQUEST_RENDERER, {
+        id: reqId,
+        method,
+        params,
+      });
+    });
+  }
+
+  /**
+   * 处理渲染进程返回的响应
+   */
+  handleRendererResponse(id, result, error) {
+    const pending = this.pendingRendererRequests.get(id);
+    if (!pending) return;
+    this.pendingRendererRequests.delete(id);
+    if (error) {
+      pending.reject(new Error(error));
+    } else {
+      pending.resolve(result);
+    }
+  }
+
+  /**
    * 处理扩展宿主发来的消息
    */
   handleHostMessage(message) {
@@ -168,6 +230,20 @@ class ExtensionHostManager {
   }
 
   /**
+   * 判断某个 RPC 方法是否应该从渲染进程取真实数据
+   */
+  _needsRendererData(method) {
+    return (
+      method.startsWith('editor.') ||
+      method.startsWith('workspace.') ||
+      method.startsWith('configuration.') ||
+      method.startsWith('storage.') ||
+      method.startsWith('secrets.') ||
+      method.startsWith('env.')
+    );
+  }
+
+  /**
    * 处理 Extension Host 发来的请求（需要响应）
    */
   async handleHostRequest(message) {
@@ -176,51 +252,58 @@ class ExtensionHostManager {
     let error = null;
 
     try {
-      switch (method) {
-        case 'commands.execute': {
-          // 转发到渲染进程执行命令
-          const { command, args } = params;
-          // 这里需要广播到渲染进程并等待响应
-          // 简化实现：直接返回成功
-          result = { executed: true, command };
-          break;
-        }
-        case 'window.showInformationMessage':
-        case 'window.showErrorMessage':
-        case 'window.showWarningMessage': {
-          // 广播到渲染进程显示消息
-          this.windowManager.broadcast(Channels.EXTENSION_MESSAGE, {
-            method,
-            params,
-          });
-          result = { shown: true };
-          break;
-        }
-        case 'webview.create':
-        case 'webview.dispose':
-        case 'webview.reveal':
-        case 'webview.postMessage':
-        case 'tree.register':
-        case 'tree.unregister':
-        case 'webviewView.register':
-        case 'webviewView.unregister':
-        case 'terminal.create':
-        case 'lifeAiCode.applyChanges': {
-          // 广播到渲染进程处理 WebView / 终端
-          this.windowManager.broadcast(Channels.EXTENSION_MESSAGE, {
-            method,
-            params,
-          });
-          result = { processed: true };
-          break;
-        }
-        default: {
-          // 未知方法，广播到渲染进程
-          this.windowManager.broadcast(Channels.EXTENSION_MESSAGE, {
-            method,
-            params,
-          });
-          result = { processed: true };
+      // 需要真实数据的方法：转发到渲染进程并等待响应
+      if (this._needsRendererData(method)) {
+        result = await this.requestRenderer(method, params);
+      } else {
+        switch (method) {
+          case 'commands.execute': {
+            // 转发到渲染进程执行命令（广播，不等待结果）
+            const { command, args } = params;
+            this.windowManager.broadcast(Channels.EXTENSION_MESSAGE, {
+              method,
+              params,
+            });
+            result = { executed: true, command };
+            break;
+          }
+          case 'window.showInformationMessage':
+          case 'window.showErrorMessage':
+          case 'window.showWarningMessage': {
+            // 广播到渲染进程显示消息
+            this.windowManager.broadcast(Channels.EXTENSION_MESSAGE, {
+              method,
+              params,
+            });
+            result = { shown: true };
+            break;
+          }
+          case 'webview.create':
+          case 'webview.dispose':
+          case 'webview.reveal':
+          case 'webview.postMessage':
+          case 'tree.register':
+          case 'tree.unregister':
+          case 'webviewView.register':
+          case 'webviewView.unregister':
+          case 'terminal.create':
+          case 'lifeAiCode.applyChanges': {
+            // 广播到渲染进程处理 WebView / 终端
+            this.windowManager.broadcast(Channels.EXTENSION_MESSAGE, {
+              method,
+              params,
+            });
+            result = { processed: true };
+            break;
+          }
+          default: {
+            // 未知方法，广播到渲染进程
+            this.windowManager.broadcast(Channels.EXTENSION_MESSAGE, {
+              method,
+              params,
+            });
+            result = { processed: true };
+          }
         }
       }
     } catch (err) {

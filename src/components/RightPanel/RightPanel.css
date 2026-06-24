@@ -254,118 +254,19 @@
 
 /* ─── 历史记录弹出层 ─── */
 
-.right-panel__action-popover-anchor {
+.right-panel__content-overlay {
+  position: absolute;
+  top: 32px;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 90;
+  background: transparent;
+  cursor: default;
+}
+
+.extension-view__action-popover-anchor {
   position: relative;
   display: inline-flex;
   align-items: center;
-}
-
-.right-panel__history-popover {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  width: 280px;
-  max-height: 360px;
-  display: flex;
-  flex-direction: column;
-  background: #252526;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-  z-index: 100;
-  overflow: hidden;
-  opacity: 0;
-  transform: translateY(-6px) scale(0.98);
-  pointer-events: none;
-  transition:
-    opacity 0.15s ease,
-    transform 0.15s ease;
-}
-
-.right-panel__history-popover--open {
-  opacity: 1;
-  transform: translateY(0) scale(1);
-  pointer-events: auto;
-}
-
-.right-panel__history-search {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  flex-shrink: 0;
-}
-
-.right-panel__history-search-icon {
-  color: #858585;
-  flex-shrink: 0;
-}
-
-.right-panel__history-search-input {
-  flex: 1;
-  background: transparent;
-  border: none;
-  outline: none;
-  color: #cccccc;
-  font-size: 12px;
-  min-width: 0;
-}
-
-.right-panel__history-search-input::placeholder {
-  color: #666666;
-}
-
-.right-panel__history-list {
-  flex: 1;
-  overflow-y: auto;
-  padding: 6px;
-}
-
-.right-panel__history-item {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 8px 10px;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background-color 0.12s ease;
-}
-
-.right-panel__history-item:hover {
-  background-color: rgba(255, 255, 255, 0.06);
-}
-
-.right-panel__history-item-title {
-  color: #cccccc;
-  font-size: 12px;
-  font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.right-panel__history-item-preview {
-  color: #858585;
-  font-size: 11px;
-  line-height: 1.4;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.right-panel__history-item-meta {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  color: #666666;
-  font-size: 11px;
-}
-
-.right-panel__history-empty {
-  padding: 24px 12px;
-  text-align: center;
-  color: #666666;
-  font-size: 12px;
 }

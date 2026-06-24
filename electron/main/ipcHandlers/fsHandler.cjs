@@ -152,12 +152,14 @@ function registerFsHandlers() {
         watchPath,
         { recursive: true },
         (eventType, filename) => {
+          // filename 在某些平台/事件下可能为 undefined，统一转换为 null/字符串
+          const safeFilename = filename === undefined ? null : filename;
           // 向所有窗口推送文件变更通知（后台模式也能收到）
           BrowserWindow.getAllWindows().forEach((win) => {
-            if (!win.isDestroyed()) {
+            if (!win.isDestroyed() && win.webContents) {
               win.webContents.send(Channels.FS_CHANGE, {
                 eventType,
-                filename,
+                filename: safeFilename,
                 path: watchPath,
                 timestamp: Date.now(),
               });
@@ -165,7 +167,7 @@ function registerFsHandlers() {
           });
 
           // 若变更发生在 Git 仓库内，触发 Source Control 刷新
-          const changedPath = filename ? path.join(watchPath, filename) : watchPath;
+          const changedPath = safeFilename ? path.join(watchPath, safeFilename) : watchPath;
           triggerGitRefresh(changedPath);
         }
       );

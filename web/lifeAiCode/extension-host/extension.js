@@ -29,6 +29,7 @@
 
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const vscode = require('./api');
 const { LlmClient } = require('./llmClient');
 const { CodeContextBuilder } = require('./codeContext');
@@ -91,6 +92,76 @@ function getWebviewHtml(extensionPath) {
 }
 
 /**
+ * 执行 <shell> 命令：启动临时终端，任务结束后自动销毁
+ */
+async function executeShellCommand(id, shellCommand, cwd) {
+  const isWindows = process.platform === 'win32';
+  const executable = isWindows ? 'cmd.exe' : '/bin/sh';
+  const args = isWindows ? ['/c', shellCommand] : ['-c', shellCommand];
+
+  let workingDir = cwd || process.cwd();
+  if (!workingDir || !fs.existsSync(workingDir)) {
+    workingDir = os.homedir();
+  }
+
+  let terminal;
+  try {
+    terminal = await vscode.window.createTerminal({
+      name: 'LifeAiCode Shell',
+      cwd: workingDir,
+      executable,
+      args,
+    });
+  } catch (err) {
+    postToWebView({ type: 'shellUpdate', id, shellCommand, output: `创建终端失败: ${err.message}`, status: 'error' });
+    return;
+  }
+
+  terminal.show();
+
+  const outputs = [];
+  let finished = false;
+  const maxOutput = 8192;
+
+  const flushOutput = (status) => {
+    const output = outputs.join('').slice(-maxOutput);
+    postToWebView({ type: 'shellUpdate', id, shellCommand, output, status });
+  };
+
+  const unsubOutput = terminal.onDidWriteData((data) => {
+    outputs.push(data);
+    if (outputs.length > 200) {
+      outputs.splice(0, outputs.length - 200);
+    }
+  });
+
+  // 运行期间每 300ms 推送一次输出，让用户看到实时进度
+  const timer = setInterval(() => {
+    if (!finished) flushOutput('running');
+  }, 300);
+
+  terminal.onDidClose((exitCode) => {
+    if (finished) return;
+    finished = true;
+    clearInterval(timer);
+    unsubOutput();
+    const status = exitCode === 0 || exitCode === undefined ? 'success' : 'error';
+    flushOutput(status);
+    try { terminal.dispose(); } catch { /* ignore */ }
+  });
+
+  // 兜底：30 秒后强制结束
+  setTimeout(() => {
+    if (finished) return;
+    finished = true;
+    clearInterval(timer);
+    unsubOutput();
+    flushOutput('error');
+    try { terminal.dispose(); } catch { /* ignore */ }
+  }, 30000);
+}
+
+/**
  * 发送消息到 WebView
  */
 function postToWebView(message) {
@@ -117,30 +188,61 @@ function initLlmClient(config) {
 /**
  * 发送消息到 LLM 并获取建议
  */
-async function processMessage(text, context) {
+async function processMessage(text, context, options = {}) {
   if (isProcessing) return;
   isProcessing = true;
 
+  const { thinkingEnabled } = options || {};
   const msgId = generateId();
-  console.log('[LifeAiCode] 处理用户消息:', text.slice(0, 60));
+  console.log('[LifeAiCode] 处理用户消息:', text.slice(0, 60), 'thinkingEnabled:', thinkingEnabled);
 
   try {
-    // 1. 构建 LLM 提示词
+    // 1. 检查 LLM 客户端
+    if (!llmClient) {
+      throw new Error('LLM 客户端未初始化');
+    }
+
+    // 2. 根据思考模式开关切换系统提示词
+    if (thinkingEnabled) {
+      const basePrompt = llmClient._defaultSystemPrompt();
+      const thinkingInstruction = `\n## 思考模式\n在给出最终回答前，请先逐步分析问题并展示你的推理过程。\n请把推理过程包裹在 <reasoning>...</reasoning> 标签内，然后再输出最终答案。\n推理过程可以包括：读取了哪些文件、考虑了哪些方案、为什么选择该方案等。`;
+      llmClient.configure({ systemPrompt: `${basePrompt}${thinkingInstruction}` });
+    } else {
+      llmClient.configure({ systemPrompt: llmClient._defaultSystemPrompt() });
+    }
+
+    // 3. 构建 LLM 提示词
     const contextStr = contextBuilder.formatContextForPrompt(context);
     const userMessage = contextStr
       ? `## 用户问题\n${text}\n\n## 代码上下文\n${contextStr}`
       : text;
 
+    // 3.5 把 IDE 自动读取的文件以步骤形式展示出来
+    const readSteps = [];
+    if (context.activeFile) {
+      const rel = contextBuilder._getRelativePath(context.activeFile.filePath, context.workspaceRoot);
+      readSteps.push(`<step type="read" target="${rel}" status="done">读取</step>`);
+    }
+    if (context.relatedFiles && context.relatedFiles.length > 0) {
+      for (const f of context.relatedFiles) {
+        const rel = contextBuilder._getRelativePath(f.filePath, context.workspaceRoot);
+        readSteps.push(`<step type="read" target="${rel}" status="done">读取</step>`);
+      }
+    }
+    if (readSteps.length > 0) {
+      postToWebView({
+        type: 'chatResponse',
+        id: generateId(),
+        content: readSteps.join('\n'),
+        done: true,
+      });
+    }
+
     const messages = [
       { role: 'user', content: userMessage },
     ];
 
-    // 2. 检查 LLM 客户端
-    if (!llmClient) {
-      throw new Error('LLM 客户端未初始化');
-    }
-
-    // 3. 先发空消息让 WebView 显示 loading
+    // 4. 先发空消息让 WebView 显示 loading
     postToWebView({
       type: 'chatResponse',
       id: msgId,
@@ -148,7 +250,7 @@ async function processMessage(text, context) {
       done: false,
     });
 
-    // 4. 调用 LLM（先尝试流式，失败回退非流式）
+    // 5. 调用 LLM（先尝试流式，失败回退非流式）
     let fullResponse = '';
     try {
       // 避免多次对话后 token 监听器累积
@@ -171,7 +273,7 @@ async function processMessage(text, context) {
 
     console.log('[LifeAiCode] LLM 响应长度:', fullResponse.length, '字符');
 
-    // 5. 发送完整响应（如果为空，给出友好提示）
+    // 6. 发送完整响应（如果为空，给出友好提示）
     postToWebView({
       type: 'chatResponse',
       id: msgId,
@@ -179,7 +281,7 @@ async function processMessage(text, context) {
       done: true,
     });
 
-    // 6. 解析建议
+    // 7. 解析建议
     const suggestions = suggestionGenerator.parseSuggestions(fullResponse, context);
     if (suggestions.length > 0) {
       console.log('[LifeAiCode] 生成', suggestions.length, '个建议');
@@ -568,7 +670,7 @@ async function activate(context) {
       switch (message.command) {
         case 'sendMessage': {
           const ctx = message.context || await contextBuilder.buildContext();
-          await processMessage(message.text, ctx);
+          await processMessage(message.text, ctx, { thinkingEnabled: message.thinkingEnabled });
           break;
         }
         case 'explainCode': {
@@ -655,6 +757,11 @@ async function activate(context) {
           if (typeof process !== 'undefined' && process.send) {
             process.send({ jsonrpc: '2.0', method: 'lifeAiCode.toggleEditMode', params: {} });
           }
+          break;
+        }
+        case 'executeShell': {
+          const shellId = message.id || `shell-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+          executeShellCommand(shellId, message.shellCommand, message.cwd);
           break;
         }
         default:

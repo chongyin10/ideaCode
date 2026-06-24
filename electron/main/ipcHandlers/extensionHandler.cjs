@@ -29,6 +29,11 @@ function registerExtensionHandlers(extensionHostManager) {
       return { success: false, error: err.message };
     }
   });
+
+  // 接收渲染进程对 Extension Host 请求的响应
+  ipcMain.on(Channels.EXTENSION_HOST_RENDERER_RESPONSE, (_event, { id, result, error }) => {
+    extensionHostManager.handleRendererResponse(id, result, error);
+  });
 }
 
 module.exports = { registerExtensionHandlers };

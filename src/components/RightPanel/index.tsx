@@ -12,7 +12,7 @@ import {
 } from '../../store/slices/layoutSlice';
 import { notifyPanelResizeStart, notifyPanelResizeEnd } from '../../services/panelResizeNotifier';
 import { DockableContent, ExtensionViewActions } from '../DockableContent';
-import { HistoryPopover } from './HistoryPopover';
+import { HistoryPopover } from '../HistoryPopover';
 import './RightPanel.css';
 
 const DOCK_MIME = 'application/lifeai-dock-item';
@@ -275,7 +275,7 @@ const RightPanel = () => {
                   renderAction={(action) => {
                     if (action.command !== 'lifeAiCode.showHistory') return null;
                     return (
-                      <span className="right-panel__action-popover-anchor">
+                      <span className="extension-view__action-popover-anchor">
                         <button
                           ref={historyBtnRef}
                           className="extension-view__action-btn"
@@ -324,6 +324,14 @@ const RightPanel = () => {
           <div className="right-panel__placeholder">{t('rightPanel.placeholder', { name: '' })}</div>
         )}
       </div>
+      {/* 历史记录弹出层打开时，覆盖右侧面板内容区域，捕获内部（含 iframe）点击以关闭弹窗 */}
+      {historyOpen && (
+        <div
+          className="right-panel__content-overlay"
+          aria-hidden="true"
+          onMouseDown={() => setHistoryOpen(false)}
+        />
+      )}
     </div>
   );
 };

@@ -8,6 +8,8 @@ export interface ChatMessage {
   suggestions?: Suggestion[];
   streaming?: boolean;
   blocks?: ContentBlock[];
+  /** 占位消息：用户发送后到 AI 真正返回前的过渡态 */
+  placeholder?: boolean;
 }
 
 export type FileStatus = 'modified' | 'created' | 'deleted';
@@ -19,7 +21,7 @@ export type ContentBlock =
   | { type: 'text'; content: string }
   | { type: 'reasoning'; content: string }
   | { type: 'edit'; filePath: string; additions: number; deletions: number }
-  | { type: 'shell'; command: string; output?: string; status?: 'success' | 'error' }
+  | { type: 'shell'; command: string; output?: string; status?: 'running' | 'success' | 'error' }
   | { type: 'fileStatus'; filePath: string; status: FileStatus }
   | { type: 'step'; stepType: StepType; target?: string; params?: string; label?: string; status: StepStatus };
 
@@ -200,7 +202,7 @@ export function getConnectionStatusText(status?: LlmConfig['connectionStatus'], 
 /* ─── WebView 消息 ─── */
 
 export type WebViewRequest =
-  | { command: 'sendMessage'; text: string; context: CodeContext }
+  | { command: 'sendMessage'; text: string; context: CodeContext; thinkingEnabled?: boolean }
   | { command: 'acceptSuggestion'; suggestionId: string }
   | { command: 'rejectSuggestion'; suggestionId: string }
   | { command: 'previewDiff'; suggestionId: string }
@@ -211,7 +213,8 @@ export type WebViewRequest =
   | { command: 'testConnection'; config: LlmConfig }
   | { command: 'switchConfig'; configId: string }
   | { command: 'requestConfig' }
-  | { command: 'toggleEditMode' };
+  | { command: 'toggleEditMode' }
+  | { command: 'executeShell'; id: string; shellCommand: string; cwd?: string };
 
 export type ExtensionMessage =
   | { type: 'chatResponse'; id: string; content: string; done: boolean }
@@ -224,6 +227,7 @@ export type ExtensionMessage =
   | { type: 'newChat' }
   | { type: 'openConfig' }
   | { type: 'showHistory' }
+  | { type: 'shellUpdate'; id: string; shellCommand: string; output: string; status: 'running' | 'success' | 'error' }
   | { type: 'error'; message: string };
 
 /* ─── VSCode API 类型 ─── */

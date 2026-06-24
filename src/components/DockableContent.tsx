@@ -1,6 +1,8 @@
+import { useState, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Plus, History, Settings } from 'lucide-react';
 import { useAppSelector } from '../store/hooks';
+import { HistoryPopover } from './HistoryPopover';
 import { getPluginManager } from '../plugin/core';
 import ExplorerContent from './SidePanel/ExplorerContent';
 import SearchPanel from './SearchPanel';
@@ -21,6 +23,26 @@ const ACTION_ICONS: Record<string, JSX.Element> = {
   'lifeAiCode.showHistory': <History size={14} strokeWidth={1.5} />,
   'lifeAiCode.openConfig': <Settings size={14} strokeWidth={1.5} />,
 };
+
+function HistoryActionButton({ action }: { action: ExtensionViewAction }) {
+  const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  return (
+    <span className="extension-view__action-popover-anchor">
+      <button
+        ref={btnRef}
+        className="extension-view__action-btn"
+        title={action.tooltip || action.title || action.command}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="extension-view__action-icon">
+          {ACTION_ICONS[action.command] || action.icon || action.title}
+        </span>
+      </button>
+      <HistoryPopover open={open} onClose={() => setOpen(false)} anchorRef={btnRef} />
+    </span>
+  );
+}
 
 export function ExtensionViewActions({
   actions,
@@ -44,6 +66,12 @@ export function ExtensionViewActions({
       {actions.map((action, idx) => {
         const custom = renderAction?.(action, idx);
         if (custom) return <span key={`${action.command}-${idx}`}>{custom}</span>;
+
+        // 历史记录：默认弹出 HistoryPopover，不再转发命令
+        if (action.command === 'lifeAiCode.showHistory') {
+          return <HistoryActionButton key={`${action.command}-${idx}`} action={action} />;
+        }
+
         if (action.type === 'switch') {
           const readonly = !aiEditMode;
           return (

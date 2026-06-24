@@ -28,7 +28,12 @@ class CodeContextBuilder {
   async buildContext(options = {}) {
     const { selection, maxFiles = 5 } = options;
 
-    const activeEditor = await this.rpc.request('editor.getActive', {});
+    let activeEditor = null;
+    try {
+      activeEditor = await this.rpc.request('editor.getActive', {});
+    } catch {
+      // ignore
+    }
     const activeFile = activeEditor?.document
       ? {
           filePath: activeEditor.document.fileName,
@@ -38,17 +43,43 @@ class CodeContextBuilder {
         }
       : null;
 
+    // 无论是否有激活文件，都尝试获取工作区根目录和项目文件树
+    let workspaceRoot = '';
+    try {
+      const folders = await this.rpc.request('workspace.getFolders', {});
+      if (folders && folders.length > 0) {
+        workspaceRoot = folders[0].uri?.fsPath || '';
+      }
+    } catch {
+      // ignore
+    }
+
+    let fileTree = '';
+    if (workspaceRoot) {
+      try {
+        fileTree = this._getFileTree(workspaceRoot, 2, 80);
+      } catch {
+        // ignore
+      }
+    }
+
     if (!activeFile) {
       return {
         activeFile: null,
         relatedFiles: [],
-        workspaceRoot: '',
+        workspaceRoot,
+        fileTree,
         diagnostics: [],
         selection: selection || '',
       };
     }
 
-    const openedFiles = await this.rpc.request('editor.getVisible', {});
+    let openedFiles = [];
+    try {
+      openedFiles = await this.rpc.request('editor.getVisible', {});
+    } catch {
+      // ignore
+    }
     const relatedFiles = [];
     if (openedFiles && Array.isArray(openedFiles)) {
       for (const file of openedFiles) {
@@ -96,25 +127,6 @@ class CodeContextBuilder {
       }
     } catch {
       // LSP 可能尚未就绪
-    }
-
-    let workspaceRoot = '';
-    try {
-      const folders = await this.rpc.request('workspace.getFolders', {});
-      if (folders && folders.length > 0) {
-        workspaceRoot = folders[0].uri?.fsPath || '';
-      }
-    } catch {
-      // ignore
-    }
-
-    let fileTree = '';
-    if (workspaceRoot) {
-      try {
-        fileTree = this._getFileTree(workspaceRoot, 2, 80);
-      } catch {
-        // ignore
-      }
     }
 
     return {

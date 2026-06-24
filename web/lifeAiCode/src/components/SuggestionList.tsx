@@ -20,6 +20,7 @@ export function SuggestionList({ suggestions, onAccept, onReject, onPreviewDiff 
           onAccept={onAccept}
           onReject={onReject}
           onPreviewDiff={onPreviewDiff}
+          loading={s.status === 'pending'}
         />
       ))}
     </div>

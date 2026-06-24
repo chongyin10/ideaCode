@@ -160,13 +160,20 @@ const SourceControlPanel = () => {
     let watchedDir: string | null = null;
 
     (async () => {
-      const repoRoot = await gitService.getRepoRoot(rootPath);
-      if (!mounted || !repoRoot) return;
-      const gitDir = `${repoRoot.replace(/\/$/, '')}/.git`;
-      watchedDir = gitDir;
-      const result = await window.electronAPI!.fs.watch(gitDir);
-      if (!mounted && !result.alreadyWatching) {
-        window.electronAPI?.fs?.unwatch(gitDir).catch(() => {});
+      let repoRoot: string | null = null;
+      let gitDir: string | null = null;
+      try {
+        repoRoot = await gitService.getRepoRoot(rootPath);
+        if (!mounted || !repoRoot || typeof repoRoot !== 'string') return;
+        gitDir = `${repoRoot.replace(/\/$/, '')}/.git`;
+        if (!gitDir) return;
+        watchedDir = gitDir;
+        const result = await window.electronAPI?.fs?.watch(gitDir);
+        if (!mounted && result && !result.alreadyWatching) {
+          window.electronAPI?.fs?.unwatch(gitDir).catch(() => {});
+        }
+      } catch (err) {
+        console.warn('[SourceControlPanel] 监听 .git 目录失败:', err, { rootPath, repoRoot, gitDir });
       }
     })();
 

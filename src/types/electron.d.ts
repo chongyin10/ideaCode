@@ -77,6 +77,10 @@ export interface ExtensionMessage {
   params: unknown;
 }
 
+export interface ExtensionRendererRequest extends ExtensionMessage {
+  id: number;
+}
+
 export interface RecentProject {
   path: string;
   name: string;
@@ -195,6 +199,8 @@ export interface ElectronAPI {
     install: (extPath: string) => Promise<{ success: boolean; stdout?: string; stderr?: string; code?: number; error?: string }>;
     uninstall: (extPath: string) => Promise<{ success: boolean; error?: string }>;
     onMessage: (callback: (data: ExtensionMessage) => void) => () => void;
+    onRequest: (callback: (data: ExtensionRendererRequest) => void) => () => void;
+    sendResponse: (id: number, payload: { result?: unknown; error?: string }) => void;
   };
 
   /** 应用生命周期 */

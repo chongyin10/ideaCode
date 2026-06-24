@@ -37,6 +37,8 @@ const Channels = {
   EXTENSION_HOST_MESSAGE: 'extensionHost:message',
   EXTENSION_INSTALL: 'extension:install',
   EXTENSION_UNINSTALL: 'extension:uninstall',
+  EXTENSION_HOST_REQUEST_RENDERER: 'extensionHost:requestRenderer',
+  EXTENSION_HOST_RENDERER_RESPONSE: 'extensionHost:rendererResponse',
   APP_QUIT: 'app:quit',
   APP_RELAUNCH: 'app:relaunch',
   MENU_OPEN_FOLDER: 'menu:open-folder',
@@ -189,6 +191,8 @@ const electronAPI = {
     install: (extPath) => ipcRenderer.invoke(Channels.EXTENSION_INSTALL, extPath),
     uninstall: (extPath) => ipcRenderer.invoke(Channels.EXTENSION_UNINSTALL, extPath),
     onMessage: (callback) => onChannel(Channels.EXTENSION_MESSAGE, callback),
+    onRequest: (callback) => onChannel(Channels.EXTENSION_HOST_REQUEST_RENDERER, callback),
+    sendResponse: (id, payload) => ipcRenderer.send(Channels.EXTENSION_HOST_RENDERER_RESPONSE, { id, ...(payload || {}) }),
   },
 
   app: {

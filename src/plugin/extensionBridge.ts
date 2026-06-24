@@ -19,8 +19,9 @@ import path from 'path';
 import type { Store } from '@reduxjs/toolkit';
 import type { RootState } from '../store';
 import { openFile, openVirtualFile, addWorkspaceFolder, removeWorkspaceFolder, setFileContent, markFileSaved, toggleAiEditMode } from '../store/slices/workspaceSlice';
-import { addPanelToOrder, removePanelFromOrder, registerDockableItem, unregisterDockableItem } from '../store/slices/layoutSlice';
+import { addPanelToOrder, removePanelFromOrder, registerDockableItem, unregisterDockableItem, switchPanel } from '../store/slices/layoutSlice';
 import { readFile as fsReadFile, writeFile as fsWriteFile, isPath } from '../services/fileService';
+import { getMonacoEditorActions } from '../services/monacoEditorBridge';
 import { getPluginManager } from './core';
 import type { PluginManifest } from './types';
 import { terminalSDK, type TerminalCreateOptions } from '../services/terminalSDK';
@@ -401,7 +402,6 @@ export class ExtensionBridge {
     this.rpcHandlers.set('webview.reveal', (params) => {
       const { id } = params as { id: string };
       // 切换面板显示
-      const { switchPanel } = require('../store/slices/layoutSlice');
       this.store.dispatch(switchPanel(id));
       return { revealed: true };
     });
@@ -571,7 +571,6 @@ export class ExtensionBridge {
       }
 
       try {
-        const { getMonacoEditorActions } = require('../services/monacoEditorBridge');
         const actions = getMonacoEditorActions();
 
         if (!actions || !actions.getEditor()) {
@@ -716,13 +715,19 @@ export class ExtensionBridge {
   /* ─── IPC 监听 ─── */
 
   private _setupIpcListeners(): void {
-    if (!window.electronAPI?.extension?.onMessage) return;
+    if (!window.electronAPI?.extension) return;
 
-    const unsub = window.electronAPI.extension.onMessage((msg) => {
+    const unsubMessage = window.electronAPI.extension.onMessage((msg) => {
       this._handleHostMessage(msg);
     });
+    this.unsubscribers.push(unsubMessage);
 
-    this.unsubscribers.push(unsub);
+    if (window.electronAPI.extension.onRequest) {
+      const unsubRequest = window.electronAPI.extension.onRequest((msg) => {
+        this._handleRendererRequest(msg);
+      });
+      this.unsubscribers.push(unsubRequest);
+    }
   }
 
   private async _handleHostMessage(msg: { method: string; params?: unknown; id?: number }): Promise<void> {
@@ -742,6 +747,27 @@ export class ExtensionBridge {
       await handler(msg.params || {});
     } catch (err) {
       console.error(`[ExtensionBridge] RPC 处理失败 ${msg.method}:`, err);
+    }
+  }
+
+  /**
+   * 处理主进程转发来的 Extension Host 请求（需要响应）
+   */
+  private async _handleRendererRequest(msg: { id: number; method: string; params?: unknown }): Promise<void> {
+    const { id, method } = msg;
+    const handler = this.rpcHandlers.get(method);
+    if (!handler) {
+      window.electronAPI?.extension?.sendResponse(id, { error: `Method not found: ${method}` });
+      return;
+    }
+
+    try {
+      const result = await handler(msg.params || {});
+      window.electronAPI?.extension?.sendResponse(id, { result });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[ExtensionBridge] 渲染进程请求处理失败 ${method}:`, err);
+      window.electronAPI?.extension?.sendResponse(id, { error: message });
     }
   }
 

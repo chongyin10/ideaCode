@@ -44,6 +44,8 @@ const Channels = {
   EXTENSION_HOST_RPC: 'extensionHost:rpc',
   EXTENSION_HOST_MESSAGE: 'extensionHost:message',
   EXTENSION_MESSAGE: 'extensionHost:message',
+  EXTENSION_HOST_REQUEST_RENDERER: 'extensionHost:requestRenderer',
+  EXTENSION_HOST_RENDERER_RESPONSE: 'extensionHost:rendererResponse',
   EXTENSION_INSTALL: 'extension:install',
   EXTENSION_UNINSTALL: 'extension:uninstall',
 
