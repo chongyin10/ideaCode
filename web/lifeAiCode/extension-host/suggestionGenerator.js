@@ -101,12 +101,36 @@ class SuggestionGenerator {
   }
 
   /**
+   * LLM 自由发挥的 type 字符串 → 合法枚举的归一化映射
+   */
+  _normalizeType(rawType) {
+    const t = String(rawType || '').toLowerCase().trim();
+    // 直接命中 5 个合法值之一
+    if (['refactor', 'bugfix', 'feature', 'optimization', 'explanation'].includes(t)) {
+      return t;
+    }
+    // 关键字匹配（兼容中英文）
+    const map = [
+      { keys: ['refactor', '重构', 'cleanup', 'clean', 'tidy', '清理', '整理', 'clean up', 'clean-up'], value: 'refactor' },
+      { keys: ['bugfix', 'bug', 'fix', 'repair', 'patch', '修复', '改正', '修 bug', '修bug'], value: 'bugfix' },
+      { keys: ['feature', 'feat', 'add', 'new', 'implement', '功能', '新增', '实现', '添加'], value: 'feature' },
+      { keys: ['optimization', 'optimize', 'perf', 'performance', 'speed', 'fast', '优化', '性能', '提速', '加速'], value: 'optimization' },
+      { keys: ['explanation', 'explain', 'doc', 'comment', 'describe', '解释', '说明', '文档', '注释', '备注'], value: 'explanation' },
+    ];
+    for (const { keys, value } of map) {
+      if (keys.some((k) => t.includes(k))) return value;
+    }
+    return 'refactor'; // 默认回退
+  }
+
+  /**
    * 从代码块构建结构化建议
    */
   _buildSuggestion(block, context) {
     const lines = block.split('\n');
     const changes = [];
     let title = '代码建议';
+    let rawType = '';
     let type = 'refactor';
     let description = '';
     let currentFile = context?.activeFile?.filePath || '';
@@ -124,7 +148,8 @@ class SuggestionGenerator {
 
       const typeMatch = line.match(/\/\/\s*类型:\s*(.+)/);
       if (typeMatch) {
-        type = typeMatch[1].trim().toLowerCase();
+        rawType = typeMatch[1].trim();
+        type = this._normalizeType(rawType);
         continue;
       }
 

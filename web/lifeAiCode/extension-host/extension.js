@@ -188,13 +188,19 @@ function initLlmClient(config) {
 /**
  * 发送消息到 LLM 并获取建议
  */
+/** 维护最近一次请求的上下文，用于 continue 继续生成 */
+let lastRequestContext = null;
+
 async function processMessage(text, context, options = {}) {
   if (isProcessing) return;
   isProcessing = true;
 
-  const { thinkingEnabled } = options || {};
-  const msgId = generateId();
-  console.log('[LifeAiCode] 处理用户消息:', text.slice(0, 60), 'thinkingEnabled:', thinkingEnabled);
+  const { thinkingEnabled, continueFromMessageId, continueFromContent, continueFromText } = options || {};
+  const msgId = continueFromMessageId || generateId();
+  console.log('[LifeAiCode] 处理用户消息:', text.slice(0, 60), 'thinkingEnabled:', thinkingEnabled, 'continue:', !!continueFromMessageId);
+
+  // 记录上下文以便 continue 使用
+  lastRequestContext = { text, context, thinkingEnabled };
 
   try {
     // 1. 检查 LLM 客户端
@@ -211,53 +217,56 @@ async function processMessage(text, context, options = {}) {
       llmClient.configure({ systemPrompt: llmClient._defaultSystemPrompt() });
     }
 
-    // 3. 构建 LLM 提示词
-    const contextStr = contextBuilder.formatContextForPrompt(context);
-    const userMessage = contextStr
-      ? `## 用户问题\n${text}\n\n## 代码上下文\n${contextStr}`
-      : text;
+    // 3. 构建消息数组
+    let messages;
+    if (continueFromContent && continueFromText) {
+      // Continue 模式：把已截断的内容作为 assistant 消息，把"请继续"作为 user
+      messages = [
+        { role: 'user', content: continueFromText },
+        { role: 'assistant', content: continueFromContent + '\n\n[回答被截断，请从上一个未完成的句子继续，不要重复已写内容]' },
+        { role: 'user', content: '请从你上次中断的地方继续完成回答。不要重复已写过的内容，直接接着写。' },
+      ];
+    } else {
+      const contextStr = contextBuilder.formatContextForPrompt(context);
+      const userMessage = contextStr
+        ? `## 用户问题\n${text}\n\n## 代码上下文\n${contextStr}`
+        : text;
 
-    // 3.5 把 IDE 自动读取的文件以步骤形式展示出来
-    const readSteps = [];
-    if (context.activeFile) {
-      const rel = contextBuilder._getRelativePath(context.activeFile.filePath, context.workspaceRoot);
-      readSteps.push(`<step type="read" target="${rel}" status="done">读取</step>`);
-    }
-    if (context.relatedFiles && context.relatedFiles.length > 0) {
-      for (const f of context.relatedFiles) {
-        const rel = contextBuilder._getRelativePath(f.filePath, context.workspaceRoot);
+      // 把 IDE 自动读取的文件以步骤形式展示出来
+      const readSteps = [];
+      if (context.activeFile) {
+        const rel = contextBuilder._getRelativePath(context.activeFile.filePath, context.workspaceRoot);
         readSteps.push(`<step type="read" target="${rel}" status="done">读取</step>`);
       }
+      if (context.relatedFiles && context.relatedFiles.length > 0) {
+        for (const f of context.relatedFiles) {
+          const rel = contextBuilder._getRelativePath(f.filePath, context.workspaceRoot);
+          readSteps.push(`<step type="read" target="${rel}" status="done">读取</step>`);
+        }
+      }
+      if (readSteps.length > 0) {
+        postToWebView({
+          type: 'chatResponse',
+          id: generateId(),
+          content: readSteps.join('\n'),
+          done: true,
+        });
+      }
+      messages = [{ role: 'user', content: userMessage }];
     }
-    if (readSteps.length > 0) {
-      postToWebView({
-        type: 'chatResponse',
-        id: generateId(),
-        content: readSteps.join('\n'),
-        done: true,
-      });
-    }
 
-    const messages = [
-      { role: 'user', content: userMessage },
-    ];
-
-    // 4. 先发空消息让 WebView 显示 loading
-    postToWebView({
-      type: 'chatResponse',
-      id: msgId,
-      content: '',
-      done: false,
-    });
-
-    // 5. 调用 LLM（先尝试流式，失败回退非流式）
+    // 4. 调用 LLM（先尝试流式，失败回退非流式）
     let fullResponse = '';
     try {
       // 避免多次对话后 token 监听器累积
       llmClient.removeAllListeners('token');
       llmClient.on('token', (token) => {
-        fullResponse += token;
-        // 实时推送流式内容
+        // continue 模式下，token 是续写部分，需要追加到原 content 上
+        if (continueFromContent) {
+          fullResponse = continueFromContent + token;
+        } else {
+          fullResponse += token;
+        }
         postToWebView({
           type: 'chatResponse',
           id: msgId,
@@ -268,7 +277,8 @@ async function processMessage(text, context, options = {}) {
       fullResponse = await llmClient.chatStream(messages);
     } catch (streamErr) {
       console.warn('[LifeAiCode] 流式请求失败, 回退到非流式:', streamErr.message);
-      fullResponse = await llmClient.chat(messages);
+      const resp = await llmClient.chat(messages);
+      fullResponse = continueFromContent ? continueFromContent + resp : resp;
     }
 
     console.log('[LifeAiCode] LLM 响应长度:', fullResponse.length, '字符');
@@ -281,22 +291,24 @@ async function processMessage(text, context, options = {}) {
       done: true,
     });
 
-    // 7. 解析建议
-    const suggestions = suggestionGenerator.parseSuggestions(fullResponse, context);
-    if (suggestions.length > 0) {
-      console.log('[LifeAiCode] 生成', suggestions.length, '个建议');
-      postToWebView({
-        type: 'suggestions',
-        suggestions: suggestions.map((s) => ({
-          id: s.id,
-          type: s.type,
-          title: s.title,
-          description: s.description,
-          changes: s.changes,
-          status: s.status,
-          createdAt: s.createdAt,
-        })),
-      });
+    // 7. 解析建议（continue 模式不重复解析）
+    if (!continueFromMessageId) {
+      const suggestions = suggestionGenerator.parseSuggestions(fullResponse, context);
+      if (suggestions.length > 0) {
+        console.log('[LifeAiCode] 生成', suggestions.length, '个建议');
+        postToWebView({
+          type: 'suggestions',
+          suggestions: suggestions.map((s) => ({
+            id: s.id,
+            type: s.type,
+            title: s.title,
+            description: s.description,
+            changes: s.changes,
+            status: s.status,
+            createdAt: s.createdAt,
+          })),
+        });
+      }
     }
   } catch (err) {
     console.error('[LifeAiCode] LLM 请求失败:', err.message);
@@ -402,7 +414,14 @@ async function acceptAndApplySuggestion(suggestionId) {
       }
       suggestionGenerator.markApplied(suggestionId);
       postToWebView({ type: 'suggestionStatus', suggestionId, status: 'applied' });
-      vscode.window.showInformationMessage('LifeAiCode: 建议已应用');
+      // 不再弹窗；改为通过 webview notice 在聊天位置提示
+      const applied = suggestionGenerator.getSuggestion(suggestionId);
+      postToWebView({
+        type: 'notice',
+        level: 'success',
+        message: `已应用建议：${applied?.title || suggestionId}`,
+        suggestionId,
+      });
     } catch (err) {
       console.error('[LifeAiCode] 应用建议失败:', err.message);
       vscode.window.showErrorMessage(`LifeAiCode: 应用建议失败 - ${err.message}`);
@@ -671,6 +690,27 @@ async function activate(context) {
         case 'sendMessage': {
           const ctx = message.context || await contextBuilder.buildContext();
           await processMessage(message.text, ctx, { thinkingEnabled: message.thinkingEnabled });
+          break;
+        }
+        case 'continueMessage': {
+          // 继续被截断的回答
+          if (!lastRequestContext) {
+            postToWebView({ type: 'error', message: '无法继续：缺少原始上下文' });
+            break;
+          }
+          // 找到对应的 assistant 消息内容（最近一条 incomplete 的）
+          // 这里依赖 webview 传过来的 continueFromContent（被截断的最终内容）
+          const continueFromContent = message.continueFromContent || '';
+          await processMessage(
+            lastRequestContext.text,
+            lastRequestContext.context,
+            {
+              thinkingEnabled: lastRequestContext.thinkingEnabled,
+              continueFromMessageId: message.messageId,
+              continueFromContent,
+              continueFromText: lastRequestContext.text,
+            }
+          );
           break;
         }
         case 'explainCode': {

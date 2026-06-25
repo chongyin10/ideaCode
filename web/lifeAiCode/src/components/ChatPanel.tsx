@@ -3,7 +3,43 @@ import type { ChatMessage, Suggestion, CodeContext, WebViewRequest, ExtensionMes
 import { PROVIDER_META, getConnectionStatusColor } from '../types';
 import { SuggestionList } from './SuggestionList';
 import { ContentBlocks } from './ContentBlocks';
-import { ShieldCheck, Brain, ArrowDown, User, Sparkles, Paperclip, Send, MessageSquare, Loader2 } from 'lucide-react';
+import { ShieldCheck, Brain, ArrowDown, User, Sparkles, Paperclip, Send, MessageSquare, Loader2, Check, AlertTriangle, RefreshCw } from 'lucide-react';
+
+/** 预处理：检测并补齐未闭合的 markdown 结构（供 chatResponse 处理时使用） */
+function preprocessMarkdown(content: string): { processed: string; incomplete: boolean; reasons: string[] } {
+  let result = content;
+  const reasons: string[] = [];
+
+  const fenceMatches = content.match(/```/g);
+  if (fenceMatches && fenceMatches.length % 2 !== 0) {
+    result += '\n\n```';
+    reasons.push('代码块未闭合');
+  }
+
+  const openTags: Record<string, number> = {};
+  const tagRegex = /<\/?(code|strong|em|del|a|b|i|u|span)\b[^>]*>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = tagRegex.exec(result)) !== null) {
+    const full = m[0];
+    const isClose = full.startsWith('</');
+    const tag = m[1].toLowerCase();
+    if (isClose) {
+      if ((openTags[tag] || 0) > 0) openTags[tag]--;
+    } else if (!full.endsWith('/>')) {
+      openTags[tag] = (openTags[tag] || 0) + 1;
+    }
+  }
+  let suffix = '';
+  for (const [tag, count] of Object.entries(openTags)) {
+    if (count > 0) {
+      suffix += `</${tag}>`.repeat(count);
+      reasons.push(`${tag} 标签未闭合`);
+    }
+  }
+  if (suffix) result += suffix;
+
+  return { processed: result.trimEnd(), incomplete: reasons.length > 0, reasons };
+}
 
 function getVsCodeApi() {
   if (typeof window !== 'undefined' && window.acquireVsCodeApi) {
@@ -84,6 +120,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
   const [history, setHistory] = useState<ChatHistoryItem[]>(loadHistory);
   const [showHistory, setShowHistory] = useState(false);
   const [shellOutputs, setShellOutputs] = useState<Record<string, { output: string; status: 'running' | 'success' | 'error' }>>({});
+  const [notice, setNotice] = useState<{ level: 'info' | 'success' | 'warning' | 'error'; message: string; id: number } | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -142,19 +179,36 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
 
       switch (msg.type) {
         case 'chatResponse': {
-          const finalContent = msg.done ? finalizeSteps(msg.content) : msg.content;
+          let finalContent = msg.done ? finalizeSteps(msg.content) : msg.content;
+          let incomplete = false;
+          let incompleteReasons: string[] = [];
+          if (msg.done) {
+            const processed = preprocessMarkdown(finalContent);
+            finalContent = processed.processed;
+            incomplete = processed.incomplete;
+            incompleteReasons = processed.reasons;
+          }
           setMessages((prev) => {
             // AI 真正开始返回时，移除所有占位消息
             const noPlaceholder = prev.filter((m) => !m.placeholder);
             const existing = noPlaceholder.find((m) => m.id === msg.id);
             if (existing) {
               return noPlaceholder.map((m) =>
-                m.id === msg.id ? { ...m, content: finalContent, streaming: !msg.done } : m
+                m.id === msg.id
+                  ? {
+                      ...m,
+                      content: finalContent,
+                      streaming: !msg.done,
+                      incomplete: msg.done ? incomplete : m.incomplete,
+                      incompleteReasons: msg.done ? incompleteReasons : m.incompleteReasons,
+                    }
+                  : m
               );
             }
             return [...noPlaceholder, {
               id: msg.id, role: 'assistant', content: finalContent,
               timestamp: Date.now(), streaming: !msg.done,
+              incomplete, incompleteReasons,
             }];
           });
           setIsProcessing(!msg.done);
@@ -262,6 +316,15 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
           }));
           break;
         }
+        case 'notice': {
+          // 显示轻量级通知，3 秒后自动消失
+          const id = Date.now();
+          setNotice({ level: msg.level, message: msg.message, id });
+          setTimeout(() => {
+            setNotice((cur) => (cur && cur.id === id ? null : cur));
+          }, 3000);
+          break;
+        }
       }
     };
 
@@ -305,6 +368,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
       content: '',
       timestamp: Date.now(),
       placeholder: true,
+      streaming: true, // 让它也能被流式过滤器识别
     };
     setMessages((prev) => [...prev, userMsg, placeholderMsg]);
     setInput('');
@@ -374,9 +438,35 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
     }
   };
 
+  /** 让 LLM 继续完成被截断的回答 */
+  const handleContinue = (messageId: string) => {
+    if (!vscode) return;
+    const target = messages.find((m) => m.id === messageId);
+    if (!target) return;
+    // 清除该消息的 incomplete 状态
+    setMessages((prev) => prev.map((m) =>
+      m.id === messageId ? { ...m, incomplete: false, incompleteReasons: undefined, streaming: true } : m
+    ));
+    vscode.postMessage({
+      command: 'continueMessage',
+      messageId,
+      continueFromContent: target.content,
+    } as WebViewRequest);
+    setIsProcessing(true);
+  };
+
   return (
     <div className={`lifeAiCode-panel ${isPopup ? 'lifeAiCode-panel--popup' : ''}`}>
       <div className="messages-container" ref={messagesContainerRef}>
+        {notice && (
+          <div className={`chat-notice chat-notice--${notice.level}`}>
+            {notice.level === 'success' && <Check size={13} strokeWidth={2.5} />}
+            {notice.level === 'info' && <Sparkles size={13} strokeWidth={2} />}
+            {notice.level === 'warning' && <ShieldCheck size={13} strokeWidth={2} />}
+            {notice.level === 'error' && <ShieldCheck size={13} strokeWidth={2} />}
+            <span>{notice.message}</span>
+          </div>
+        )}
         {messages.length === 0 ? (
           <div className="empty-state">
             <div className="empty-state__logo">
@@ -425,9 +515,14 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
           </div>
         ) : (
           messages.map((msg) => {
-            // 占位消息：渲染独立的"准备中"提示
+            // 占位消息：渲染独立的"准备中"提示（必须在 streaming 过滤之前判断）
             if (msg.placeholder) {
               return <PreparingPlaceholder key={msg.id} />;
+            }
+            // 跳过内容为空且仍在流式传输的 assistant 消息，避免显示空白卡片
+            // （真实 chatResponse 第一帧到达但内容仍空时短暂出现）
+            if (msg.role === 'assistant' && !msg.content.trim() && msg.streaming) {
+              return null;
             }
             return (
             <div key={msg.id} className={`message-row message-row--${msg.role}`}>
@@ -470,6 +565,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
                     modelLabel={msg.role === 'assistant' ? modelLabel : undefined}
                     onCopy={msg.role === 'assistant' ? (text) => navigator.clipboard.writeText(text).catch(() => {}) : undefined}
                     onRegenerate={msg.role === 'assistant' && !msg.streaming ? handleRegenerate : undefined}
+                    onContinue={msg.role === 'assistant' && msg.incomplete ? () => handleContinue(msg.id) : undefined}
                     onExecuteShell={(id, shellCommand) => {
                       vscode?.postMessage({ command: 'executeShell', id, shellCommand, cwd: context?.workspaceRoot || '' } as WebViewRequest);
                     }}
@@ -612,21 +708,14 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
 function PreparingPlaceholder() {
   return (
     <div className="message-row message-row--assistant">
-      <div className="message-inner">
-        <div className="message-avatar message-avatar--assistant preparing-avatar">
-          <Sparkles size={16} strokeWidth={2} />
-        </div>
-        <div className="message-body">
-          <div className="preparing-placeholder">
-            <span className="preparing-placeholder__icon">
-              <Loader2 size={13} strokeWidth={2.4} />
-            </span>
-            <span className="preparing-placeholder__text">正在准备回复</span>
-            <span className="preparing-placeholder__dots">
-              <span /><span /><span />
-            </span>
-          </div>
-        </div>
+      <div className="preparing-placeholder">
+        <span className="preparing-placeholder__icon">
+          <Loader2 size={14} strokeWidth={2.4} />
+        </span>
+        <span className="preparing-placeholder__text">正在准备回复</span>
+        <span className="preparing-placeholder__dots">
+          <span /><span /><span />
+        </span>
       </div>
     </div>
   );

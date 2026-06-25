@@ -4,7 +4,7 @@
   "description": "AI 代码辅助工具 — 只读分析，提供智能建议，不直接修改代码",
   "version": "1.0.0",
   "publisher": "ideacode",
-  "main": "extension.cjs",
+  "main": "extension.js",
   "activationEvents": [
     "onStartupFinished"
   ],

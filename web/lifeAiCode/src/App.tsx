@@ -47,6 +47,11 @@ function App() {
       return;
     }
     vscode.postMessage({ command: 'requestConfig' });
+    // 3 秒兜底：Extension Host 未响应时强制进入主界面，避免黑屏
+    const timeout = setTimeout(() => {
+      setConfigReady((prev) => prev ? prev : true);
+    }, 3000);
+    return () => clearTimeout(timeout);
   }, [vscode]);
 
   const activeConfig = configs.find((c) => c.id === activeConfigId) || configs[0] || null;

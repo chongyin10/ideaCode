@@ -10,6 +10,10 @@ export interface ChatMessage {
   blocks?: ContentBlock[];
   /** 占位消息：用户发送后到 AI 真正返回前的过渡态 */
   placeholder?: boolean;
+  /** LLM 回复被检测到不完整（未闭合 markdown 结构），用户可点击「继续」 */
+  incomplete?: boolean;
+  /** 检测到的截断原因（用于 UI 显示） */
+  incompleteReasons?: string[];
 }
 
 export type FileStatus = 'modified' | 'created' | 'deleted';
@@ -70,7 +74,7 @@ export interface DiagnosticInfo {
 
 /* ─── 厂商 / Provider 配置 ─── */
 
-export type ProviderType = 'openai' | 'anthropic' | 'deepseek' | 'glm' | 'qwen' | 'ollama' | 'custom';
+export type ProviderType = 'openai' | 'anthropic' | 'deepseek' | 'glm' | 'qwen' | 'kimi' | 'MiniMax' | 'doubao' | 'ollama' | 'custom';
 
 export const PROVIDER_META: Record<ProviderType, {
   label: string;
@@ -115,9 +119,9 @@ export const PROVIDER_META: Record<ProviderType, {
   glm: {
     label: 'GLM (智谱)',
     icon: '🔮',
-    defaultModel: 'glm-5.2',
+    defaultModel: 'glm-4.6',
     baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
-    models: ['glm-5.2', 'glm-5.1', 'glm-5', 'glm-4.5', 'glm-4-plus', 'glm-4-air', 'glm-4-flash'],
+    models: ['glm-4.6', 'glm-4.5', 'glm-4-plus', 'glm-4-air', 'glm-4-flash', 'glm-4-long'],
     docsUrl: 'https://bigmodel.cn/usercenter/proj-mgmt/apikeys',
     placeholder: 'API Key',
     color: '#1a7f8d',
@@ -135,12 +139,42 @@ export const PROVIDER_META: Record<ProviderType, {
   deepseek: {
     label: 'DeepSeek',
     icon: '🔍',
-    defaultModel: 'deepseek-v4-flash',
+    defaultModel: 'deepseek-chat',
     baseUrl: 'https://api.deepseek.com',
-    models: ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-chat', 'deepseek-reasoner'],
+    models: ['deepseek-chat', 'deepseek-reasoner', 'deepseek-coder'],
     docsUrl: 'https://platform.deepseek.com/api_keys',
     placeholder: 'sk-...',
     color: '#4f6bf5',
+  },
+  kimi: {
+    label: 'KIMI (月之暗面)',
+    icon: '🌙',
+    defaultModel: 'moonshot-v1-32k',
+    baseUrl: 'https://api.moonshot.cn/v1',
+    models: ['moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k', 'moonshot-v1-auto'],
+    docsUrl: 'https://platform.moonshot.cn/docs',
+    placeholder: 'sk-...',
+    color: '#1a1a2e',
+  },
+  MiniMax: {
+    label: 'MiniMax',
+    icon: '🐙',
+    defaultModel: 'MiniMax-Text-01',
+    baseUrl: 'https://api.MiniMax.chat/v1',
+    models: ['MiniMax-Text-01', 'MiniMax-Text-01-32K', 'MiniMax-Text-01-128K', 'abab6.5s-chat', 'abab6.5-chat'],
+    docsUrl: 'https://api.MiniMax.chat/document',
+    placeholder: 'API Key',
+    color: '#6366f1',
+  },
+  doubao: {
+    label: '豆包 (字节跳动)',
+    icon: '🫘',
+    defaultModel: 'doubao-pro-32k',
+    baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+    models: ['doubao-lite-4k', 'doubao-lite-16k', 'doubao-lite-32k', 'doubao-lite-128k', 'doubao-pro-4k', 'doubao-pro-32k', 'doubao-pro-128k'],
+    docsUrl: 'https://www.volcengine.com/docs/82379/1542112',
+    placeholder: 'API Key',
+    color: '#f97316',
   },
   custom: {
     label: 'Custom',
@@ -203,6 +237,7 @@ export function getConnectionStatusText(status?: LlmConfig['connectionStatus'], 
 
 export type WebViewRequest =
   | { command: 'sendMessage'; text: string; context: CodeContext; thinkingEnabled?: boolean }
+  | { command: 'continueMessage'; messageId: string; continueFromContent: string }
   | { command: 'acceptSuggestion'; suggestionId: string }
   | { command: 'rejectSuggestion'; suggestionId: string }
   | { command: 'previewDiff'; suggestionId: string }
@@ -228,6 +263,7 @@ export type ExtensionMessage =
   | { type: 'openConfig' }
   | { type: 'showHistory' }
   | { type: 'shellUpdate'; id: string; shellCommand: string; output: string; status: 'running' | 'success' | 'error' }
+  | { type: 'notice'; level: 'info' | 'success' | 'warning' | 'error'; message: string; suggestionId?: string }
   | { type: 'error'; message: string };
 
 /* ─── VSCode API 类型 ─── */

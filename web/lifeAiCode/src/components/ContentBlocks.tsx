@@ -3,6 +3,7 @@ import {
   Brain, Bot, Pencil, Terminal, FileText, Search,
   ChevronDown, Copy, Check, Loader2,
   Sparkles, GitBranch,
+  AlertTriangle, RefreshCw,
 } from 'lucide-react';
 import type { ContentBlock as ContentBlockType, FileStatus, StepType, StepStatus } from '../types';
 import { MarkdownContent } from './MarkdownContent';
@@ -135,6 +136,9 @@ interface ContentBlocksProps {
   onOptionClick?: (text: string) => void;
   onCopy?: (text: string) => void;
   onRegenerate?: () => void;
+  onContinue?: () => void;
+  incomplete?: boolean;
+  incompleteReasons?: string[];
   completed?: boolean;
   providerLabel?: string;
   modelLabel?: string;
@@ -148,6 +152,9 @@ export function ContentBlocks({
   onOptionClick,
   onCopy,
   onRegenerate,
+  onContinue,
+  incomplete,
+  incompleteReasons,
   completed,
   providerLabel,
   modelLabel,
@@ -193,8 +200,11 @@ export function ContentBlocks({
       providerLabel={providerLabel}
       modelLabel={modelLabel}
       onCopy={onCopy ? () => onCopy(content) : undefined}
-      onRegenerate={onRegenerate}
-      showActions={completed}
+      onRegenerate={completed ? onRegenerate : undefined}
+      onContinue={onContinue}
+      incomplete={incomplete}
+      incompleteReasons={incompleteReasons}
+      showActions={completed && !incomplete}
     >
       {blocks.map((block, idx) => {
         const isLastBlock = idx === blocks.length - 1;
@@ -227,6 +237,9 @@ interface MessageCardProps {
   showActions?: boolean;
   onCopy?: () => void;
   onRegenerate?: () => void;
+  onContinue?: () => void;
+  incomplete?: boolean;
+  incompleteReasons?: string[];
   defaultCollapsed?: boolean;
 }
 
@@ -234,7 +247,8 @@ function MessageCard({
   title, status, children,
   providerLabel, modelLabel,
   showActions = false,
-  onCopy, onRegenerate,
+  onCopy, onRegenerate, onContinue,
+  incomplete, incompleteReasons,
   defaultCollapsed = false,
 }: MessageCardProps) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
@@ -257,7 +271,7 @@ function MessageCard({
   const badgeClass = `ai-card__badge--${status}`;
 
   return (
-    <div className={`ai-card ${statusClass}`}>
+    <div className={`ai-card ${statusClass} ${incomplete ? 'ai-card--incomplete' : ''}`}>
       {/* Header */}
       <div
         className="ai-card__header"
@@ -269,6 +283,11 @@ function MessageCard({
         {(providerLabel || modelLabel) && (
           <span className="ai-card__meta" style={{ fontSize: 11, color: 'var(--text-tertiary)', flexShrink: 0 }}>
             {providerLabel}{modelLabel ? ` · ${modelLabel}` : ''}
+          </span>
+        )}
+        {incomplete && (
+          <span className="ai-card__incomplete-badge" title={incompleteReasons?.join('、') || '可能被截断'}>
+            <AlertTriangle size={10} strokeWidth={2.2} /> 不完整
           </span>
         )}
         <span className={`ai-card__badge ${badgeClass}`}>{statusLabel}</span>
@@ -292,6 +311,28 @@ function MessageCard({
               <span className="ai-card__streaming-dots">
                 <span /><span /><span />
               </span>
+            </div>
+          )}
+
+          {/* Incomplete banner — only when done but truncated */}
+          {status !== 'running' && incomplete && (
+            <div className="ai-card__incomplete-banner" title={incompleteReasons?.join('、')}>
+              <AlertTriangle size={13} strokeWidth={2.2} />
+              <span>
+                回答可能不完整{Array.isArray(incompleteReasons) && incompleteReasons.length > 0
+                  ? `（${incompleteReasons.join('、')}）`
+                  : ''}
+              </span>
+              {onContinue && (
+                <button
+                  className="ai-card__continue-btn"
+                  onClick={(e) => { e.stopPropagation(); onContinue(); }}
+                  title="请求 LLM 继续完成回答"
+                >
+                  <RefreshCw size={11} strokeWidth={2.2} />
+                  继续生成
+                </button>
+              )}
             </div>
           )}
 
@@ -344,7 +385,12 @@ function BlockRenderer({ block, shellOutputs, onExecuteShell, onOptionClick, com
     case 'text':
       return (
         <div className="ai-card__section ai-card__section--text">
-          <MarkdownContent content={block.content} onOptionClick={onOptionClick} />
+          <MarkdownContent
+            content={block.content}
+            onOptionClick={onOptionClick}
+            onExecuteShell={onExecuteShell}
+            shellOutputs={shellOutputs}
+          />
           {showStreamingCursor && <span className="streaming-cursor" />}
         </div>
       );

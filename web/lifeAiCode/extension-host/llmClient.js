@@ -74,6 +74,36 @@ const PROVIDERS = {
       'Content-Type': 'application/json',
     }),
   },
+  kimi: {
+    baseUrl: 'https://api.moonshot.cn/v1',
+    chatPath: '/chat/completions',
+    models: ['moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k', 'moonshot-v1-auto'],
+    defaultModel: 'moonshot-v1-32k',
+    headers: (apiKey) => ({
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    }),
+  },
+  MiniMax: {
+    baseUrl: 'https://api.MiniMax.chat/v1',
+    chatPath: '/chat/completions',
+    models: ['MiniMax-Text-01', 'MiniMax-Text-01-32K', 'MiniMax-Text-01-128K', 'abab6.5s-chat', 'abab6.5-chat'],
+    defaultModel: 'MiniMax-Text-01',
+    headers: (apiKey) => ({
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    }),
+  },
+  doubao: {
+    baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+    chatPath: '/chat/completions',
+    models: ['doubao-lite-4k', 'doubao-lite-16k', 'doubao-lite-32k', 'doubao-lite-128k', 'doubao-pro-4k', 'doubao-pro-32k', 'doubao-pro-128k'],
+    defaultModel: 'doubao-pro-32k',
+    headers: (apiKey) => ({
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    }),
+  },
   custom: {
     baseUrl: 'https://api.openai.com/v1',
     chatPath: '/chat/completions',
