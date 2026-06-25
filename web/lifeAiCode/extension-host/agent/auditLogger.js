@@ -2,20 +2,33 @@
  * Audit Logger
  *
  * 记录 Agent 的所有 Tool 调用，用于安全审计与问题排查。
- * 当前实现：写入 Extension Host 工作目录下的 .lifeAiCode-agent-audit.log
- * 未来可扩展：发送到远端审计服务、限制文件大小、按日期轮转等。
+ * 默认写入 ~/.lifeAiCode-agent-audit.log（用户家目录下，多平台都可用）。
+ * 也可由调用方通过 setLogPath() 自定义。
+ *
+ * 未来可扩展：限制文件大小、按日期轮转、上报到远端审计服务等。
  */
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 class AuditLogger {
+  /**
+   * @param {string} [logPath] 自定义日志路径；为空时使用默认 ~/.lifeAiCode-agent-audit.log
+   */
   constructor(logPath) {
     this.logPath = logPath || '';
   }
 
   setLogPath(logPath) {
     this.logPath = logPath;
+  }
+
+  /**
+   * 返回默认日志路径：~/.lifeAiCode-agent-audit.log
+   */
+  static defaultPath() {
+    return path.join(os.homedir(), '.lifeAiCode-agent-audit.log');
   }
 
   _ensureLogFile() {
@@ -25,6 +38,9 @@ class AuditLogger {
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
+      // 用 fs.openSync 探测可写性
+      const fd = fs.openSync(this.logPath, 'a');
+      fs.closeSync(fd);
       return true;
     } catch {
       return false;

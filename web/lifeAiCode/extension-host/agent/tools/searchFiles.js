@@ -1,13 +1,25 @@
 /**
  * Tool: search_files
  *
- * 在项目中搜索文件或代码内容。
- * 当前使用简单递归遍历 + 字符串/正则匹配。
- * 未来可替换为渲染进程的 searchService 或主进程 searchWorker。
+ * 在项目中搜索文件或代码内容（异步实现，不阻塞 Extension Host）。
+ * - 使用 fs.promises 全异步
+ * - 限制单次最多扫描 100 个文件、收集 50 个匹配
+ * - 自动忽略 node_modules / .git / 二进制文件 / 图片字体视频等
  */
 
 const fs = require('fs');
 const path = require('path');
+
+const IGNORED_DIRS = new Set([
+  'node_modules', '.git', 'dist', 'build', 'out', '.vite', '.next', '.nuxt',
+  'coverage', '.cache', 'tmp', 'temp', 'vendor', '__pycache__',
+]);
+const IGNORED_EXTS = new Set([
+  '.png', '.jpg', '.jpeg', '.gif', '.ico', '.svg', '.woff', '.woff2', '.ttf', '.eot',
+  '.mp3', '.mp4', '.avi', '.mov', '.zip', '.tar', '.gz', '.rar', '.pdf',
+]);
+const MAX_FILES = 100;
+const MAX_MATCHES = 50;
 
 async function searchFiles(args, context) {
   const { pattern, glob } = args || {};
@@ -26,7 +38,7 @@ async function searchFiles(args, context) {
   try {
     regex = new RegExp(pattern, 'g');
   } catch {
-    // 如果 pattern 不是合法正则，按字面量匹配
+    // 如果 pattern 不是合法正则，按字面量匹配（转义）
     regex = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
   }
 
@@ -39,45 +51,37 @@ async function searchFiles(args, context) {
     }
   }
 
-  const ignoredDirs = new Set([
-    'node_modules', '.git', 'dist', 'build', 'out', '.vite', '.next', '.nuxt',
-    'coverage', '.cache', 'tmp', 'temp', 'vendor', '__pycache__',
-  ]);
-  const ignoredExts = new Set([
-    '.png', '.jpg', '.jpeg', '.gif', '.ico', '.svg', '.woff', '.woff2', '.ttf', '.eot',
-    '.mp3', '.mp4', '.avi', '.mov', '.zip', '.tar', '.gz', '.rar', '.pdf',
-  ]);
-
   const matches = [];
-  const MAX_FILES = 100;
-  const MAX_MATCHES = 50;
   let scannedFiles = 0;
 
-  function walk(dir) {
-    let items;
+  async function walk(dir) {
+    if (matches.length >= MAX_MATCHES) return;
+    if (scannedFiles >= MAX_FILES) return;
+
+    let entries;
     try {
-      items = fs.readdirSync(dir, { withFileTypes: true });
+      entries = await fs.promises.readdir(dir, { withFileTypes: true });
     } catch {
       return;
     }
 
-    for (const item of items) {
+    for (const entry of entries) {
       if (matches.length >= MAX_MATCHES) return;
       if (scannedFiles >= MAX_FILES) return;
-      if (ignoredDirs.has(item.name)) continue;
-      if (item.name.startsWith('.')) continue;
+      if (IGNORED_DIRS.has(entry.name)) continue;
+      if (entry.name.startsWith('.')) continue;
 
-      const fullPath = path.join(dir, item.name);
-      if (item.isDirectory()) {
-        walk(fullPath);
-      } else if (item.isFile()) {
-        const ext = path.extname(item.name).toLowerCase();
-        if (ignoredExts.has(ext)) continue;
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(fullPath);
+      } else if (entry.isFile()) {
+        const ext = path.extname(entry.name).toLowerCase();
+        if (IGNORED_EXTS.has(ext)) continue;
         if (allowedExts && !allowedExts.has(ext)) continue;
 
         scannedFiles++;
         try {
-          const content = fs.readFileSync(fullPath, 'utf-8');
+          const content = await fs.promises.readFile(fullPath, 'utf-8');
           const lines = content.split('\n');
           for (let i = 0; i < lines.length; i++) {
             regex.lastIndex = 0;
@@ -98,7 +102,7 @@ async function searchFiles(args, context) {
     }
   }
 
-  walk(rootPath);
+  await walk(rootPath);
 
   return {
     success: true,

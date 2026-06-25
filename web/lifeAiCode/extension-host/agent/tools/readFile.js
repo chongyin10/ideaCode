@@ -30,7 +30,7 @@ async function readFile(args, context) {
   }
 
   try {
-    const stat = fs.statSync(targetPath);
+    const stat = await fs.promises.stat(targetPath);
     if (!stat.isFile()) {
       return { success: false, error: `路径不是文件: ${filePathInput}` };
     }
@@ -38,7 +38,7 @@ async function readFile(args, context) {
     // 限制大文件读取
     const MAX_SIZE = 500 * 1024; // 500KB
     if (stat.size > MAX_SIZE) {
-      const content = fs.readFileSync(targetPath, 'utf-8');
+      const content = await fs.promises.readFile(targetPath, 'utf-8');
       return {
         success: true,
         path: filePathInput,
@@ -48,7 +48,7 @@ async function readFile(args, context) {
       };
     }
 
-    const content = fs.readFileSync(targetPath, 'utf-8');
+    const content = await fs.promises.readFile(targetPath, 'utf-8');
     return {
       success: true,
       path: filePathInput,

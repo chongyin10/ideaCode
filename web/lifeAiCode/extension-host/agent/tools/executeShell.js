@@ -1,14 +1,16 @@
 /**
  * Tool: execute_shell
  *
- * 执行 shell 命令并返回输出。
- * 优先使用 context.executeShell（Extension.js 中的完整实现）。
- * 否则使用内部简化实现。
+ * 执行 shell 命令并返回**完整输出**（包括 stdout + stderr）。
+ * - 优先使用 context.executeShell + context.waitShellCompletion（Extension.js 中的完整实现）
+ * - 否则使用内部简化实现（异步 spawn + 累积输出）
+ *
+ * 输出上限统一 64KB（与 Extension.js 内部一致）；超出部分截断尾部并标记。
  */
 
 const { spawn } = require('child_process');
-const os = require('os');
 const path = require('path');
+const MAX_OUTPUT_BYTES = 64 * 1024; // 与 Extension.js 内的 MAX_OUTPUT_BYTES 一致
 
 async function executeShell(args, context) {
   const { command, cwd, timeout = 60000 } = args || {};
@@ -29,7 +31,6 @@ async function executeShell(args, context) {
   }
 
   // 危险命令检查
-  const normalizedCommand = command.toLowerCase().trim();
   const dangerousPatterns = [
     { pattern: /rm\s+-rf\s*\//, reason: '递归删除根目录' },
     { pattern: /rm\s+-rf\s+~/, reason: '递归删除用户目录' },
@@ -48,17 +49,22 @@ async function executeShell(args, context) {
     }
   }
 
-  // 如果 context 提供了完整的 executeShell，直接调用
-  if (typeof context.executeShell === 'function') {
+  // 优先使用 context 中的完整实现
+  if (typeof context.executeShell === 'function' && typeof context.waitShellCompletion === 'function') {
     const shellId = `agent-shell-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
     try {
+      // 触发执行（不 await — 走实时流式输出到 webview）
       context.executeShell(shellId, command, workingDir);
-      // 由于 executeShellCommand 是异步推送，这里同步返回提示
+      // 等待完成 + 拿到完整输出
+      const result = await context.waitShellCompletion(shellId, timeout);
       return {
-        success: true,
+        success: result.success === true,
         command,
         cwd: workingDir,
-        note: '命令已在后台执行，输出将实时显示在聊天窗口中',
+        exitCode: result.exitCode,
+        signal: result.signal,
+        output: typeof result.output === 'string' ? truncateOutput(result.output) : '',
+        error: result.error,
         shellId,
       };
     } catch (err) {
@@ -66,7 +72,19 @@ async function executeShell(args, context) {
     }
   }
 
-  // 内部简化实现
+  // 内部简化实现（fallback）
+  return runInternal(command, workingDir, timeout);
+}
+
+/**
+ * 截断输出到 64KB，保留尾部并标记
+ */
+function truncateOutput(output) {
+  if (output.length <= MAX_OUTPUT_BYTES) return output;
+  return '…(输出过长，已截断)…\n' + output.slice(-MAX_OUTPUT_BYTES);
+}
+
+function runInternal(command, workingDir, timeout) {
   return new Promise((resolve) => {
     const isWindows = process.platform === 'win32';
     const shell = isWindows ? 'cmd.exe' : '/bin/sh';
@@ -86,9 +104,7 @@ async function executeShell(args, context) {
 
     let stdout = '';
     let stderr = '';
-    let timeoutId;
-
-    const killTimeout = setTimeout(() => {
+    const killTimer = setTimeout(() => {
       try { proc.kill('SIGTERM'); } catch { /* ignore */ }
       setTimeout(() => {
         try { proc.kill('SIGKILL'); } catch { /* ignore */ }
@@ -99,25 +115,20 @@ async function executeShell(args, context) {
     proc.stderr.on('data', (chunk) => { stderr += chunk.toString('utf8'); });
 
     proc.on('error', (err) => {
-      clearTimeout(killTimeout);
+      clearTimeout(killTimer);
       resolve({ success: false, error: err.message });
     });
 
     proc.on('close', (code, signal) => {
-      clearTimeout(killTimeout);
+      clearTimeout(killTimer);
       const output = stdout + (stderr ? `\n${stderr}` : '');
-      const MAX_OUTPUT = 32 * 1024;
-      const finalOutput = output.length > MAX_OUTPUT
-        ? '…（输出过长，已截断）…\n' + output.slice(-MAX_OUTPUT)
-        : output;
-
       resolve({
         success: code === 0,
         command,
         cwd: workingDir,
         exitCode: code ?? undefined,
         signal: signal ?? undefined,
-        output: finalOutput,
+        output: truncateOutput(output),
       });
     });
   });

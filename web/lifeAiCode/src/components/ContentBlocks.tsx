@@ -1,20 +1,110 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
 import {
-  Brain, Bot, Pencil, Terminal, FileText, Search,
+  Brain, Bot, Pencil, Terminal, FileText, Search, Info,
   ChevronDown, Copy, Check, Loader2,
   Sparkles, GitBranch,
   AlertTriangle, RefreshCw,
 } from 'lucide-react';
 import type { ContentBlock as ContentBlockType, FileStatus, StepType, StepStatus } from '../types';
 import { MarkdownContent } from './MarkdownContent';
+import { parseProviderTags, type ProviderId, type ExtractedTag, type CanonicalTagName } from '../llmTags';
 
 /* ─────────────────────────────────────────────────────────────────── */
-/*  Parser                                                            */
+/*  Parser（多 Provider 标签归一化）                                       */
 /* ─────────────────────────────────────────────────────────────────── */
 
-function parseContentBlocks(content: string): ContentBlockType[] {
+function buildReasoningFromThinking(content: string): ContentBlockType {
+  return { type: 'reasoning', content: content.trim() };
+}
+
+function buildEnvironmentFromTag(content: string): ContentBlockType {
+  // 解析 <environment_details> 内部的多行键值对
+  // 形如 "Current time: 2026-06-25T17:33:59+08:00"
+  const lines = content.split('\n').map((l) => l.trim()).filter(Boolean);
+  return {
+    type: 'environment',
+    raw: content,
+    lines,
+  } as unknown as ContentBlockType; // 见 types.ts 中的 type
+}
+
+function buildCanonicalBlock(tag: ExtractedTag): ContentBlockType | null {
+  const { tagName, attrs = '', content } = tag;
+  if (!tagName) return null;
+
+  switch (tagName as CanonicalTagName) {
+    case 'reasoning':
+      return content.trim() ? { type: 'reasoning', content: content.trim() } : null;
+
+    case 'edit': {
+      const fileMatch = attrs!.match(/file=["']([^"']+)["']/i);
+      const filePath = fileMatch ? fileMatch[1] : '未知文件';
+      const lines = content.split('\n');
+      let additions = 0;
+      let deletions = 0;
+      lines.forEach((line) => {
+        const t = line.trim();
+        if (t.startsWith('+')) additions++;
+        else if (t.startsWith('-')) deletions++;
+      });
+      return { type: 'edit', filePath, additions, deletions };
+    }
+
+    case 'shell': {
+      const cmdMatch = attrs!.match(/command=["']([^"']+)["']/i);
+      const command = cmdMatch ? cmdMatch[1] : '';
+      const output = content.trim();
+      return { type: 'shell', command, output, status: 'running' as const };
+    }
+
+    case 'fileStatus': {
+      const fileMatch = attrs!.match(/file=["']([^"']+)["']/i);
+      const statusMatch = attrs!.match(/status=["']([^"']+)["']/i);
+      const filePath = fileMatch ? fileMatch[1] : '未知文件';
+      const status = (statusMatch ? statusMatch[1] : 'modified') as FileStatus;
+      return { type: 'fileStatus', filePath, status };
+    }
+
+    case 'step': {
+      const typeMatch = attrs!.match(/type=["']([^"']+)["']/i);
+      const targetMatch = attrs!.match(/target=["']([^"']+)["']/i);
+      const paramsMatch = attrs!.match(/params=["']([^"']+)["']/i);
+      const statusMatch = attrs!.match(/status=["']([^"']+)["']/i);
+      const stepType = (typeMatch ? typeMatch[1] : 'think') as StepType;
+      const target = targetMatch ? targetMatch[1] : undefined;
+      const params = paramsMatch ? paramsMatch[1] : undefined;
+      const rawStatus = statusMatch ? statusMatch[1] : undefined;
+      const status = (rawStatus || (stepType === 'read' ? 'done' : 'running')) as StepStatus;
+      const label = content.trim() || undefined;
+      return { type: 'step', stepType, target, params, label, status };
+    }
+  }
+  return null;
+}
+
+/**
+ * 解析内容块（多 Provider 标签归一化）
+ * 流程：
+ *   1. 用 parseProviderTags 提取所有标签（thinking/environment/canonical）
+ *   2. 按位置在原始文本中切出 text 段
+ *   3. 把标签转成对应的 ContentBlock
+ *   4. 维持原文本顺序（text / 块 / text / 块 ...）
+ */
+function parseContentBlocks(content: string, provider: ProviderId = 'custom'): ContentBlockType[] {
   const blocks: ContentBlockType[] = [];
-  let remaining = content;
+  if (!content) return blocks;
+
+  const parseResult = parseProviderTags(content, provider);
+  const tags = parseResult.tags;
+  const incomplete = parseResult.incomplete;
+
+  // 自动补齐未闭合的 canonical 标签（在 cleanedText 末尾补闭标签，避免 markdown 解析错乱）
+  let cleanedText = parseResult.cleanedText;
+  if (incomplete.length > 0) {
+    for (const tagName of [...new Set(incomplete)]) {
+      cleanedText += `\n\n</${tagName}>`;
+    }
+  }
 
   const pushText = (text: string) => {
     const trimmed = text.trim();
@@ -27,62 +117,38 @@ function parseContentBlocks(content: string): ContentBlockType[] {
     }
   };
 
-  const tagPattern = /<(reasoning|edit|shell|fileStatus|step)\b[^>]*>[\s\S]*?<\/\1>|<(fileStatus|step)\b[^>]*\/>/gi;
-  let match: RegExpExecArray | null;
-  let lastIndex = 0;
-
-  // eslint-disable-next-line no-cond-assign
-  while ((match = tagPattern.exec(remaining)) !== null) {
-    const textBefore = remaining.slice(lastIndex, match.index);
-    pushText(textBefore);
-    lastIndex = tagPattern.lastIndex;
-
-    const tagHtml = match[0];
-    const tagName = (match[1] || match[2]).toLowerCase();
-
-    if (tagName === 'reasoning') {
-      const inner = tagHtml.replace(/<reasoning\b[^>]*>([\s\S]*?)<\/reasoning>/i, '$1').trim();
-      if (inner) blocks.push({ type: 'reasoning', content: inner });
-    } else if (tagName === 'edit') {
-      const fileMatch = tagHtml.match(/file=["']([^"']+)["']/i);
-      const filePath = fileMatch ? fileMatch[1] : '未知文件';
-      const inner = tagHtml.replace(/<edit\b[^>]*>([\s\S]*?)<\/edit>/i, '$1');
-      const lines = inner.split('\n');
-      let additions = 0;
-      let deletions = 0;
-      lines.forEach((line) => {
-        const t = line.trim();
-        if (t.startsWith('+')) additions++;
-        else if (t.startsWith('-')) deletions++;
-      });
-      blocks.push({ type: 'edit', filePath, additions, deletions });
-    } else if (tagName === 'shell') {
-      const cmdMatch = tagHtml.match(/command=["']([^"']+)["']/i);
-      const command = cmdMatch ? cmdMatch[1] : '';
-      const output = tagHtml.replace(/<shell\b[^>]*>([\s\S]*?)<\/shell>/i, '$1').trim();
-      blocks.push({ type: 'shell', command, output, status: 'running' as const });
-    } else if (tagName === 'filestatus') {
-      const fileMatch = tagHtml.match(/file=["']([^"']+)["']/i);
-      const statusMatch = tagHtml.match(/status=["']([^"']+)["']/i);
-      const filePath = fileMatch ? fileMatch[1] : '未知文件';
-      const status = (statusMatch ? statusMatch[1] : 'modified') as FileStatus;
-      blocks.push({ type: 'fileStatus', filePath, status });
-    } else if (tagName === 'step') {
-      const typeMatch = tagHtml.match(/type=["']([^"']+)["']/i);
-      const targetMatch = tagHtml.match(/target=["']([^"']+)["']/i);
-      const paramsMatch = tagHtml.match(/params=["']([^"']+)["']/i);
-      const statusMatch = tagHtml.match(/status=["']([^"']+)["']/i);
-      const stepType = (typeMatch ? typeMatch[1] : 'think') as StepType;
-      const target = targetMatch ? targetMatch[1] : undefined;
-      const params = paramsMatch ? paramsMatch[1] : undefined;
-      const rawStatus = statusMatch ? statusMatch[1] : undefined;
-      const status = (rawStatus || (stepType === 'read' ? 'done' : 'running')) as StepStatus;
-      const label = tagHtml.replace(/<step\b[^>]*>([\s\S]*?)<\/step>/i, '$1').trim() || undefined;
-      blocks.push({ type: 'step', stepType, target, params, label, status });
+  let cursor = 0;
+  for (const tag of tags) {
+    if (tag.start > cursor) {
+      pushText(content.slice(cursor, tag.start));
     }
+
+    if (tag.kind === 'thinking') {
+      const block = buildReasoningFromThinking(tag.content);
+      if (block) blocks.push(block);
+    } else if (tag.kind === 'environment') {
+      // environment 当前默认不显示（context 信息，用户无需看）；
+      // 如果未来需要展示，取消下面这行注释即可
+      // const block = buildEnvironmentFromTag(tag.content);
+      // if (block) blocks.push(block);
+    } else if (tag.kind === 'canonical') {
+      const block = buildCanonicalBlock(tag);
+      if (block) blocks.push(block);
+    }
+
+    cursor = tag.end;
   }
 
-  pushText(remaining.slice(lastIndex));
+  // 最后一个 tag 后的剩余 text
+  if (cursor < content.length) {
+    pushText(content.slice(cursor));
+  }
+
+  // 如果没有提取到任何标签但有 cleanedText（理论上不会发生），也要 push
+  if (blocks.length === 0 && cleanedText) {
+    blocks.push({ type: 'text', content: cleanedText });
+  }
+
   return blocks;
 }
 
@@ -142,6 +208,8 @@ interface ContentBlocksProps {
   completed?: boolean;
   providerLabel?: string;
   modelLabel?: string;
+  /** Provider ID（用于多厂商标签归一化） */
+  provider?: ProviderId;
 }
 
 export function ContentBlocks({
@@ -158,8 +226,9 @@ export function ContentBlocks({
   completed,
   providerLabel,
   modelLabel,
+  provider = 'custom',
 }: ContentBlocksProps) {
-  const blocks = useMemo(() => parseContentBlocks(content), [content]);
+  const blocks = useMemo(() => parseContentBlocks(content, provider), [content, provider]);
   const title = useMemo(() => extractTitle(blocks), [blocks]);
   const hasRunning = blocks.some((b) =>
     (b.type === 'step' && b.status === 'running') ||

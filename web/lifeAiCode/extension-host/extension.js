@@ -57,6 +57,31 @@ function generateId() {
 }
 
 /**
+ * 在候选路径列表中找第一个可写的路径。
+ * 用于把日志、缓存等写入用户机器上的"安全位置"，避开打包目录只读 / 路径不存在等问题。
+ * @param {string[]} candidates 候选绝对路径
+ * @returns {string|null} 第一个能成功 ensureDir + ensureWrite 的路径；都失败返回 null
+ */
+function pickWritablePath(candidates) {
+  for (const filePath of candidates) {
+    if (!filePath) continue;
+    try {
+      const dir = path.dirname(filePath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      // 用 fs.openSync 探测可写性（O_CREAT | O_WRONLY | O_APPEND）
+      const fd = fs.openSync(filePath, 'a');
+      fs.closeSync(fd);
+      return filePath;
+    } catch {
+      // 当前路径不可写，试下一个
+    }
+  }
+  return null;
+}
+
+/**
  * 读取 WebView HTML 并内联资源
  */
 function getWebviewHtml(extensionPath) {
@@ -110,7 +135,18 @@ const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 分钟兜底超时
 
 // 维护当前活跃的子进程，用于中止/重置
 const activeProcs = new Map(); // id -> { proc, finished, cwd }
+// 等待中的 executeShell 调用方（resolve/reject）—— 用于 Agent tool 同步等待输出
+const pendingShellWaits = new Map(); // id -> { resolve, reject }
 
+/**
+ * 异步执行 shell 命令。
+ * - 立即把命令的初始事件 push 到 webview（命令回显 + cwd）
+ * - stdout/stderr 实时通过 postToWebView 流回聊天窗口
+ * - **同时**：如果有调用方在等结果（Agent tool），返回一个 Promise，
+ *   在进程结束时 resolve({success, exitCode, output})。
+ * @returns {Promise<{success: boolean, exitCode?: number, output: string}> | undefined}
+ *   返回 undefined 表示"发射后不管"（webview 模式）；返回 Promise 表示有调用方在等。
+ */
 async function executeShellCommand(id, shellCommand, cwd) {
   console.log('[LifeAiCode][executeShellCommand] called:', { id, shellCommand, cwd });
 
@@ -236,6 +272,17 @@ async function executeShellCommand(id, shellCommand, cwd) {
       exitCode: code ?? undefined,
       signal: signal ?? undefined,
     });
+    // 唤醒在等结果的人（Agent tool）
+    const waiter = pendingShellWaits.get(id);
+    if (waiter) {
+      pendingShellWaits.delete(id);
+      waiter.resolve({
+        success: code === 0,
+        exitCode: code ?? undefined,
+        signal: signal ?? undefined,
+        output: (entry.buffers.stdout + (entry.buffers.stderr ? `\n${entry.buffers.stderr}` : '')).trim(),
+      });
+    }
     activeProcs.delete(id);
   });
 
@@ -249,6 +296,58 @@ async function executeShellCommand(id, shellCommand, cwd) {
       try { proc.kill('SIGKILL'); } catch { /* ignore */ }
     }, 2000);
   }, DEFAULT_TIMEOUT_MS);
+
+  // 返回 Promise 给在等的调用方（Agent tool）
+  // 注意：首次调用时这个 Promise 还没人等，所以 pendingShellWaits 里没记录
+  // 后续如果有 waitShellCompletion(id) 调用，会被 addShellWaiter 添加到 map
+  // 这里我们返回 Promise 主动挂入（如果没有 waiter 就 setTimeout 删除自身）
+  return new Promise((resolve, reject) => {
+    pendingShellWaits.set(id, { resolve, reject });
+    // 如果 60 秒后还没人 wait，清理自身（避免泄漏）
+    setTimeout(() => {
+      const w = pendingShellWaits.get(id);
+      if (w) {
+        pendingShellWaits.delete(id);
+        w.resolve({
+          success: false,
+          error: 'shell 命令已触发但无调用方等待结果',
+        });
+      }
+    }, 60_000);
+  });
+}
+
+/**
+ * Agent tool 用：在等指定 shellId 的完成结果。
+ * 如果 executeShellCommand 还没跑或已经结束，立即 resolve。
+ * @param {string} id shellId
+ * @param {number} timeoutMs 超时（默认 60s）
+ * @returns {Promise<{success, exitCode, output, error?}>}
+ */
+function waitShellCompletion(id, timeoutMs = 60_000) {
+  // 进程已结束 → 没有 waiter 注册，构造一个同步的 resolved
+  if (!activeProcs.has(id) && !pendingShellWaits.has(id)) {
+    return Promise.resolve({ success: false, error: 'shell 进程未运行或不存在' });
+  }
+  // 已有 waiter 在等 → 复用
+  const existing = pendingShellWaits.get(id);
+  if (existing) {
+    return new Promise((resolve, reject) => {
+      const prev = existing;
+      // 包一层：之前已注册的 resolve 也会被这个新 resolve 拿到结果
+      const wrappedResolve = (v) => { prev.resolve(v); resolve(v); };
+      const wrappedReject = (e) => { prev.reject(e); reject(e); };
+      pendingShellWaits.set(id, { resolve: wrappedResolve, reject: wrappedReject });
+      // 设超时
+      setTimeout(() => {
+        if (pendingShellWaits.get(id)?.resolve === wrappedResolve) {
+          pendingShellWaits.delete(id);
+          resolve({ success: false, error: '等待 shell 完成超时' });
+        }
+      }, timeoutMs);
+    });
+  }
+  return Promise.resolve({ success: false, error: 'shell 进程未运行' });
 }
 
 /**
@@ -352,10 +451,14 @@ async function processMessage(text, context, options = {}) {
     // 4. 调用 LLM（先尝试流式，失败回退非流式）
     let fullResponse = '';
     let aborted = false;
+    /** 跟踪本次请求的 token 监听器，结束/异常时精确移除 */
+    let tokenListener = null;
     try {
-      // 避免多次对话后 token 监听器累积
-      llmClient.removeAllListeners('token');
-      llmClient.on('token', (token) => {
+      // 仅移除自己上一次的 token 监听器（如果存在），不破坏其他订阅者
+      if (processMessage._lastTokenListener) {
+        try { llmClient.off('token', processMessage._lastTokenListener); } catch { /* ignore */ }
+      }
+      tokenListener = (token) => {
         // continue 模式下，token 是续写部分，需要追加到原 content 上
         if (continueFromContent) {
           fullResponse = continueFromContent + token;
@@ -368,7 +471,10 @@ async function processMessage(text, context, options = {}) {
           content: fullResponse,
           done: false,
         });
-      });
+      };
+      // 挂载并保存引用，便于下次请求时清理
+      llmClient.on('token', tokenListener);
+      processMessage._lastTokenListener = tokenListener;
       fullResponse = await llmClient.chatStream(messages);
     } catch (streamErr) {
       if (streamErr.isAbort) {
@@ -377,6 +483,14 @@ async function processMessage(text, context, options = {}) {
         console.warn('[LifeAiCode] 流式请求失败, 回退到非流式:', streamErr.message);
         const resp = await llmClient.chat(messages);
         fullResponse = continueFromContent ? continueFromContent + resp : resp;
+      }
+    } finally {
+      // 清理 token 监听器，避免内存泄漏
+      if (tokenListener) {
+        try { llmClient.off('token', tokenListener); } catch { /* ignore */ }
+        if (processMessage._lastTokenListener === tokenListener) {
+          processMessage._lastTokenListener = null;
+        }
       }
     }
 
@@ -701,15 +815,27 @@ async function activate(context) {
     },
     postToWebView,
     executeShell: executeShellCommand,
+    waitShellCompletion,
     registerPendingEdit: (editId, edit) => {
       pendingAgentEdits.set(editId, edit);
     },
   });
+  // 设置 Agent 审计日志路径（多级兜底：扩展目录 → 用户家目录 → 临时目录）
   try {
-    const auditPath = path.join(context.extensionPath, '.lifeAiCode-agent-audit.log');
-    agentRuntime.auditLogger.setLogPath(auditPath);
-    console.log('[LifeAiCode] Agent 审计日志:', auditPath);
-  } catch { /* ignore */ }
+    const auditPath = pickWritablePath([
+      context.extensionPath && path.join(context.extensionPath, '.lifeAiCode-agent-audit.log'),
+      path.join(os.homedir(), '.lifeAiCode-agent-audit.log'),
+      path.join(os.tmpdir(), 'lifeAiCode-agent-audit.log'),
+    ]);
+    if (auditPath) {
+      agentRuntime.auditLogger.setLogPath(auditPath);
+      console.log('[LifeAiCode] Agent 审计日志:', auditPath);
+    } else {
+      console.warn('[LifeAiCode] Agent 审计日志不可用，将跳过记录');
+    }
+  } catch (err) {
+    console.warn('[LifeAiCode] 设置审计日志失败:', err.message);
+  }
 
   // 初始化 LLM 客户端（优先加载持久化配置，其次环境变量）
   const envKey = process.env.MYAICODE_API_KEY || process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY
@@ -1063,9 +1189,10 @@ async function activate(context) {
         case 'abortGeneration': {
           if (agentRuntime) {
             agentRuntime.cancel();
+            // agentRuntime.cancel() 内部会通过 AbortController 把信号传给 LLM client
             postToWebView({ type: 'agentStatus', status: 'cancelled', message: 'Agent 任务已取消' });
-          }
-          if (llmClient) {
+          } else if (llmClient) {
+            // 普通模式：直接中止 LLM 请求
             llmClient.abort();
           }
           break;

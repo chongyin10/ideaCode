@@ -662,6 +662,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
                     completed={!msg.streaming}
                     providerLabel={msg.role === 'assistant' ? providerLabel : undefined}
                     modelLabel={msg.role === 'assistant' ? modelLabel : undefined}
+                    provider={activeConfig?.provider || 'custom'}
                     onCopy={msg.role === 'assistant' ? (text) => navigator.clipboard.writeText(text).catch(() => {}) : undefined}
                     onRegenerate={msg.role === 'assistant' && !msg.streaming ? handleRegenerate : undefined}
                     onContinue={msg.role === 'assistant' && msg.incomplete ? () => handleContinue(msg.id) : undefined}
@@ -725,7 +726,11 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="输入消息... (Enter 发送，Shift+Enter 换行)"
+            placeholder={
+              isProcessing
+                ? (agentStatus ? `Agent ${agentStatus.status === 'running' ? '执行中' : agentStatus.status}…（可在状态条停止）` : '生成中…')
+                : '输入消息... (Enter 发送，Shift+Enter 换行)'
+            }
             disabled={isProcessing}
             rows={1}
           />

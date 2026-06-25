@@ -119,8 +119,8 @@ ${toolSchemas}
   /**
    * 发送消息并获取 LLM 回复
    * @param {Array} messages OpenAI 格式消息数组
-   * @param {object} options { stream?: boolean, onToken?: (token) => void }
-   * @returns {Promise<string>} LLM 原始回复
+   * @param {object} options { stream?, onToken?, signal? }
+   * @returns {Promise<string|{content:string,toolCalls:Array}>}
    */
   async chat(messages, options = {}) {
     if (!this.llmClient) {
@@ -129,11 +129,12 @@ ${toolSchemas}
 
     const useNative = this.supportsNativeToolCalling();
     const systemPrompt = this.buildAgentSystemPrompt(useNative);
-    const { stream = true, onToken } = options;
+    const { stream = true, onToken, signal } = options;
 
     const requestOptions = {
       systemPrompt,
       returnRaw: useNative,
+      signal, // 把 AbortSignal 透传到底层 HTTP 请求
     };
 
     if (useNative) {
@@ -141,8 +142,14 @@ ${toolSchemas}
       requestOptions.tool_choice = 'auto';
     }
 
+    // 重要：只在流式模式下注册 token 监听。
+    // 之前 removeAllListeners('token') 会清掉其他消费者（如 processMessage），
+    // 这里改成精确移除"上一次自己注册的 listener"，避免破坏其他订阅者。
     if (stream && typeof onToken === 'function') {
-      this.llmClient.removeAllListeners('token');
+      if (this._boundTokenListener) {
+        this.llmClient.off('token', this._boundTokenListener);
+      }
+      this._boundTokenListener = onToken;
       this.llmClient.on('token', onToken);
     }
 
@@ -152,6 +159,11 @@ ${toolSchemas}
       }
       return await this.llmClient.chat(messages, requestOptions);
     } catch (err) {
+      // 清理 listener（避免内存泄漏）
+      if (stream && this._boundTokenListener === onToken) {
+        try { this.llmClient.off('token', this._boundTokenListener); } catch { /* ignore */ }
+        this._boundTokenListener = null;
+      }
       throw err;
     }
   }

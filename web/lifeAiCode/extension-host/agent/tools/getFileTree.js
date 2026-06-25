@@ -1,11 +1,18 @@
 /**
  * Tool: get_file_tree
  *
- * 获取指定目录的树形结构。
+ * 获取指定目录的树形结构（异步实现，不阻塞 Extension Host）。
  */
 
 const fs = require('fs');
 const path = require('path');
+
+const IGNORED_DIRS = new Set([
+  'node_modules', '.git', 'dist', 'build', 'out', '.vite', '.next', '.nuxt',
+  'coverage', '.cache', 'tmp', 'temp', 'vendor', '__pycache__',
+]);
+const IGNORED_FILES = new Set(['.DS_Store', 'Thumbs.db']);
+const MAX_FILES = 120;
 
 async function getFileTree(args, context) {
   const workspaceRoot = context.workspaceRoot || '';
@@ -22,20 +29,13 @@ async function getFileTree(args, context) {
     return { success: false, error: `拒绝访问工作区外的路径: ${args.path}` };
   }
 
-  const ignoredDirs = new Set([
-    'node_modules', '.git', 'dist', 'build', 'out', '.vite', '.next', '.nuxt',
-    'coverage', '.cache', 'tmp', 'temp', 'vendor', '__pycache__',
-  ]);
-  const ignoredFiles = new Set(['.DS_Store', 'Thumbs.db']);
-
   let count = 0;
-  const MAX_FILES = 120;
 
-  function walk(dir, currentDepth) {
+  async function walk(dir, currentDepth) {
     if (currentDepth > depth || count >= MAX_FILES) return [];
     let items;
     try {
-      items = fs.readdirSync(dir, { withFileTypes: true });
+      items = await fs.promises.readdir(dir, { withFileTypes: true });
     } catch {
       return [];
     }
@@ -46,9 +46,9 @@ async function getFileTree(args, context) {
 
     for (const item of [...dirs, ...files]) {
       if (count >= MAX_FILES) break;
-      if (item.name.startsWith('.') && !ignoredDirs.has(item.name) && item.isDirectory()) continue;
-      if (ignoredDirs.has(item.name)) continue;
-      if (item.isFile() && ignoredFiles.has(item.name)) continue;
+      if (item.name.startsWith('.') && !IGNORED_DIRS.has(item.name) && item.isDirectory()) continue;
+      if (IGNORED_DIRS.has(item.name)) continue;
+      if (item.isFile() && IGNORED_FILES.has(item.name)) continue;
 
       const fullPath = path.join(dir, item.name);
       const relPath = path.relative(targetPath, fullPath);
@@ -56,7 +56,8 @@ async function getFileTree(args, context) {
       if (item.isDirectory()) {
         entries.push(`${prefix}📁 ${item.name}/`);
         count++;
-        entries.push(...walk(fullPath, currentDepth + 1));
+        const sub = await walk(fullPath, currentDepth + 1);
+        entries.push(...sub);
       } else {
         entries.push(`${prefix}📄 ${item.name}`);
         count++;
@@ -66,12 +67,12 @@ async function getFileTree(args, context) {
   }
 
   try {
-    const stat = fs.statSync(targetPath);
+    const stat = await fs.promises.stat(targetPath);
     if (!stat.isDirectory()) {
       return { success: false, error: `路径不是目录: ${args.path}` };
     }
 
-    const lines = walk(targetPath, 0);
+    const lines = await walk(targetPath, 0);
     const treeText = [`📁 ${path.basename(targetPath)}/`, ...lines].join('\n');
     return {
       success: true,

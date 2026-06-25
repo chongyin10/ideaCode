@@ -36,7 +36,8 @@ export type ContentBlock =
   | { type: 'edit'; filePath: string; additions: number; deletions: number }
   | { type: 'shell'; command: string; output?: string; status?: 'running' | 'success' | 'error' }
   | { type: 'fileStatus'; filePath: string; status: FileStatus }
-  | { type: 'step'; stepType: StepType; target?: string; params?: string; label?: string; status: StepStatus };
+  | { type: 'step'; stepType: StepType; target?: string; params?: string; label?: string; status: StepStatus }
+  | { type: 'environment'; lines: string[]; raw: string };
 
 export interface Suggestion {
   id: string;

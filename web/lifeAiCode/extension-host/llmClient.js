@@ -129,13 +129,20 @@ class LlmClient extends EventEmitter {
     /** @type {import('http').ClientRequest|null} */
     this.activeRequest = null;
     this.aborted = false;
+    /** @type {AbortController|null} 用于在多轮调用间传递的中止控制器 */
+    this._abortController = null;
   }
 
   /**
    * 中止当前正在进行的请求
+   * - 销毁活跃 HTTP 请求
+   * - 标记 aborted，重试循环会立即退出
    */
   abort() {
     this.aborted = true;
+    if (this._abortController && !this._abortController.signal.aborted) {
+      try { this._abortController.abort(); } catch { /* ignore */ }
+    }
     if (this.activeRequest && !this.activeRequest.destroyed) {
       this.activeRequest.destroy();
       this.activeRequest = null;
@@ -150,6 +157,15 @@ class LlmClient extends EventEmitter {
     const err = new Error('请求已中止');
     err.isAbort = true;
     return err;
+  }
+
+  /**
+   * 检查是否中止（统一从 signal / aborted 标志读取）
+   */
+  _isAborted(signal) {
+    if (this.aborted) return true;
+    if (signal && signal.aborted) return true;
+    return false;
   }
 
   /**
@@ -217,6 +233,8 @@ class LlmClient extends EventEmitter {
 
   /**
    * 发送聊天请求（非流式）
+   * @param {Array} messages
+   * @param {object} options { systemPrompt?, tools?, tool_choice?, returnRaw?, signal? }
    * @returns {string|{content:string,toolCalls:Array}} 默认返回 content 字符串；options.returnRaw=true 时返回对象
    */
   async chat(messages, options = {}) {
@@ -229,35 +247,39 @@ class LlmClient extends EventEmitter {
 
     let lastError = null;
     for (let attempt = 0; attempt < this.maxRetries; attempt++) {
+      if (this._isAborted(options.signal)) throw this._createAbortError();
       try {
-        const response = await this._httpRequest(url.toString(), {
+        const res = await this._httpRequest(url.toString(), {
           method: 'POST',
           headers: provider.headers(this.apiKey),
           body: JSON.stringify(body),
           timeout: this.timeout,
-        });
-        if (this.aborted) throw this._createAbortError();
-        const parsed = this._parseResponse(provider, response);
-        if (options.returnRaw) return parsed;
-        return parsed.content || '';
+        }, options);
+        const parsed = this._parseResponse(provider, res);
+        return options.returnRaw ? parsed : (parsed.content || '');
       } catch (err) {
         lastError = err;
-        if (this.aborted) throw lastError;
         console.warn(`[LifeAiCode] LLM 请求失败 (${attempt + 1}/${this.maxRetries}):`, err.message);
+        if (this._isAborted(options.signal)) throw this._createAbortError();
+        if (err.isAbort) throw err;
         if (attempt < this.maxRetries - 1) {
-          await this._sleep(Math.pow(2, attempt) * 1000);
+          await this._sleep(500 * (attempt + 1));
         }
       }
     }
-    throw lastError || new Error('LLM 请求失败');
+    throw lastError;
   }
 
   /**
    * 发送聊天请求（流式）
+   * @param {Array} messages
+   * @param {object} options { systemPrompt?, tools?, tool_choice?, returnRaw?, signal? }
    * @returns {Promise<string|{content:string,toolCalls:Array}>} 默认返回 content 字符串；options.returnRaw=true 时返回对象
+   *
+   * 注意：流式过程会持续 emit 'token' 事件（每个 delta），end 时 emit 'end'。
+   * 最终返回值仅在所有 chunks 处理完后由 Promise resolve。
    */
   async chatStream(messages, options = {}) {
-    this.resetAbort();
     const provider = PROVIDERS[this.provider];
     if (!provider) throw new Error(`不支持的 Provider: ${this.provider}`);
 
@@ -266,6 +288,7 @@ class LlmClient extends EventEmitter {
 
     let lastError = null;
     for (let attempt = 0; attempt < this.maxRetries; attempt++) {
+      if (this._isAborted(options.signal)) throw this._createAbortError();
       try {
         const result = await this._httpStreamRequest(url.toString(), {
           method: 'POST',
@@ -273,21 +296,21 @@ class LlmClient extends EventEmitter {
           body: JSON.stringify(body),
           timeout: this.timeout,
         }, options);
-        if (this.aborted) throw this._createAbortError();
+        if (this._isAborted(options.signal)) throw this._createAbortError();
         if (options.returnRaw) return result;
-        // _httpStreamRequest 在 returnRaw=false 时返回 content 字符串
-        if (typeof result === 'string') return result;
-        return result.content || '';
+        // 非 raw 模式返回 content 字符串
+        return typeof result === 'string' ? result : (result.content || '');
       } catch (err) {
         lastError = err;
-        if (this.aborted) throw lastError;
         console.warn(`[LifeAiCode] 流式请求失败 (${attempt + 1}/${this.maxRetries}):`, err.message);
+        if (this._isAborted(options.signal)) throw this._createAbortError();
+        if (err.isAbort) throw err;
         if (attempt < this.maxRetries - 1) {
-          await this._sleep(Math.pow(2, attempt) * 1000);
+          await this._sleep(500 * (attempt + 1));
         }
       }
     }
-    throw lastError || new Error('LLM 流式请求失败');
+    throw lastError;
   }
 
   _getRequestUrl(provider) {
@@ -402,6 +425,21 @@ class LlmClient extends EventEmitter {
       };
 
       console.log(`[LifeAiCode] 流式请求: ${options.method} ${urlString}`);
+
+      // 处理外部 signal 中止
+      const signal = requestOptions.signal;
+      if (signal) {
+        if (signal.aborted) {
+          reject(this._createAbortError());
+          return;
+        }
+        signal.addEventListener('abort', () => {
+          if (!req.destroyed) {
+            try { req.destroy(); } catch { /* ignore */ }
+          }
+          reject(this._createAbortError());
+        }, { once: true });
+      }
 
       const req = requester.request(reqOptions, (res) => {
         this.activeRequest = req;
@@ -533,7 +571,7 @@ class LlmClient extends EventEmitter {
     });
   }
 
-  _httpRequest(urlString, options) {
+  _httpRequest(urlString, options, requestOptions = {}) {
     return new Promise((resolve, reject) => {
       const url = new URL(urlString);
       const isHttps = url.protocol === 'https:';
@@ -549,6 +587,21 @@ class LlmClient extends EventEmitter {
       };
 
       console.log(`[LifeAiCode] 非流式请求: ${options.method} ${urlString}`);
+
+      // 处理外部 signal 中止
+      const signal = requestOptions.signal;
+      if (signal) {
+        if (signal.aborted) {
+          reject(this._createAbortError());
+          return;
+        }
+        signal.addEventListener('abort', () => {
+          if (!req.destroyed) {
+            try { req.destroy(); } catch { /* ignore */ }
+          }
+          reject(this._createAbortError());
+        }, { once: true });
+      }
 
       const req = requester.request(reqOptions, (res) => {
         this.activeRequest = req;
