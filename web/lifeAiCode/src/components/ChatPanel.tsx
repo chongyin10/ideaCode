@@ -7,7 +7,7 @@ import { AgentModeToggle } from './agent/AgentModeToggle';
 import { AgentStatusBar } from './agent/AgentStatusBar';
 import { ToolCallLog } from './agent/ToolCallLog';
 import { DiffConfirmDialog } from './agent/DiffConfirmDialog';
-import { ShieldCheck, Brain, ArrowDown, User, Sparkles, Paperclip, Send, MessageSquare, Loader2, Check } from 'lucide-react';
+import { ShieldCheck, Brain, ArrowDown, User, Sparkles, Paperclip, Send, MessageSquare, Loader2, Check, Square } from 'lucide-react';
 
 /** 预处理：检测并补齐未闭合的 markdown 结构（供 chatResponse 处理时使用） */
 function preprocessMarkdown(content: string): { processed: string; incomplete: boolean; reasons: string[] } {
@@ -797,12 +797,18 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
                 <ShieldCheck size={15} strokeWidth={1.8} />
               </button>
               <button
-                className="input-send"
-                onClick={() => sendMessage(input)}
-                disabled={!input.trim() || isProcessing}
-                title="发送"
+                className={`input-send ${isProcessing ? 'input-send--stop' : ''}`}
+                onClick={() => {
+                  if (isProcessing) {
+                    vscode?.postMessage({ command: 'abortGeneration' } as WebViewRequest);
+                  } else {
+                    sendMessage(input);
+                  }
+                }}
+                disabled={!isProcessing && !input.trim()}
+                title={isProcessing ? '停止生成' : '发送'}
               >
-                <Send size={15} strokeWidth={2} />
+                {isProcessing ? <Square size={15} strokeWidth={2} fill="currentColor" /> : <Send size={15} strokeWidth={2} />}
               </button>
             </div>
           </div>

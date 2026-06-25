@@ -56,6 +56,21 @@ export function ConfigPanel({
             ? { ...prev, verified: msg.success, connectionStatus: status }
             : prev
         );
+      } else if (msg?.type === 'hostStopped' && testingId) {
+        // Extension Host 重启/退出时，重置当前测试状态
+        setTestingId(null);
+        const status: LlmConfig['connectionStatus'] = 'error';
+        const message = 'Extension Host 已重启，请重新测试连接';
+        setTestResult({ success: false, message, configId: testingId });
+        const next = configsRef.current.map((c) =>
+          c.id === testingId ? { ...c, verified: false, connectionStatus: status } : c
+        );
+        onConfigsChangeRef.current(next);
+        setEditing((prev) =>
+          prev && prev.id === testingId
+            ? { ...prev, verified: false, connectionStatus: status }
+            : prev
+        );
       }
     };
     window.addEventListener('message', handler);

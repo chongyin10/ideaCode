@@ -19,7 +19,7 @@ import path from 'path';
 import type { Store } from '@reduxjs/toolkit';
 import type { RootState } from '../store';
 import { openFile, openVirtualFile, addWorkspaceFolder, removeWorkspaceFolder, setFileContent, markFileSaved, toggleAiEditMode } from '../store/slices/workspaceSlice';
-import { addPanelToOrder, removePanelFromOrder, registerDockableItem, unregisterDockableItem, switchPanel } from '../store/slices/layoutSlice';
+import { addPanelToOrder, removePanelFromOrder, registerDockableItem, unregisterDockableItem, switchPanel, switchRightItem } from '../store/slices/layoutSlice';
 import { readFile as fsReadFile, writeFile as fsWriteFile, isPath } from '../services/fileService';
 import { getMonacoEditorActions } from '../services/monacoEditorBridge';
 import { getPluginManager } from './core';
@@ -401,8 +401,19 @@ export class ExtensionBridge {
 
     this.rpcHandlers.set('webview.reveal', (params) => {
       const { id } = params as { id: string };
-      // 切换面板显示
-      this.store.dispatch(switchPanel(id));
+      const state = this.store.getState();
+      const webview = state.extensionUI.webviewPanels.find((p) => p.id === id);
+      if (webview) {
+        // 找到该 WebView 所属的 view container，并切换到右侧面板对应标签
+        const view = state.extensionUI.views.find((v) => v.id === webview.viewType);
+        const containerId = view?.containerId;
+        const rightItem = state.layout.dockableItems.find(
+          (i) => i.location === 'right' && i.sourceContainerId === containerId
+        );
+        if (rightItem) {
+          this.store.dispatch(switchRightItem(rightItem.id));
+        }
+      }
       return { revealed: true };
     });
 

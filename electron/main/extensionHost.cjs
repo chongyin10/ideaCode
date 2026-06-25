@@ -150,8 +150,9 @@ class ExtensionHostManager {
           // 只关心扩展相关文件（.js / .cjs / .json）
           if (!/\.(js|cjs|json)$/i.test(filename)) return;
           const rel = path.relative(dir, path.join(dir, filename));
-          // 排除 node_modules / webview / dist
+          // 排除 node_modules / webview / dist / 扩展运行时数据文件
           if (rel.startsWith('node_modules') || rel.startsWith('webview') || rel.startsWith('webview-dist') || rel.startsWith('.')) return;
+          if (/\.lifeAiCode-config\.json$/i.test(filename)) return;
           console.log(`[ExtensionHost] 检测到文件变化: ${eventType} ${path.join(dir, filename)}`);
           this.scheduleRestart(400, 'file-change');
         });

@@ -2362,6 +2362,13 @@ body {
   transform: none;
   box-shadow: none;
 }
+.input-send--stop {
+  background: var(--error-500, #ef4444);
+}
+.input-send--stop:hover {
+  background: var(--error-600, #dc2626);
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.35);
+}
 
 /* ════════════════════════════════════════════════════════════════ */
 /*  Header Bar (KiloCode-style icon row)                            */

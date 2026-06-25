@@ -351,6 +351,7 @@ async function processMessage(text, context, options = {}) {
 
     // 4. 调用 LLM（先尝试流式，失败回退非流式）
     let fullResponse = '';
+    let aborted = false;
     try {
       // 避免多次对话后 token 监听器累积
       llmClient.removeAllListeners('token');
@@ -370,9 +371,23 @@ async function processMessage(text, context, options = {}) {
       });
       fullResponse = await llmClient.chatStream(messages);
     } catch (streamErr) {
-      console.warn('[LifeAiCode] 流式请求失败, 回退到非流式:', streamErr.message);
-      const resp = await llmClient.chat(messages);
-      fullResponse = continueFromContent ? continueFromContent + resp : resp;
+      if (streamErr.isAbort) {
+        aborted = true;
+      } else {
+        console.warn('[LifeAiCode] 流式请求失败, 回退到非流式:', streamErr.message);
+        const resp = await llmClient.chat(messages);
+        fullResponse = continueFromContent ? continueFromContent + resp : resp;
+      }
+    }
+
+    if (aborted) {
+      postToWebView({
+        type: 'chatResponse',
+        id: msgId,
+        content: fullResponse ? `${fullResponse}\n\n> ⏹ 已停止生成` : '> ⏹ 已停止生成',
+        done: true,
+      });
+      return;
     }
 
     console.log('[LifeAiCode] LLM 响应长度:', fullResponse.length, '字符');
@@ -405,13 +420,22 @@ async function processMessage(text, context, options = {}) {
       }
     }
   } catch (err) {
-    console.error('[LifeAiCode] LLM 请求失败:', err.message);
-    postToWebView({
-      type: 'chatResponse',
-      id: msgId,
-      content: `❌ **错误**: ${err.message}\n\n请检查:\n1. API Key 是否正确配置\n2. 网络连接是否正常\n3. Provider 服务是否可用`,
-      done: true,
-    });
+    if (err.isAbort) {
+      postToWebView({
+        type: 'chatResponse',
+        id: msgId,
+        content: fullResponse ? `${fullResponse}\n\n> ⏹ 已停止生成` : '> ⏹ 已停止生成',
+        done: true,
+      });
+    } else {
+      console.error('[LifeAiCode] LLM 请求失败:', err.message);
+      postToWebView({
+        type: 'chatResponse',
+        id: msgId,
+        content: `❌ **错误**: ${err.message}\n\n请检查:\n1. API Key 是否正确配置\n2. 网络连接是否正常\n3. Provider 服务是否可用`,
+        done: true,
+      });
+    }
   } finally {
     isProcessing = false;
   }
@@ -486,18 +510,32 @@ async function runAgentTask(text, context, options = {}) {
       done: true,
     });
   } catch (err) {
-    console.error('[LifeAiCode][Agent] 任务失败:', err.message);
-    postToWebView({
-      type: 'chatResponse',
-      id: msgId,
-      content: `❌ **Agent 任务失败**: ${err.message}`,
-      done: true,
-    });
-    postToWebView({
-      type: 'agentStatus',
-      status: 'error',
-      message: err.message,
-    });
+    if (err.isAbort) {
+      postToWebView({
+        type: 'chatResponse',
+        id: msgId,
+        content: '> ⏹ Agent 任务已停止',
+        done: true,
+      });
+      postToWebView({
+        type: 'agentStatus',
+        status: 'cancelled',
+        message: 'Agent 任务已停止',
+      });
+    } else {
+      console.error('[LifeAiCode][Agent] 任务失败:', err.message);
+      postToWebView({
+        type: 'chatResponse',
+        id: msgId,
+        content: `❌ **Agent 任务失败**: ${err.message}`,
+        done: true,
+      });
+      postToWebView({
+        type: 'agentStatus',
+        status: 'error',
+        message: err.message,
+      });
+    }
   } finally {
     isProcessing = false;
   }
@@ -796,10 +834,12 @@ async function activate(context) {
           timeout: 10000,
         });
         const result = await testClient.chat([{ role: 'user', content: '回复 "ok" 表示连接正常' }]);
+        const cleanResult = String(result || '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+        const preview = cleanResult.slice(0, 30);
         postToWebView({
           type: 'connectionTestResult',
           success: true,
-          message: `连接成功！响应: ${result.slice(0, 100)}`,
+          message: preview ? `连接成功（模型返回: ${preview}${cleanResult.length > 30 ? '…' : ''}）` : '连接成功',
         });
       } catch (err) {
         postToWebView({
@@ -982,10 +1022,12 @@ async function activate(context) {
               timeout: 10000,
             });
             const result = await testClient.chat([{ role: 'user', content: '回复 "ok" 表示连接正常' }]);
+            const cleanResult = String(result || '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+            const preview = cleanResult.slice(0, 30);
             postToWebView({
               type: 'connectionTestResult',
               success: true,
-              message: `✅ 连接成功！响应: ${result.slice(0, 120)}`,
+              message: preview ? `✅ 连接成功（模型返回: ${preview}${cleanResult.length > 30 ? '…' : ''}）` : '✅ 连接成功',
               configId: testConfig.id,
             });
           } catch (err) {
@@ -1017,10 +1059,14 @@ async function activate(context) {
           }
           break;
         }
-        case 'cancelAgent': {
+        case 'cancelAgent':
+        case 'abortGeneration': {
           if (agentRuntime) {
             agentRuntime.cancel();
             postToWebView({ type: 'agentStatus', status: 'cancelled', message: 'Agent 任务已取消' });
+          }
+          if (llmClient) {
+            llmClient.abort();
           }
           break;
         }

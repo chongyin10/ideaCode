@@ -85,10 +85,10 @@ const PROVIDERS = {
     }),
   },
   MiniMax: {
-    baseUrl: 'https://api.MiniMax.chat/v1',
+    baseUrl: 'https://api.minimaxi.com/v1',
     chatPath: '/chat/completions',
-    models: ['MiniMax-Text-01', 'MiniMax-Text-01-32K', 'MiniMax-Text-01-128K', 'abab6.5s-chat', 'abab6.5-chat'],
-    defaultModel: 'MiniMax-Text-01',
+    models: ['MiniMax-M3', 'MiniMax-Text-01', 'MiniMax-Text-01-32K', 'MiniMax-Text-01-128K', 'abab6.5s-chat', 'abab6.5-chat'],
+    defaultModel: 'MiniMax-M3',
     headers: (apiKey) => ({
       'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
@@ -126,6 +126,30 @@ class LlmClient extends EventEmitter {
     this.timeout = options.timeout || 30000;
     this.maxRetries = options.maxRetries || 3;
     this.systemPrompt = options.systemPrompt || this._defaultSystemPrompt();
+    /** @type {import('http').ClientRequest|null} */
+    this.activeRequest = null;
+    this.aborted = false;
+  }
+
+  /**
+   * 中止当前正在进行的请求
+   */
+  abort() {
+    this.aborted = true;
+    if (this.activeRequest && !this.activeRequest.destroyed) {
+      this.activeRequest.destroy();
+      this.activeRequest = null;
+    }
+  }
+
+  resetAbort() {
+    this.aborted = false;
+  }
+
+  _createAbortError() {
+    const err = new Error('请求已中止');
+    err.isAbort = true;
+    return err;
   }
 
   /**
@@ -196,6 +220,7 @@ class LlmClient extends EventEmitter {
    * @returns {string|{content:string,toolCalls:Array}} 默认返回 content 字符串；options.returnRaw=true 时返回对象
    */
   async chat(messages, options = {}) {
+    this.resetAbort();
     const provider = PROVIDERS[this.provider];
     if (!provider) throw new Error(`不支持的 Provider: ${this.provider}`);
 
@@ -211,11 +236,13 @@ class LlmClient extends EventEmitter {
           body: JSON.stringify(body),
           timeout: this.timeout,
         });
+        if (this.aborted) throw this._createAbortError();
         const parsed = this._parseResponse(provider, response);
         if (options.returnRaw) return parsed;
         return parsed.content || '';
       } catch (err) {
         lastError = err;
+        if (this.aborted) throw lastError;
         console.warn(`[LifeAiCode] LLM 请求失败 (${attempt + 1}/${this.maxRetries}):`, err.message);
         if (attempt < this.maxRetries - 1) {
           await this._sleep(Math.pow(2, attempt) * 1000);
@@ -230,6 +257,7 @@ class LlmClient extends EventEmitter {
    * @returns {Promise<string|{content:string,toolCalls:Array}>} 默认返回 content 字符串；options.returnRaw=true 时返回对象
    */
   async chatStream(messages, options = {}) {
+    this.resetAbort();
     const provider = PROVIDERS[this.provider];
     if (!provider) throw new Error(`不支持的 Provider: ${this.provider}`);
 
@@ -245,12 +273,14 @@ class LlmClient extends EventEmitter {
           body: JSON.stringify(body),
           timeout: this.timeout,
         }, options);
+        if (this.aborted) throw this._createAbortError();
         if (options.returnRaw) return result;
         // _httpStreamRequest 在 returnRaw=false 时返回 content 字符串
         if (typeof result === 'string') return result;
         return result.content || '';
       } catch (err) {
         lastError = err;
+        if (this.aborted) throw lastError;
         console.warn(`[LifeAiCode] 流式请求失败 (${attempt + 1}/${this.maxRetries}):`, err.message);
         if (attempt < this.maxRetries - 1) {
           await this._sleep(Math.pow(2, attempt) * 1000);
@@ -265,7 +295,10 @@ class LlmClient extends EventEmitter {
     if (!base) {
       throw new Error('Base URL 未配置，请在配置面板填写');
     }
-    return new URL(provider.chatPath, base);
+    // 保证 baseUrl 末尾有斜杠，且 chatPath 是相对路径，避免 /v1 被覆盖
+    const normalizedBase = base.endsWith('/') ? base : `${base}/`;
+    const chatPath = provider.chatPath.startsWith('/') ? provider.chatPath.slice(1) : provider.chatPath;
+    return new URL(chatPath, normalizedBase);
   }
 
   _buildRequestBody(provider, messages, stream, options = {}) {
@@ -371,6 +404,7 @@ class LlmClient extends EventEmitter {
       console.log(`[LifeAiCode] 流式请求: ${options.method} ${urlString}`);
 
       const req = requester.request(reqOptions, (res) => {
+        this.activeRequest = req;
         // 检查 HTTP 状态码，非 2xx 时直接拒绝
         if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
           let errorData = '';
@@ -480,15 +514,20 @@ class LlmClient extends EventEmitter {
             : fullContent);
         });
 
-        res.on('error', reject);
+        res.on('error', (err) => {
+          reject(this.aborted ? this._createAbortError() : err);
+        });
       });
 
-      req.on('error', reject);
+      req.on('error', (err) => {
+        reject(this.aborted ? this._createAbortError() : err);
+      });
       req.on('timeout', () => {
         req.destroy();
         reject(new Error('LLM 请求超时'));
       });
 
+      this.activeRequest = req;
       if (options.body) req.write(options.body);
       req.end();
     });
@@ -512,24 +551,34 @@ class LlmClient extends EventEmitter {
       console.log(`[LifeAiCode] 非流式请求: ${options.method} ${urlString}`);
 
       const req = requester.request(reqOptions, (res) => {
+        this.activeRequest = req;
         let data = '';
         res.on('data', (chunk) => (data += chunk.toString()));
         res.on('end', () => {
+          if (this.aborted) {
+            reject(this._createAbortError());
+            return;
+          }
           if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
             resolve(data);
           } else {
             reject(new Error(`LLM API 错误 ${res.statusCode}: ${data.slice(0, 500)}`));
           }
         });
-        res.on('error', reject);
+        res.on('error', (err) => {
+          reject(this.aborted ? this._createAbortError() : err);
+        });
       });
 
-      req.on('error', reject);
+      req.on('error', (err) => {
+        reject(this.aborted ? this._createAbortError() : err);
+      });
       req.on('timeout', () => {
         req.destroy();
         reject(new Error('LLM 请求超时'));
       });
 
+      this.activeRequest = req;
       if (options.body) req.write(options.body);
       req.end();
     });

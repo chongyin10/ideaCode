@@ -168,10 +168,10 @@ export const PROVIDER_META: Record<ProviderType, {
   MiniMax: {
     label: 'MiniMax',
     icon: '🐙',
-    defaultModel: 'MiniMax-Text-01',
-    baseUrl: 'https://api.MiniMax.chat/v1',
-    models: ['MiniMax-Text-01', 'MiniMax-Text-01-32K', 'MiniMax-Text-01-128K', 'abab6.5s-chat', 'abab6.5-chat'],
-    docsUrl: 'https://api.MiniMax.chat/document',
+    defaultModel: 'MiniMax-M3',
+    baseUrl: 'https://api.minimaxi.com/v1',
+    models: ['MiniMax-M3', 'MiniMax-Text-01', 'MiniMax-Text-01-32K', 'MiniMax-Text-01-128K', 'abab6.5s-chat', 'abab6.5-chat'],
+    docsUrl: 'https://platform.minimaxi.com/docs/token-plan/codex',
     placeholder: 'API Key',
     color: '#6366f1',
   },
@@ -260,6 +260,7 @@ export type WebViewRequest =
   | { command: 'toggleEditMode' }
   | { command: 'executeShell'; id: string; shellCommand: string; cwd?: string }
   | { command: 'cancelAgent' }
+  | { command: 'abortGeneration' }
   | { command: 'confirmAgentEdit'; editId: string }
   | { command: 'rejectAgentEdit'; editId: string };
 
