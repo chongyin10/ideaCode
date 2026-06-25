@@ -257,7 +257,7 @@ function CodeBlock({ language, children, onExecuteShell, shellOutputs }: CodeBlo
               <button
                 className={`codeblock-run-btn ${shellResult ? `codeblock-run-btn--${shellResult.status}` : ''}`}
                 onClick={handleRun}
-                title="在 IDE 终端执行此命令"
+                title="在聊天窗口内执行（不弹出 IDE 终端）"
                 disabled={shellResult?.status === 'running'}
               >
                 {shellResult?.status === 'running' ? '执行中…' :
@@ -355,7 +355,13 @@ export function MarkdownContent({
     }
   }, [enableOptions, processed, onOptionClick]);
 
-  const markdownComponents = useMemo(() => ({
+  // 注意：这里不使用 useMemo，因为 ReactMarkdown 在 markdown 文本不变时
+  // 会跳过子组件的重新渲染。如果把 shellOutputs 放在 useMemo 的 deps 里，
+  // useMemo 确实会重算 components 对象，但 ReactMarkdown 不会重新调用子渲染器，
+  // 导致 shellOutputs 的更新无法传递到 CodeBlock。
+  // 这里直接定义对象（每次 MarkdownContent 渲染时重建），ReactMarkdown 会
+  // 因为 components 引用变化而触发子组件重新渲染，shellOutputs 变更能正确传递。
+  const markdownComponents: any = {
     code({ node, inline, className, children, ...props }: any) {
       const match = /language-(\w+)/.exec(className || '');
       const language = match ? match[1] : undefined;
@@ -408,7 +414,7 @@ export function MarkdownContent({
     strong({ node, ...props }: any) { return <strong {...props} />; },
     em({ node, ...props }: any) { return <em {...props} />; },
     del({ node, ...props }: any) { return <del {...props} />; },
-  }), [onExecuteShell, shellOutputs]);
+  };
 
   const finalText = optionList ? optionList.preText : processed;
 

@@ -1,4 +1,5 @@
 const { fork } = require('child_process');
+const fs = require('fs');
 const path = require('path');
 const { Channels } = require('../shared/channels.cjs');
 
@@ -28,6 +29,14 @@ class ExtensionHostManager {
     this.rendererRequestId = 0;
     /** @type {Map<number, {resolve: Function, reject: Function}>} */
     this.pendingRendererRequests = new Map();
+    /** 是否在用户主动停止时（避免热重启循环） */
+    this.stopping = false;
+    /** 文件监听器（dev 模式用） */
+    this.fileWatcher = null;
+    /** 文件变化防抖定时器 */
+    this.restartTimer = null;
+    /** 监视的扩展目录列表（按扩展 id） */
+    this.watchedDirs = new Set();
   }
 
   /**
@@ -57,11 +66,11 @@ class ExtensionHostManager {
 
     this.hostProcess.on('error', (err) => {
       console.error('[ExtensionHost] 进程错误:', err);
-      this.restart();
+      if (!this.stopping) this.scheduleRestart(1000, 'error');
     });
 
-    this.hostProcess.on('exit', (code) => {
-      console.log(`[ExtensionHost] 进程退出，代码: ${code}`);
+    this.hostProcess.on('exit', (code, signal) => {
+      console.log(`[ExtensionHost] 进程退出，代码: ${code} signal: ${signal || 'none'}`);
       this.isRunning = false;
       this.hostProcess = null;
       // 通知所有渲染进程扩展宿主已停止
@@ -69,10 +78,141 @@ class ExtensionHostManager {
         type: 'hostStopped',
         code,
       });
+
+      // 主动停止时（用户调用 stop）不再自启
+      // 非主动退出 → 自动重启（dev 模式开发体验）
+      if (!this.stopping) {
+        this.scheduleRestart(800, 'unexpected-exit');
+      }
     });
 
     this.isRunning = true;
+    this.stopping = false;
     console.log('[ExtensionHost] 扩展宿主进程已启动');
+
+    // 启动 dev 模式文件监视
+    this.startFileWatchers();
+  }
+
+  /**
+   * 设置 dev 模式文件监视：扩展源文件变化时自动重启 Extension Host
+   */
+  startFileWatchers() {
+    if (this.fileWatcher) return; // 已经启动过
+    if (process.env.NODE_ENV === 'production' || process.env.LIFEAICODE_DISABLE_HOTRELOAD === '1') {
+      console.log('[ExtensionHost] 生产模式或显式禁用，跳过文件监视');
+      return;
+    }
+    // 显式启用（默认就是开启的）
+    if (process.env.LIFEAICODE_HOTRELOAD === '0') {
+      console.log('[ExtensionHost] 显式禁用热重启 (LIFEAICODE_HOTRELOAD=0)');
+      return;
+    }
+
+    // 默认监视整个 extensions 目录
+    const extensionsDir = path.resolve(__dirname, '..', '..', 'extensions');
+    this._addWatchDir(extensionsDir);
+
+    // 启动聚合后的 fs.watch
+    this._setupAggregateWatcher();
+  }
+
+  /**
+   * 记录要监视的目录
+   */
+  _addWatchDir(dir) {
+    if (this.watchedDirs.has(dir)) return;
+    this.watchedDirs.add(dir);
+    console.log(`[ExtensionHost] 加入监视: ${dir}`);
+  }
+
+  /**
+   * 启动聚合的 fs.watch
+   */
+  _setupAggregateWatcher() {
+    if (this.fileWatcher) return;
+
+    // fs.watch 跨平台表现：
+    // - macOS / Windows：recursive: true 有效
+    // - Linux：Node 20+ 支持 recursive
+    // 兼容回退：每个目录单独 watch
+    this.fileWatcher = { dirs: new Map() };
+
+    const startWatch = (dir) => {
+      if (this.fileWatcher.dirs.has(dir)) return;
+      try {
+        const opts = { persistent: true };
+        if (process.platform !== 'linux' || parseInt(process.versions.node) >= 20) {
+          opts.recursive = true;
+        }
+        const w = fs.watch(dir, opts, (eventType, filename) => {
+          if (!filename) return;
+          // 只关心扩展相关文件（.js / .cjs / .json）
+          if (!/\.(js|cjs|json)$/i.test(filename)) return;
+          const rel = path.relative(dir, path.join(dir, filename));
+          // 排除 node_modules / webview / dist
+          if (rel.startsWith('node_modules') || rel.startsWith('webview') || rel.startsWith('webview-dist') || rel.startsWith('.')) return;
+          console.log(`[ExtensionHost] 检测到文件变化: ${eventType} ${path.join(dir, filename)}`);
+          this.scheduleRestart(400, 'file-change');
+        });
+        w.on('error', (err) => {
+          console.error(`[ExtensionHost] 文件监视错误 (${dir}):`, err.message);
+        });
+        this.fileWatcher.dirs.set(dir, w);
+      } catch (err) {
+        console.error(`[ExtensionHost] 启动监视失败 (${dir}):`, err.message);
+      }
+    };
+
+    // 为已记录的目录逐个启动
+    for (const dir of this.watchedDirs) {
+      startWatch(dir);
+    }
+
+    // 关闭时清理
+    this._stopAggregateWatcher = () => {
+      if (this.fileWatcher) {
+        for (const w of this.fileWatcher.dirs.values()) {
+          try { w.close(); } catch { /* ignore */ }
+        }
+        this.fileWatcher = null;
+      }
+    };
+  }
+
+  /**
+   * 防抖重启：合并短时间内的多次变化
+   */
+  scheduleRestart(delayMs, reason) {
+    if (this.stopping) return;
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+    }
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = null;
+      if (this.isRunning) {
+        console.log(`[ExtensionHost] 热重启 (${reason})`);
+        this._killAndRestart();
+      } else {
+        console.log(`[ExtensionHost] 重启 (${reason})`);
+        this.start();
+      }
+    }, delayMs);
+  }
+
+  _killAndRestart() {
+    if (!this.hostProcess) {
+      this.start();
+      return;
+    }
+    this.stopping = true;
+    const proc = this.hostProcess;
+    try { proc.kill('SIGTERM'); } catch { /* ignore */ }
+    // 兜底：2 秒后强杀
+    setTimeout(() => {
+      try { if (!proc.killed) proc.kill('SIGKILL'); } catch { /* ignore */ }
+    }, 2000);
+    // exit 事件会自动清理 isRunning/hostProcess
   }
 
   /**
@@ -80,6 +220,17 @@ class ExtensionHostManager {
    */
   stop() {
     if (!this.hostProcess) return;
+
+    this.stopping = true;
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
+    if (this._stopAggregateWatcher) {
+      this._stopAggregateWatcher();
+      this._stopAggregateWatcher = null;
+    }
+    this.watchedDirs.clear();
 
     // 优雅关闭：发送退出信号
     this.sendRpc('host.shutdown', {});
@@ -94,6 +245,7 @@ class ExtensionHostManager {
 
   /**
    * 重启扩展宿主进程
+   * @deprecated 用 scheduleRestart() 代替，文件变化会通过防抖自动触发
    */
   restart() {
     this.stop();

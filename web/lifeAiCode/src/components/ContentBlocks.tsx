@@ -534,7 +534,7 @@ function ToolCall({
         <span className="tool-call-icon">
           <Terminal size={14} strokeWidth={1.8} />
         </span>
-        <span className="tool-call-title" title={command}>
+        <span className="tool-call-title" title={`在聊天内执行：${command}`}>
           <span className="tool-call-title__prompt">$</span>
           <span className="tool-call-title__cmd">{command}</span>
         </span>

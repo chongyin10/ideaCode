@@ -21,6 +21,15 @@ export type FileStatus = 'modified' | 'created' | 'deleted';
 export type StepStatus = 'running' | 'done' | 'error';
 export type StepType = 'read' | 'think' | 'agent' | 'edit' | 'run';
 
+export interface ToolCallInfo {
+  tool: string;
+  args: Record<string, unknown>;
+  status: 'running' | 'success' | 'error';
+  duration?: number;
+  summary?: string;
+  result?: Record<string, unknown>;
+}
+
 export type ContentBlock =
   | { type: 'text'; content: string }
   | { type: 'reasoning'; content: string }
@@ -236,7 +245,7 @@ export function getConnectionStatusText(status?: LlmConfig['connectionStatus'], 
 /* ─── WebView 消息 ─── */
 
 export type WebViewRequest =
-  | { command: 'sendMessage'; text: string; context: CodeContext; thinkingEnabled?: boolean }
+  | { command: 'sendMessage'; text: string; context: CodeContext; thinkingEnabled?: boolean; agentMode?: boolean }
   | { command: 'continueMessage'; messageId: string; continueFromContent: string }
   | { command: 'acceptSuggestion'; suggestionId: string }
   | { command: 'rejectSuggestion'; suggestionId: string }
@@ -249,7 +258,10 @@ export type WebViewRequest =
   | { command: 'switchConfig'; configId: string }
   | { command: 'requestConfig' }
   | { command: 'toggleEditMode' }
-  | { command: 'executeShell'; id: string; shellCommand: string; cwd?: string };
+  | { command: 'executeShell'; id: string; shellCommand: string; cwd?: string }
+  | { command: 'cancelAgent' }
+  | { command: 'confirmAgentEdit'; editId: string }
+  | { command: 'rejectAgentEdit'; editId: string };
 
 export type ExtensionMessage =
   | { type: 'chatResponse'; id: string; content: string; done: boolean }
@@ -262,8 +274,12 @@ export type ExtensionMessage =
   | { type: 'newChat' }
   | { type: 'openConfig' }
   | { type: 'showHistory' }
-  | { type: 'shellUpdate'; id: string; shellCommand: string; output: string; status: 'running' | 'success' | 'error' }
+  | { type: 'shellUpdate'; id: string; shellCommand: string; output: string; status: 'running' | 'success' | 'error'; exitCode?: number; signal?: string }
   | { type: 'notice'; level: 'info' | 'success' | 'warning' | 'error'; message: string; suggestionId?: string }
+  | { type: 'toolCall'; tool: string; args: Record<string, unknown>; status: 'running' | 'success' | 'error'; duration?: number; summary?: string; result?: Record<string, unknown> }
+  | { type: 'agentStatus'; status: 'running' | 'done' | 'error' | 'cancelled'; message: string }
+  | { type: 'agentEditPending'; editId: string; filePath: string; original: string; modified: string }
+  | { type: 'agentEditStatus'; editId: string; status: 'applied' | 'rejected' }
   | { type: 'error'; message: string };
 
 /* ─── VSCode API 类型 ─── */

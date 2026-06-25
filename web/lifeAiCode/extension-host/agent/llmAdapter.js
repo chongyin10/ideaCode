@@ -1,0 +1,233 @@
+/**
+ * LLM Adapter for Agent
+ *
+ * 包装 LlmClient，提供：
+ * 1. Agent 专用 system prompt（含 tool schema）
+ * 2. Prompt-based <tool_call> 标签解析
+ * 3. Native tool_calls 支持（OpenAI 兼容 Provider）
+ * 4. 结果回传 message 组装
+ */
+
+const { formatToolSchemasForPrompt, getToolSchemas } = require('./toolSchema');
+
+// 支持原生 function calling 的 Provider（OpenAI 兼容格式）
+const NATIVE_TOOL_PROVIDERS = new Set([
+  'openai', 'deepseek', 'glm', 'qwen', 'kimi', 'MiniMax', 'doubao', 'custom',
+]);
+
+class LlmAdapter {
+  constructor(llmClient) {
+    this.llmClient = llmClient;
+  }
+
+  /**
+   * 当前 Provider 是否支持原生 tool_calls
+   */
+  supportsNativeToolCalling() {
+    if (!this.llmClient) return false;
+    return NATIVE_TOOL_PROVIDERS.has(this.llmClient.provider);
+  }
+
+  /**
+   * 构建 Agent 专用 system prompt
+   */
+  buildAgentSystemPrompt(useNativeTools = false) {
+    const toolSchemas = formatToolSchemasForPrompt();
+    if (useNativeTools) {
+      return `你是 LifeAiCode Agent，运行在 IDEACODE IDE 中。你可以调用工具完成用户任务。
+
+## 核心原则
+- 你只能读取、搜索、执行命令或生成修改建议，不会直接修改文件。
+- 修改文件前，必须先调用 read_file 读取当前内容，再调用 apply_edit 生成建议。
+- 对于批量修改，先 search_files，再 read_file，再 apply_edit。
+- 你只能访问工作区内的文件和目录。
+- 当你认为任务完成时，输出最终总结。
+
+## 步骤可视化
+在分析过程中可以使用以下标签让 IDE 实时显示进度：
+- 读取文件：<step type="read" target="path/to/file.ts">读取</step>
+- 搜索：<step type="agent" target="search">搜索</step>
+- 运行命令：<step type="run" target="npm run build">运行</step>
+- 编辑文件：<step type="edit" target="path/to/file.ts">编辑</step>
+- 思考：<step type="think">思考</step>`;
+    }
+
+    return `你是 LifeAiCode Agent，运行在 IDEACODE IDE 中。你可以调用工具完成用户任务。
+
+## 核心原则
+- 你只能读取、搜索、执行命令或生成修改建议，不会直接修改文件。
+- 修改文件前必须先调用 read_file 读取当前内容，再调用 apply_edit 生成建议。
+- 对于批量修改，先 search_files，再 read_file，再 apply_edit。
+- 你只能访问工作区内的文件和目录。
+
+## 可用工具
+${toolSchemas}
+
+## 调用规则
+1. 当需要调用工具时，必须且仅输出一个：
+   <tool_call>{"name": "工具名", "arguments": {...}}</tool_call>
+2. 不要输出任何解释、推理或 Markdown，直接输出 <tool_call>。
+3. 工具执行结果会以 <tool_result>...</tool_result> 形式返回，你基于结果继续调用工具或总结。
+4. 当你认为任务完成时，输出最终总结，不要再输出 <tool_call>。
+5. 如果工具执行失败，根据错误信息重试或调整策略。
+
+## 步骤可视化
+在分析过程中可以使用以下标签让 IDE 实时显示进度：
+- 读取文件：<step type="read" target="path/to/file.ts">读取</step>
+- 搜索：<step type="agent" target="search">搜索</step>
+- 运行命令：<step type="run" target="npm run build">运行</step>
+- 编辑文件：<step type="edit" target="path/to/file.ts">编辑</step>
+- 思考：<step type="think">思考</step>`;
+  }
+
+  /**
+   * 将统一 Tool Schema 转换为 OpenAI 兼容的 native tools 格式
+   */
+  toNativeTools() {
+    const schemas = getToolSchemas();
+    return schemas.map((s) => ({
+      type: 'function',
+      function: {
+        name: s.name,
+        description: s.description,
+        parameters: s.parameters,
+      },
+    }));
+  }
+
+  /**
+   * 从 native 响应中解析 tool_calls
+   */
+  parseNativeToolCalls(response) {
+    if (!response || typeof response !== 'object') return null;
+    const toolCalls = response.toolCalls;
+    if (!Array.isArray(toolCalls) || toolCalls.length === 0) return null;
+
+    const tc = toolCalls[0];
+    if (!tc.function || !tc.function.name) return null;
+
+    let args = {};
+    try {
+      args = JSON.parse(tc.function.arguments || '{}');
+    } catch {
+      args = {};
+    }
+
+    return { name: tc.function.name, arguments: args };
+  }
+
+  /**
+   * 发送消息并获取 LLM 回复
+   * @param {Array} messages OpenAI 格式消息数组
+   * @param {object} options { stream?: boolean, onToken?: (token) => void }
+   * @returns {Promise<string>} LLM 原始回复
+   */
+  async chat(messages, options = {}) {
+    if (!this.llmClient) {
+      throw new Error('LLM 客户端未初始化');
+    }
+
+    const useNative = this.supportsNativeToolCalling();
+    const systemPrompt = this.buildAgentSystemPrompt(useNative);
+    const { stream = true, onToken } = options;
+
+    const requestOptions = {
+      systemPrompt,
+      returnRaw: useNative,
+    };
+
+    if (useNative) {
+      requestOptions.tools = this.toNativeTools();
+      requestOptions.tool_choice = 'auto';
+    }
+
+    if (stream && typeof onToken === 'function') {
+      this.llmClient.removeAllListeners('token');
+      this.llmClient.on('token', onToken);
+    }
+
+    try {
+      if (stream) {
+        return await this.llmClient.chatStream(messages, requestOptions);
+      }
+      return await this.llmClient.chat(messages, requestOptions);
+    } catch (err) {
+      throw err;
+    }
+  }
+
+  /**
+   * 从 LLM 回复中解析 tool_call（Prompt-based）
+   * @param {string} content
+   * @returns {object|null} { name, arguments } 或 null
+   */
+  parseToolCall(content) {
+    if (!content || typeof content !== 'string') return null;
+    const match = content.match(/<tool_call>\s*({[\s\S]*?})\s*<\/tool_call>/);
+    if (!match) return null;
+
+    try {
+      const parsed = JSON.parse(match[1]);
+      if (!parsed.name || typeof parsed.name !== 'string') return null;
+      if (!parsed.arguments || typeof parsed.arguments !== 'object') {
+        parsed.arguments = {};
+      }
+      return parsed;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 统一解析 tool_call：优先 native，fallback 到 prompt-based
+   */
+  extractToolCall(response) {
+    if (this.supportsNativeToolCalling() && response && typeof response === 'object') {
+      const native = this.parseNativeToolCalls(response);
+      if (native) return native;
+    }
+    if (typeof response === 'string') {
+      return this.parseToolCall(response);
+    }
+    if (response && typeof response.content === 'string') {
+      return this.parseToolCall(response.content);
+    }
+    return null;
+  }
+
+  /**
+   * 将 tool 结果格式化为 message 追加到对话
+   */
+  buildToolResultMessage(toolName, result, callId = `call-${Date.now()}`) {
+    return {
+      role: 'tool',
+      content: JSON.stringify(result),
+      tool_call_id: callId,
+      name: toolName,
+    };
+  }
+
+  /**
+   * 将 tool_call 格式化为 assistant message 追加到对话（native 格式）
+   */
+  buildToolCallMessage(toolName, args, callId = `call-${Date.now()}`, reasoningContent = '') {
+    const msg = {
+      role: 'assistant',
+      content: '',
+      tool_calls: [{
+        id: callId,
+        type: 'function',
+        function: {
+          name: toolName,
+          arguments: JSON.stringify(args),
+        },
+      }],
+    };
+    if (reasoningContent) {
+      msg.reasoning_content = reasoningContent;
+    }
+    return msg;
+  }
+}
+
+module.exports = { LlmAdapter };

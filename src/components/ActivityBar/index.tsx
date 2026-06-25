@@ -16,7 +16,11 @@ const iconMap: Record<string, LucideIcon> = {
 
 function getLucideIcon(name: string): LucideIcon | null {
   const cleanName = name.replace(/^\$\((.*)\)$/, '$1');
-  const pascal = cleanName.charAt(0).toUpperCase() + cleanName.slice(1);
+  // 支持 git-branch → GitBranch 这类 kebab-case 图标名
+  const pascal = cleanName
+    .split('-')
+    .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
+    .join('');
   return iconMap[pascal] || iconMap[cleanName] || null;
 }
 

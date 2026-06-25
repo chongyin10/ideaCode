@@ -1,9 +1,13 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import type { ChatMessage, Suggestion, CodeContext, WebViewRequest, ExtensionMessage, LlmConfig } from '../types';
+import type { ChatMessage, CodeContext, WebViewRequest, ExtensionMessage, LlmConfig, ToolCallInfo } from '../types';
 import { PROVIDER_META, getConnectionStatusColor } from '../types';
 import { SuggestionList } from './SuggestionList';
 import { ContentBlocks } from './ContentBlocks';
-import { ShieldCheck, Brain, ArrowDown, User, Sparkles, Paperclip, Send, MessageSquare, Loader2, Check, AlertTriangle, RefreshCw } from 'lucide-react';
+import { AgentModeToggle } from './agent/AgentModeToggle';
+import { AgentStatusBar } from './agent/AgentStatusBar';
+import { ToolCallLog } from './agent/ToolCallLog';
+import { DiffConfirmDialog } from './agent/DiffConfirmDialog';
+import { ShieldCheck, Brain, ArrowDown, User, Sparkles, Paperclip, Send, MessageSquare, Loader2, Check } from 'lucide-react';
 
 /** 预处理：检测并补齐未闭合的 markdown 结构（供 chatResponse 处理时使用） */
 function preprocessMarkdown(content: string): { processed: string; incomplete: boolean; reasons: string[] } {
@@ -89,15 +93,6 @@ function historyTitle(messages: ChatMessage[]): string {
     : '空对话';
 }
 
-function formatTime(ts: number): string {
-  const d = new Date(ts);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const now = new Date();
-  const isToday = d.getDate() === now.getDate() && d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-  if (isToday) return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
 interface ChatPanelProps {
   initialContext?: CodeContext;
   isPopup?: boolean;
@@ -121,6 +116,10 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
   const [showHistory, setShowHistory] = useState(false);
   const [shellOutputs, setShellOutputs] = useState<Record<string, { output: string; status: 'running' | 'success' | 'error' }>>({});
   const [notice, setNotice] = useState<{ level: 'info' | 'success' | 'warning' | 'error'; message: string; id: number } | null>(null);
+  const [agentMode, setAgentMode] = useState(false);
+  const [agentStatus, setAgentStatus] = useState<{ status: string; message: string } | null>(null);
+  const [toolCalls, setToolCalls] = useState<ToolCallInfo[]>([]);
+  const [pendingAgentEdit, setPendingAgentEdit] = useState<{ editId: string; filePath: string; original: string; modified: string } | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -150,7 +149,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
     if (!userScrolledUp) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
     }
-  }, [messages, userScrolledUp]);
+  }, [messages, toolCalls, agentStatus, userScrolledUp]);
 
   // 监听滚动，判断用户是否主动离开底部
   useEffect(() => {
@@ -310,6 +309,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
           break;
         }
         case 'shellUpdate': {
+          console.log('[LifeAiCode WebView] shellUpdate received:', { id: msg.id, status: msg.status, outputLen: msg.output?.length });
           setShellOutputs((prev) => ({
             ...prev,
             [msg.id]: { output: msg.output, status: msg.status },
@@ -325,12 +325,47 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
           }, 3000);
           break;
         }
+        case 'agentStatus': {
+          setAgentStatus({ status: msg.status, message: msg.message });
+          if (msg.status === 'done' || msg.status === 'error' || msg.status === 'cancelled') {
+            setIsProcessing(false);
+          }
+          break;
+        }
+        case 'toolCall': {
+          setToolCalls((prev) => {
+            const existingIndex = prev.findIndex((t) => t.tool === msg.tool && JSON.stringify(t.args) === JSON.stringify(msg.args));
+            if (existingIndex >= 0) {
+              const updated = [...prev];
+              updated[existingIndex] = msg;
+              return updated;
+            }
+            return [...prev, msg];
+          });
+          break;
+        }
+        case 'agentEditPending': {
+          setPendingAgentEdit({
+            editId: msg.editId,
+            filePath: msg.filePath,
+            original: msg.original,
+            modified: msg.modified,
+          });
+          break;
+        }
+        case 'agentEditStatus': {
+          if (pendingAgentEdit && pendingAgentEdit.editId === msg.editId) {
+            setPendingAgentEdit(null);
+          }
+          break;
+        }
       }
     };
 
     window.addEventListener('message', handler);
+    console.log('[LifeAiCode WebView] message listener attached');
     return () => window.removeEventListener('message', handler);
-  }, [onOpenConfig, autoAccept]);
+  }, [onOpenConfig, autoAccept, pendingAgentEdit, vscode]);
 
   // 新开对话：保存当前对话到历史，然后清空
   const newChat = useCallback(() => {
@@ -373,6 +408,11 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
     setMessages((prev) => [...prev, userMsg, placeholderMsg]);
     setInput('');
     setIsProcessing(true);
+    // 新 Agent 任务开始时清空上一次的执行记录，避免显示到新的占位消息上
+    if (agentMode) {
+      setAgentStatus(null);
+      setToolCalls([]);
+    }
 
     if (!vscode) {
       setTimeout(() => {
@@ -390,7 +430,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
       return;
     }
 
-    vscode.postMessage({ command: 'sendMessage', text: text.trim(), context, thinkingEnabled } as WebViewRequest);
+    vscode.postMessage({ command: 'sendMessage', text: text.trim(), context, thinkingEnabled, agentMode } as WebViewRequest);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -417,6 +457,24 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
     if (vscode) vscode.postMessage({ command: 'previewDiff', suggestionId } as WebViewRequest);
   };
 
+  const handleConfirmAgentEdit = () => {
+    if (vscode && pendingAgentEdit) {
+      vscode.postMessage({ command: 'confirmAgentEdit', editId: pendingAgentEdit.editId } as WebViewRequest);
+    }
+  };
+
+  const handleRejectAgentEdit = () => {
+    if (vscode && pendingAgentEdit) {
+      vscode.postMessage({ command: 'rejectAgentEdit', editId: pendingAgentEdit.editId } as WebViewRequest);
+    }
+  };
+
+  const handleCancelAgent = () => {
+    if (vscode) {
+      vscode.postMessage({ command: 'cancelAgent' } as WebViewRequest);
+    }
+  };
+
   const contextFile = context?.activeFile?.filePath;
   const fileName = contextFile ? contextFile.split('/').pop() || contextFile : '';
 
@@ -433,7 +491,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
     if (vscode && messages.length >= 2) {
       const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
       if (lastUserMsg) {
-        vscode.postMessage({ command: 'sendMessage', text: lastUserMsg.content, context, thinkingEnabled } as WebViewRequest);
+        vscode.postMessage({ command: 'sendMessage', text: lastUserMsg.content, context, thinkingEnabled, agentMode } as WebViewRequest);
       }
     }
   };
@@ -514,14 +572,41 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
             )}
           </div>
         ) : (
-          messages.map((msg) => {
+          messages.map((msg, index) => {
+            const isLast = index === messages.length - 1;
+            const isLastAssistant = msg.role === 'assistant' && isLast;
+            const showAgentPanel = isLastAssistant && agentMode && (agentStatus !== null || toolCalls.length > 0);
+
             // 占位消息：渲染独立的"准备中"提示（必须在 streaming 过滤之前判断）
             if (msg.placeholder) {
-              return <PreparingPlaceholder key={msg.id} />;
+              return (
+                <div key={msg.id} className="message-row message-row--assistant">
+                  <div className="message-inner">
+                    <div className="message-avatar message-avatar--assistant">
+                      <Sparkles size={16} strokeWidth={2} />
+                    </div>
+                    <div className="message-body">
+                      {showAgentPanel && (
+                        <>
+                          {agentStatus && (
+                            <AgentStatusBar
+                              status={agentStatus.status}
+                              message={agentStatus.message}
+                              onCancel={agentStatus.status === 'running' ? handleCancelAgent : undefined}
+                            />
+                          )}
+                          {agentMode && <ToolCallLog toolCalls={toolCalls} />}
+                        </>
+                      )}
+                      <PreparingPlaceholder />
+                    </div>
+                  </div>
+                </div>
+              );
             }
             // 跳过内容为空且仍在流式传输的 assistant 消息，避免显示空白卡片
             // （真实 chatResponse 第一帧到达但内容仍空时短暂出现）
-            if (msg.role === 'assistant' && !msg.content.trim() && msg.streaming) {
+            if (msg.role === 'assistant' && !msg.content.trim() && msg.streaming && !showAgentPanel) {
               return null;
             }
             return (
@@ -553,6 +638,20 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
                         </>
                       )}
                     </div>
+                  )}
+
+                  {/* Agent 执行过程（嵌入到当前 AI 回复中，保持从上到下的流程） */}
+                  {showAgentPanel && (
+                    <>
+                      {agentStatus && (
+                        <AgentStatusBar
+                          status={agentStatus.status}
+                          message={agentStatus.message}
+                          onCancel={agentStatus.status === 'running' ? handleCancelAgent : undefined}
+                        />
+                      )}
+                      {agentMode && <ToolCallLog toolCalls={toolCalls} />}
+                    </>
                   )}
 
                   {/* Content */}
@@ -604,6 +703,17 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
         >
           <ArrowDown size={16} strokeWidth={2} />
         </button>
+      )}
+
+      {/* Agent 编辑确认弹窗 */}
+      {pendingAgentEdit && (
+        <DiffConfirmDialog
+          filePath={pendingAgentEdit.filePath}
+          original={pendingAgentEdit.original}
+          modified={pendingAgentEdit.modified}
+          onConfirm={handleConfirmAgentEdit}
+          onReject={handleRejectAgentEdit}
+        />
       )}
 
       {/* Input bar */}
@@ -671,6 +781,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
               </div>
             </div>
             <div className="input-actions">
+              <AgentModeToggle enabled={agentMode} onToggle={() => setAgentMode(!agentMode)} />
               <button
                 className={`input-icon-btn ${thinkingEnabled ? 'input-icon-btn--active' : ''}`}
                 title={thinkingEnabled ? '思考模式已开启' : '思考模式已关闭'}
@@ -707,16 +818,14 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
 
 function PreparingPlaceholder() {
   return (
-    <div className="message-row message-row--assistant">
-      <div className="preparing-placeholder">
-        <span className="preparing-placeholder__icon">
-          <Loader2 size={14} strokeWidth={2.4} />
-        </span>
-        <span className="preparing-placeholder__text">正在准备回复</span>
-        <span className="preparing-placeholder__dots">
-          <span /><span /><span />
-        </span>
-      </div>
+    <div className="preparing-placeholder">
+      <span className="preparing-placeholder__icon">
+        <Loader2 size={14} strokeWidth={2.4} />
+      </span>
+      <span className="preparing-placeholder__text">正在准备回复</span>
+      <span className="preparing-placeholder__dots">
+        <span /><span /><span />
+      </span>
     </div>
   );
 }

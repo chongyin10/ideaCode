@@ -327,7 +327,6 @@ function App() {
   };
 
   const handleDelete = (id: string) => {
-    if (!confirm('确定要删除此连接吗？')) return;
     setConnections((prev) => prev.filter((c) => c.id !== id));
     setSessions((prev) => prev.filter((s) => s.connectionId !== id));
     if (editingId === id) resetForm();

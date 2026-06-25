@@ -34,16 +34,21 @@ const vscode = require('./api');
 const { LlmClient } = require('./llmClient');
 const { CodeContextBuilder } = require('./codeContext');
 const { SuggestionGenerator } = require('./suggestionGenerator');
+const { AgentRuntime } = require('./agent/agentRuntime');
 
 /* ─── 全局状态 ─── */
 
 let llmClient = null;
 let contextBuilder = null;
 let suggestionGenerator = null;
+let agentRuntime = null;
 let panel = null;
 let isProcessing = false;
 let configs = [];          // 所有配置
 let activeConfigId = null; // 当前激活配置 ID
+
+/* ─── Agent 待确认编辑 ─── */
+const pendingAgentEdits = new Map(); // editId -> { filePath, original, modified }
 
 /* ─── 工具函数 ─── */
 
@@ -92,73 +97,158 @@ function getWebviewHtml(extensionPath) {
 }
 
 /**
- * 执行 <shell> 命令：启动临时终端，任务结束后自动销毁
+ * 执行 <shell> 命令：使用 child_process.spawn 隐藏执行
+ *   - 不创建 VS Code 终端面板（避免 IDE 底部自动弹出）
+ *   - stdout/stderr 实时流回 webview，由聊天窗口的代码块/工具块内嵌显示
+ *   - 通过 idle/keepalive/kill 信号控制生命周期
  */
+const { spawn } = require('child_process');
+const MAX_OUTPUT_BYTES = 64 * 1024; // 单次 shellUpdate 推送的最大字节数（64KB）
+const MAX_LINE_BUFFER = 2000;        // 累积超过 N 行就 flush
+const FLUSH_INTERVAL_MS = 200;       // 实时推送的节流间隔
+const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 分钟兜底超时
+
+// 维护当前活跃的子进程，用于中止/重置
+const activeProcs = new Map(); // id -> { proc, finished, cwd }
+
 async function executeShellCommand(id, shellCommand, cwd) {
-  const isWindows = process.platform === 'win32';
-  const executable = isWindows ? 'cmd.exe' : '/bin/sh';
-  const args = isWindows ? ['/c', shellCommand] : ['-c', shellCommand];
+  console.log('[LifeAiCode][executeShellCommand] called:', { id, shellCommand, cwd });
+
+  // 如果已经存在同 id 的进程，先杀掉（避免并发冲突）
+  if (activeProcs.has(id)) {
+    const prev = activeProcs.get(id);
+    if (!prev.finished) {
+      try { prev.proc.kill('SIGTERM'); } catch { /* ignore */ }
+    }
+    activeProcs.delete(id);
+  }
+
+  // 防御：shellCommand 不能为空
+  if (!shellCommand || typeof shellCommand !== 'string') {
+    console.error('[LifeAiCode][executeShellCommand] shellCommand is empty/invalid');
+    postToWebView({
+      type: 'shellUpdate',
+      id, shellCommand: shellCommand || '',
+      output: '执行失败: 命令为空',
+      status: 'error',
+    });
+    return;
+  }
 
   let workingDir = cwd || process.cwd();
   if (!workingDir || !fs.existsSync(workingDir)) {
     workingDir = os.homedir();
   }
+  console.log('[LifeAiCode][executeShellCommand] workingDir:', workingDir);
 
-  let terminal;
+  // 平台相关 shell 选择
+  const isWindows = process.platform === 'win32';
+  const shell = isWindows ? 'cmd.exe' : '/bin/sh';
+  const shellArgs = isWindows ? ['/c', shellCommand] : ['-c', shellCommand];
+
+  let proc;
   try {
-    terminal = await vscode.window.createTerminal({
-      name: 'LifeAiCode Shell',
+    proc = spawn(shell, shellArgs, {
       cwd: workingDir,
-      executable,
-      args,
+      env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' },
+      windowsHide: true,
     });
+    console.log('[LifeAiCode][executeShellCommand] spawned pid:', proc.pid);
   } catch (err) {
-    postToWebView({ type: 'shellUpdate', id, shellCommand, output: `创建终端失败: ${err.message}`, status: 'error' });
+    console.error('[LifeAiCode][executeShellCommand] spawn failed:', err);
+    postToWebView({
+      type: 'shellUpdate',
+      id, shellCommand,
+      output: `执行失败: ${err.message}`,
+      status: 'error',
+    });
     return;
   }
 
-  terminal.show();
+  // 立刻推送 "running" 启动事件（确保 webview 立即有反应）
+  console.log('[LifeAiCode][executeShellCommand] posting initial running event');
+  postToWebView({
+    type: 'shellUpdate',
+    id, shellCommand,
+    output: `$ ${shellCommand}\n[工作目录] ${workingDir}\n\n`,
+    status: 'running',
+  });
+  console.log('[LifeAiCode][executeShellCommand] initial event posted');
 
-  const outputs = [];
-  let finished = false;
-  const maxOutput = 8192;
+  const entry = { proc, finished: false, cwd: workingDir, buffers: { stdout: '', stderr: '' } };
+  activeProcs.set(id, entry);
 
-  const flushOutput = (status) => {
-    const output = outputs.join('').slice(-maxOutput);
-    postToWebView({ type: 'shellUpdate', id, shellCommand, output, status });
+  // 推一条 "running" 启动事件（带 cwd + 命令）
+  postToWebView({
+    type: 'shellUpdate',
+    id, shellCommand,
+    output: `$ ${shellCommand}\n[工作目录] ${workingDir}\n\n`,
+    status: 'running',
+  });
+
+  // 累积行缓冲 + 节流 flush
+  const flush = (status) => {
+    const stdout = entry.buffers.stdout;
+    const stderr = entry.buffers.stderr;
+    if (!stdout && !stderr) return;
+    let combined = '';
+    if (stdout) combined += stdout;
+    if (stderr) combined += stderr;
+    // 截断过长的输出
+    if (combined.length > MAX_OUTPUT_BYTES) {
+      combined = '…(输出过长，已截断)…\n' + combined.slice(-MAX_OUTPUT_BYTES);
+    }
+    postToWebView({ type: 'shellUpdate', id, shellCommand, output: combined, status });
+    entry.buffers.stdout = '';
+    entry.buffers.stderr = '';
   };
 
-  const unsubOutput = terminal.onDidWriteData((data) => {
-    outputs.push(data);
-    if (outputs.length > 200) {
-      outputs.splice(0, outputs.length - 200);
-    }
+  const flushTimer = setInterval(() => {
+    if (!entry.finished) flush('running');
+  }, FLUSH_INTERVAL_MS);
+
+  proc.stdout.on('data', (chunk) => {
+    entry.buffers.stdout += chunk.toString('utf8');
+    if (entry.buffers.stdout.length > MAX_LINE_BUFFER) flush('running');
   });
 
-  // 运行期间每 300ms 推送一次输出，让用户看到实时进度
-  const timer = setInterval(() => {
-    if (!finished) flushOutput('running');
-  }, 300);
-
-  terminal.onDidClose((exitCode) => {
-    if (finished) return;
-    finished = true;
-    clearInterval(timer);
-    unsubOutput();
-    const status = exitCode === 0 || exitCode === undefined ? 'success' : 'error';
-    flushOutput(status);
-    try { terminal.dispose(); } catch { /* ignore */ }
+  proc.stderr.on('data', (chunk) => {
+    entry.buffers.stderr += chunk.toString('utf8');
+    if (entry.buffers.stderr.length > MAX_LINE_BUFFER) flush('running');
   });
 
-  // 兜底：30 秒后强制结束
+  proc.on('error', (err) => {
+    entry.buffers.stdout += `\n[进程错误] ${err.message}\n`;
+  });
+
+  proc.on('close', (code, signal) => {
+    if (entry.finished) return;
+    entry.finished = true;
+    clearInterval(flushTimer);
+    const status = code === 0 ? 'success' : (signal ? 'error' : 'error');
+    flush(status);
+    // 补一个空输出但带状态的最终事件（确保 webview 收到 done 信号）
+    postToWebView({
+      type: 'shellUpdate',
+      id, shellCommand,
+      output: '',
+      status,
+      exitCode: code ?? undefined,
+      signal: signal ?? undefined,
+    });
+    activeProcs.delete(id);
+  });
+
+  // 兜底超时
   setTimeout(() => {
-    if (finished) return;
-    finished = true;
-    clearInterval(timer);
-    unsubOutput();
-    flushOutput('error');
-    try { terminal.dispose(); } catch { /* ignore */ }
-  }, 30000);
+    if (entry.finished) return;
+    entry.buffers.stdout += `\n[超时] 命令执行超过 5 分钟，已强制终止。\n`;
+    flush('error');
+    try { proc.kill('SIGTERM'); } catch { /* ignore */ }
+    setTimeout(() => {
+      try { proc.kill('SIGKILL'); } catch { /* ignore */ }
+    }, 2000);
+  }, DEFAULT_TIMEOUT_MS);
 }
 
 /**
@@ -182,6 +272,10 @@ function initLlmClient(config) {
     model: config.model || '',
     baseUrl: config.baseUrl || '',
   });
+  if (agentRuntime) {
+    agentRuntime.llmClient = llmClient;
+    agentRuntime.adapter.llmClient = llmClient;
+  }
   console.log('[LifeAiCode] LLM 客户端已初始化, provider:', llmClient.provider, 'model:', llmClient.model, 'baseUrl:', llmClient.baseUrl);
 }
 
@@ -317,6 +411,92 @@ async function processMessage(text, context, options = {}) {
       id: msgId,
       content: `❌ **错误**: ${err.message}\n\n请检查:\n1. API Key 是否正确配置\n2. 网络连接是否正常\n3. Provider 服务是否可用`,
       done: true,
+    });
+  } finally {
+    isProcessing = false;
+  }
+}
+
+/**
+ * 运行 Agent 任务
+ */
+async function runAgentTask(text, context, options = {}) {
+  if (isProcessing) return;
+  isProcessing = true;
+
+  const msgId = generateId();
+  console.log('[LifeAiCode][Agent] 开始任务:', text.slice(0, 60));
+
+  try {
+    if (!agentRuntime) {
+      throw new Error('Agent 运行时未初始化');
+    }
+
+    postToWebView({
+      type: 'agentStatus',
+      status: 'running',
+      message: 'Agent 开始执行任务...',
+    });
+
+    let streamedContent = '';
+    const finalResponse = await agentRuntime.run(text, context, {
+      onToken: (token) => {
+        // 实时推送内容到 WebView，过滤 prompt-based 模式下可能混入的 <tool_call> 标签
+        streamedContent += token;
+        const displayContent = streamedContent.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim();
+        if (displayContent) {
+          postToWebView({
+            type: 'chatResponse',
+            id: msgId,
+            content: displayContent,
+            done: false,
+          });
+        }
+      },
+      onToolCall: (toolCall) => {
+        postToWebView({
+          type: 'step',
+          stepType: 'agent',
+          target: toolCall.name,
+          params: JSON.stringify(toolCall.arguments),
+          status: 'running',
+        });
+      },
+      onDone: () => {
+        postToWebView({
+          type: 'agentStatus',
+          status: 'done',
+          message: 'Agent 任务完成',
+        });
+      },
+      onError: (error) => {
+        postToWebView({
+          type: 'agentStatus',
+          status: 'error',
+          message: `Agent 任务失败: ${error}`,
+        });
+      },
+    });
+
+    const displayContent = (streamedContent || finalResponse || '').replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim();
+    postToWebView({
+      type: 'chatResponse',
+      id: msgId,
+      content: displayContent || '任务已完成，但没有返回内容。',
+      done: true,
+    });
+  } catch (err) {
+    console.error('[LifeAiCode][Agent] 任务失败:', err.message);
+    postToWebView({
+      type: 'chatResponse',
+      id: msgId,
+      content: `❌ **Agent 任务失败**: ${err.message}`,
+      done: true,
+    });
+    postToWebView({
+      type: 'agentStatus',
+      status: 'error',
+      message: err.message,
     });
   } finally {
     isProcessing = false;
@@ -474,6 +654,24 @@ async function activate(context) {
       return null;
     },
   });
+
+  // 初始化 Agent Runtime
+  agentRuntime = new AgentRuntime(llmClient, {
+    rpc: async (method, params) => {
+      if (!contextBuilder) return null;
+      return contextBuilder.rpc.request(method, params);
+    },
+    postToWebView,
+    executeShell: executeShellCommand,
+    registerPendingEdit: (editId, edit) => {
+      pendingAgentEdits.set(editId, edit);
+    },
+  });
+  try {
+    const auditPath = path.join(context.extensionPath, '.lifeAiCode-agent-audit.log');
+    agentRuntime.auditLogger.setLogPath(auditPath);
+    console.log('[LifeAiCode] Agent 审计日志:', auditPath);
+  } catch { /* ignore */ }
 
   // 初始化 LLM 客户端（优先加载持久化配置，其次环境变量）
   const envKey = process.env.MYAICODE_API_KEY || process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY
@@ -689,7 +887,15 @@ async function activate(context) {
       switch (message.command) {
         case 'sendMessage': {
           const ctx = message.context || await contextBuilder.buildContext();
-          await processMessage(message.text, ctx, { thinkingEnabled: message.thinkingEnabled });
+          // 更新 Agent Runtime 上下文
+          if (agentRuntime) {
+            agentRuntime.context.workspaceRoot = ctx.workspaceRoot || '';
+          }
+          if (message.agentMode) {
+            await runAgentTask(message.text, ctx);
+          } else {
+            await processMessage(message.text, ctx, { thinkingEnabled: message.thinkingEnabled });
+          }
           break;
         }
         case 'continueMessage': {
@@ -800,8 +1006,47 @@ async function activate(context) {
           break;
         }
         case 'executeShell': {
+          console.log('[LifeAiCode][executeShell] received full message:', JSON.stringify(message, null, 2));
           const shellId = message.id || `shell-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-          executeShellCommand(shellId, message.shellCommand, message.cwd);
+          console.log('[LifeAiCode][executeShell] dispatching:', { shellId, shellCommand: message.shellCommand, cwd: message.cwd });
+          try {
+            executeShellCommand(shellId, message.shellCommand, message.cwd);
+          } catch (err) {
+            console.error('[LifeAiCode][executeShell] sync throw:', err);
+            postToWebView({ type: 'shellUpdate', id: shellId, shellCommand: message.shellCommand || '', output: `执行失败: ${err.message}`, status: 'error' });
+          }
+          break;
+        }
+        case 'cancelAgent': {
+          if (agentRuntime) {
+            agentRuntime.cancel();
+            postToWebView({ type: 'agentStatus', status: 'cancelled', message: 'Agent 任务已取消' });
+          }
+          break;
+        }
+        case 'confirmAgentEdit': {
+          const edit = pendingAgentEdits.get(message.editId);
+          if (!edit) {
+            postToWebView({ type: 'error', message: '未找到待确认的编辑' });
+            break;
+          }
+          if (typeof process !== 'undefined' && process.send) {
+            const params = edit.mode === 'write'
+              ? { filePath: edit.filePath, content: edit.modified }
+              : { filePath: edit.filePath, original: [edit.original], modified: [edit.modified] };
+            process.send({
+              jsonrpc: '2.0',
+              method: 'lifeAiCode.applyChanges',
+              params,
+            });
+            pendingAgentEdits.delete(message.editId);
+            postToWebView({ type: 'agentEditStatus', editId: message.editId, status: 'applied' });
+          }
+          break;
+        }
+        case 'rejectAgentEdit': {
+          pendingAgentEdits.delete(message.editId);
+          postToWebView({ type: 'agentEditStatus', editId: message.editId, status: 'rejected' });
           break;
         }
         default:
@@ -825,6 +1070,8 @@ async function activate(context) {
       llmClient = null;
       contextBuilder = null;
       suggestionGenerator = null;
+      agentRuntime = null;
+      pendingAgentEdits.clear();
     },
   });
 

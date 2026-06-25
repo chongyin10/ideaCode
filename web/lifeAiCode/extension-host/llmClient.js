@@ -193,12 +193,13 @@ class LlmClient extends EventEmitter {
 
   /**
    * 发送聊天请求（非流式）
+   * @returns {string|{content:string,toolCalls:Array}} 默认返回 content 字符串；options.returnRaw=true 时返回对象
    */
-  async chat(messages) {
+  async chat(messages, options = {}) {
     const provider = PROVIDERS[this.provider];
     if (!provider) throw new Error(`不支持的 Provider: ${this.provider}`);
 
-    const body = this._buildRequestBody(provider, messages, false);
+    const body = this._buildRequestBody(provider, messages, false, options);
     const url = this._getRequestUrl(provider);
 
     let lastError = null;
@@ -210,7 +211,9 @@ class LlmClient extends EventEmitter {
           body: JSON.stringify(body),
           timeout: this.timeout,
         });
-        return this._parseResponse(provider, response);
+        const parsed = this._parseResponse(provider, response);
+        if (options.returnRaw) return parsed;
+        return parsed.content || '';
       } catch (err) {
         lastError = err;
         console.warn(`[LifeAiCode] LLM 请求失败 (${attempt + 1}/${this.maxRetries}):`, err.message);
@@ -224,23 +227,28 @@ class LlmClient extends EventEmitter {
 
   /**
    * 发送聊天请求（流式）
+   * @returns {Promise<string|{content:string,toolCalls:Array}>} 默认返回 content 字符串；options.returnRaw=true 时返回对象
    */
-  async chatStream(messages) {
+  async chatStream(messages, options = {}) {
     const provider = PROVIDERS[this.provider];
     if (!provider) throw new Error(`不支持的 Provider: ${this.provider}`);
 
-    const body = this._buildRequestBody(provider, messages, true);
+    const body = this._buildRequestBody(provider, messages, true, options);
     const url = this._getRequestUrl(provider);
 
     let lastError = null;
     for (let attempt = 0; attempt < this.maxRetries; attempt++) {
       try {
-        return await this._httpStreamRequest(url.toString(), {
+        const result = await this._httpStreamRequest(url.toString(), {
           method: 'POST',
           headers: provider.headers(this.apiKey),
           body: JSON.stringify(body),
           timeout: this.timeout,
-        });
+        }, options);
+        if (options.returnRaw) return result;
+        // _httpStreamRequest 在 returnRaw=false 时返回 content 字符串
+        if (typeof result === 'string') return result;
+        return result.content || '';
       } catch (err) {
         lastError = err;
         console.warn(`[LifeAiCode] 流式请求失败 (${attempt + 1}/${this.maxRetries}):`, err.message);
@@ -260,14 +268,41 @@ class LlmClient extends EventEmitter {
     return new URL(provider.chatPath, base);
   }
 
-  _buildRequestBody(provider, messages, stream) {
+  _buildRequestBody(provider, messages, stream, options = {}) {
+    const systemPrompt = options.systemPrompt !== undefined ? options.systemPrompt : this.systemPrompt;
+    // 当 systemPrompt 为 null 或空字符串时，不附加默认 system 消息（由调用方在 messages 中自行提供）
+    const prependSystem = systemPrompt ? [{ role: 'system', content: systemPrompt }] : [];
+    // 仅 DeepSeek 支持 reasoning_content 回传；其他 Provider 需剥离，避免报错
+    const supportsReasoning = this.provider === 'deepseek';
+    const sanitizedMessages = messages.map((m) => {
+      const hasReasoning = supportsReasoning && m.role === 'assistant' && m.reasoning_content;
+      const { reasoning_content, ...rest } = m;
+      return hasReasoning ? { ...rest, reasoning_content } : rest;
+    });
+    const body = {
+      model: this.model,
+      stream,
+      messages: [
+        ...prependSystem,
+        ...sanitizedMessages,
+      ],
+    };
+
+    // 只有 OpenAI 兼容 Provider 支持 tools/tool_choice
+    if (options.tools && ['openai', 'deepseek', 'glm', 'qwen', 'kimi', 'MiniMax', 'doubao', 'custom'].includes(this.provider)) {
+      body.tools = options.tools;
+      if (options.tool_choice) {
+        body.tool_choice = options.tool_choice;
+      }
+    }
+
     switch (this.provider) {
       case 'anthropic':
         return {
           model: this.model,
           max_tokens: 4096,
           stream,
-          system: this.systemPrompt,
+          system: systemPrompt || undefined,
           messages: messages.map((m) => ({
             role: m.role === 'assistant' ? 'assistant' : 'user',
             content: m.content,
@@ -278,20 +313,13 @@ class LlmClient extends EventEmitter {
           model: this.model,
           stream,
           messages: [
-            { role: 'system', content: this.systemPrompt },
+            ...prependSystem,
             ...messages,
           ],
         };
       case 'openai':
       default:
-        return {
-          model: this.model,
-          stream,
-          messages: [
-            { role: 'system', content: this.systemPrompt },
-            ...messages,
-          ],
-        };
+        return body;
     }
   }
 
@@ -303,21 +331,29 @@ class LlmClient extends EventEmitter {
       throw new Error(`LLM 响应解析失败: ${responseBody.slice(0, 200)}`);
     }
 
+    const message = data.choices?.[0]?.message || {};
+    const toolCalls = message.tool_calls || [];
+    const reasoningContent = message.reasoning_content || '';
+
     switch (this.provider) {
       case 'anthropic':
-        return data.content?.[0]?.text || '';
+        return { content: data.content?.[0]?.text || '', toolCalls: [], reasoningContent: '' };
       case 'ollama':
-        return data.message?.content || '';
+        return { content: data.message?.content || '', toolCalls: [], reasoningContent: '' };
       case 'openai':
       default:
-        return data.choices?.[0]?.message?.content || '';
+        return {
+          content: message.content || '',
+          toolCalls: Array.isArray(toolCalls) ? toolCalls : [],
+          reasoningContent,
+        };
     }
   }
 
   /**
    * 流式 HTTP 请求（SSE）
    */
-  _httpStreamRequest(urlString, options) {
+  _httpStreamRequest(urlString, options, requestOptions = {}) {
     return new Promise((resolve, reject) => {
       const url = new URL(urlString);
       const isHttps = url.protocol === 'https:';
@@ -347,7 +383,10 @@ class LlmClient extends EventEmitter {
         }
 
         let fullContent = '';
+        let fullReasoningContent = '';
         let buffer = '';
+        // 流式 tool_calls 累加：index -> { id, type, function: { name, arguments } }
+        const toolCallDeltas = new Map();
 
         res.on('data', (chunk) => {
           buffer += chunk.toString();
@@ -365,7 +404,9 @@ class LlmClient extends EventEmitter {
               try {
                 const parsed = JSON.parse(data);
                 let delta = '';
+                const toolCallsDelta = parsed.choices?.[0]?.delta?.tool_calls;
 
+                let reasoningDelta = '';
                 switch (this.provider) {
                   case 'anthropic':
                     if (parsed.type === 'content_block_delta') {
@@ -380,12 +421,34 @@ class LlmClient extends EventEmitter {
                   case 'openai':
                   default:
                     delta = parsed.choices?.[0]?.delta?.content || '';
+                    reasoningDelta = parsed.choices?.[0]?.delta?.reasoning_content || '';
+                    // 累加 tool_calls delta（OpenAI 兼容格式）
+                    if (Array.isArray(toolCallsDelta)) {
+                      for (const tc of toolCallsDelta) {
+                        const idx = tc.index || 0;
+                        if (!toolCallDeltas.has(idx)) {
+                          toolCallDeltas.set(idx, { function: {} });
+                        }
+                        const entry = toolCallDeltas.get(idx);
+                        if (tc.id) entry.id = tc.id;
+                        if (tc.type) entry.type = tc.type;
+                        if (tc.function?.name) {
+                          entry.function.name = (entry.function.name || '') + tc.function.name;
+                        }
+                        if (tc.function?.arguments) {
+                          entry.function.arguments = (entry.function.arguments || '') + tc.function.arguments;
+                        }
+                      }
+                    }
                     break;
                 }
 
                 if (delta) {
                   fullContent += delta;
                   this.emit('token', delta);
+                }
+                if (reasoningDelta) {
+                  fullReasoningContent += reasoningDelta;
                 }
               } catch {
                 // 忽略解析错误
@@ -396,7 +459,25 @@ class LlmClient extends EventEmitter {
 
         res.on('end', () => {
           this.emit('end');
-          resolve(fullContent);
+          // 组装完整的 tool_calls
+          const toolCalls = [];
+          const indices = Array.from(toolCallDeltas.keys()).sort((a, b) => a - b);
+          for (const idx of indices) {
+            const tc = toolCallDeltas.get(idx);
+            if (tc.function?.name) {
+              toolCalls.push({
+                id: tc.id || `call-${idx}`,
+                type: tc.type || 'function',
+                function: {
+                  name: tc.function.name,
+                  arguments: tc.function.arguments || '{}',
+                },
+              });
+            }
+          }
+          resolve(requestOptions.returnRaw
+            ? { content: fullContent, toolCalls, reasoningContent: fullReasoningContent }
+            : fullContent);
         });
 
         res.on('error', reject);

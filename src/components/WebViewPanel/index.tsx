@@ -126,7 +126,7 @@ const WebViewPanel = ({ html, panelId, extensionPath }: WebViewPanelProps) => {
       <iframe
         ref={iframeRef}
         className="webview-panel__iframe"
-        sandbox="allow-scripts allow-same-origin allow-popups"
+        sandbox="allow-scripts allow-same-origin allow-popups allow-modals"
         allowFullScreen
         title={panelId}
       />
