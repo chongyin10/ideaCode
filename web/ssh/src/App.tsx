@@ -451,13 +451,6 @@ function App() {
         </div>
         {expandedSections.connections && (
         <>
-          {fileTreeStatus && (
-            <div className={`file-tree-status file-tree-status--${fileTreeStatus.type}`}>
-              {fileTreeStatus.type === 'loading'
-                ? `正在加载 ${connections.find((c) => c.id === fileTreeStatus.connectionId)?.name || ''} 的目录结构...`
-                : `加载 ${connections.find((c) => c.id === fileTreeStatus.connectionId)?.name || ''} 目录结构失败：${fileTreeStatus.message}`}
-            </div>
-          )}
           <div className="connection-grid">
           {connections.length === 0 ? (
             <div className="empty-state">
@@ -468,12 +461,20 @@ function App() {
             connections.map((conn) => {
               const connected = isConnected(conn.id);
               const connecting = hasConnecting(conn.id);
+              const loadingFileTree = fileTreeStatus?.type === 'loading' && fileTreeStatus?.connectionId === conn.id;
               return (
                 <div key={conn.id} className={`connection-card ${editingId === conn.id ? 'is-editing' : ''}`}>
                   <div className="connection-card__header">
                     <span className="connection-card__name" title={conn.name}>
                       {conn.name}
                     </span>
+                    {loadingFileTree && (
+                      <span className="connection-card__loading" title="正在加载目录结构">
+                        <svg className="connection-card__spinner" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                          <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                        </svg>
+                      </span>
+                    )}
                     <span className={`connection-card__status ${connected ? 'connected' : connecting ? 'connecting' : 'disconnected'}`}>
                       {connected ? '已连接' : connecting ? '连接中' : '未连接'}
                     </span>

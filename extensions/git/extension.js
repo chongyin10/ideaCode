@@ -214,6 +214,16 @@ async function openRepository(rootPath) {
 
   closeRepository();
 
+  // 远程 URI（ssh:// 等）不是本地文件系统路径，不能当作本地 Git 仓库处理，
+  // 否则 path.resolve 会将其解析为当前工作目录下的相对路径，
+  // 向上查找 .git 时可能错误地关联到 IDE 自身的本地仓库。
+  if (typeof rootPath === 'string' && /^[a-z][a-z0-9+.-]*:\/\//i.test(rootPath)) {
+    currentRootPath = rootPath;
+    currentRepo = null;
+    pushState();
+    return;
+  }
+
   if (!gitAvailable) {
     currentRootPath = rootPath;
     pushState();

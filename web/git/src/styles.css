@@ -493,6 +493,13 @@ input:focus, textarea:focus {
   gap: 6px;
   min-width: 0;
   overflow: hidden;
+  padding-right: 0;
+  transition: padding-right 0.1s ease;
+}
+
+.git-item:hover .git-item__name-row {
+  /* hover 时预留操作按钮区域，保证 ... 截断可见 */
+  padding-right: 84px;
 }
 
 .git-item__name {
@@ -522,7 +529,7 @@ input:focus, textarea:focus {
  */
 .git-item__actions {
   position: absolute;
-  right: 4px;
+  right: 10px;
   top: 0;
   bottom: 0;
   display: inline-flex;

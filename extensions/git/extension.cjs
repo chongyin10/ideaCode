@@ -1062,6 +1062,12 @@ async function openRepository(rootPath) {
     return;
   }
   closeRepository();
+  if (typeof rootPath === "string" && /^[a-z][a-z0-9+.-]*:\/\//i.test(rootPath)) {
+    currentRootPath = rootPath;
+    currentRepo = null;
+    pushState();
+    return;
+  }
   if (!gitAvailable) {
     currentRootPath = rootPath;
     pushState();
