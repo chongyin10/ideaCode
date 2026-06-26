@@ -2,6 +2,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import { Loader2 } from 'lucide-react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { SerializeAddon } from '@xterm/addon-serialize';
 import type { SearchAddon as SearchAddonType } from '@xterm/addon-search';
 import { useAppSelector } from '../../store/hooks';
 import {
@@ -14,6 +15,12 @@ import '@xterm/xterm/css/xterm.css';
 import './TerminalInstance.css';
 
 const ACK_BATCH = 5000;
+
+import {
+  getTerminalSnapshot,
+  setTerminalSnapshot,
+  clearTerminalSnapshot,
+} from '../../services/terminalSnapshot';
 
 export interface TerminalInstanceHandle {
   focus: () => void;
@@ -44,6 +51,7 @@ export const TerminalInstance = forwardRef<TerminalInstanceHandle, TerminalInsta
     const containerRef = useRef<HTMLDivElement>(null);
     const terminalRef = useRef<Terminal | null>(null);
     const fitAddonRef = useRef<FitAddon | null>(null);
+    const serializeAddonRef = useRef<SerializeAddon | null>(null);
     const searchAddonRef = useRef<SearchAddonType | null>(null);
     const resizeObserverRef = useRef<ResizeObserver | null>(null);
     const unsubscribeOutputRef = useRef<(() => void) | null>(null);
@@ -143,8 +151,23 @@ export const TerminalInstance = forwardRef<TerminalInstanceHandle, TerminalInsta
       const fitAddon = new FitAddon();
       terminal.loadAddon(fitAddon);
 
+      const serializeAddon = new SerializeAddon();
+      terminal.loadAddon(serializeAddon);
+      serializeAddonRef.current = serializeAddon;
+
       terminal.open(container);
       viewportElementRef.current = container.querySelector('.xterm-viewport') as HTMLElement | null;
+
+      // 若存在快照（从 Modal/编辑器 Tab 切换过来），恢复之前的屏幕内容
+      const snapshot = getTerminalSnapshot(terminalId);
+      if (snapshot) {
+        try {
+          terminal.write(snapshot);
+        } catch {
+          // 恢复失败则丢弃快照，避免损坏新实例
+        }
+        clearTerminalSnapshot(terminalId);
+      }
 
       // 可选：WebGL / Unicode11
       // 默认关闭 WebGL：隐藏/切换 tab 时 WebGL 上下文容易丢失导致黑屏，
@@ -418,6 +441,15 @@ export const TerminalInstance = forwardRef<TerminalInstanceHandle, TerminalInsta
 
     function cleanup() {
       terminalRef.current?.element?.removeEventListener('contextmenu', handleContextMenu);
+      // 实例销毁前序列化当前屏幕内容，便于 Modal/编辑器 Tab 切换时恢复
+      try {
+        const snapshot = serializeAddonRef.current?.serialize();
+        if (snapshot) {
+          setTerminalSnapshot(terminalId, snapshot);
+        }
+      } catch {
+        // ignore
+      }
       unsubscribeOutputRef.current?.();
       unsubscribeOutputRef.current = null;
       resizeObserverRef.current?.disconnect();
@@ -441,6 +473,7 @@ export const TerminalInstance = forwardRef<TerminalInstanceHandle, TerminalInsta
       }
       terminalRef.current = null;
       fitAddonRef.current = null;
+      serializeAddonRef.current = null;
       searchAddonRef.current = null;
     }
 

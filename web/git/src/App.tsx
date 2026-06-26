@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { initMessageListener, sendReady } from './api';
 import { gitStore } from './store/gitStore';
+import { branchPickerEvents } from './utils/events';
 import type { HostMessage } from './types';
 import SourceControlView from './components/SourceControlView';
 
@@ -26,6 +27,12 @@ export default function App() {
           break;
         case 'stashes':
           gitStore.applyStashes(msg.stashes);
+          break;
+        case 'activeFile':
+          gitStore.applyActiveFile({ path: msg.path, staged: msg.staged });
+          break;
+        case 'showBranchPicker':
+          branchPickerEvents.emit();
           break;
       }
     });

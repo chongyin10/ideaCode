@@ -21,6 +21,7 @@ import {
 import type { TerminalProfile } from '../types/electron';
 import type { TerminalTab } from '../store/slices/terminalSlice';
 import { createTerminal, sendInput, disposeTerminal, onTerminalOutput } from './terminalManager';
+import { clearTerminalSnapshot } from './terminalSnapshot';
 
 export interface TerminalCreateOptions {
   /** Tab 显示名称 */
@@ -180,6 +181,7 @@ export const terminalSDK = {
     store.dispatch(removeTab(tabId));
     tabOutputListeners.delete(tabId);
     tabExitListeners.delete(tabId);
+    clearTerminalSnapshot(tabId);
   },
 
   /** 聚焦并显示指定终端 Tab */

@@ -27,6 +27,13 @@ export interface GitBranch {
   ahead: number;
   behind: number;
   isRemote: boolean;
+  lastCommit?: {
+    hash: string;
+    shortHash: string;
+    subject: string;
+    authorName: string;
+    timestamp: number;
+  };
 }
 
 export interface GitRemote {
@@ -75,6 +82,16 @@ export interface StashesMessage {
   stashes: GitStash[];
 }
 
+export interface ActiveFileMessage {
+  type: 'activeFile';
+  path: string | null;
+  staged: boolean | null;
+}
+
+export interface ShowBranchPickerMessage {
+  type: 'showBranchPicker';
+}
+
 export interface RpcReply {
   type: 'rpc:reply';
   id: number;
@@ -83,7 +100,7 @@ export interface RpcReply {
   [key: string]: unknown;
 }
 
-export type HostMessage = StateMessage | BranchesMessage | LogMessage | StashesMessage | RpcReply;
+export type HostMessage = StateMessage | BranchesMessage | LogMessage | StashesMessage | ActiveFileMessage | ShowBranchPickerMessage | RpcReply;
 
 export interface RpcRequest {
   id: number;

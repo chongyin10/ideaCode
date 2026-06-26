@@ -184,6 +184,8 @@ function App() {
     privateKey: '',
   });
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [connectingIds, setConnectingIds] = useState<Set<string>>(new Set());
   const [popupSessionId, setPopupSessionId] = useState<string | null>(null);
   const [fileTreeStatus, setFileTreeStatus] = useState<
     | { type: 'loading'; connectionId: string }
@@ -296,7 +298,10 @@ function App() {
   };
 
   const handleSave = () => {
+    if (saving) return;
     if (!form.host.trim() || !form.username.trim()) return;
+
+    setSaving(true);
 
     const conn: SshConnection = {
       id: editingId || generateId(),
@@ -309,10 +314,9 @@ function App() {
       authType: form.authType,
     };
 
+    // 编辑时允许乐观更新；新增时等扩展宿主 broadcast 回来再渲染，避免重复
     if (editingId) {
       setConnections((prev) => prev.map((c) => (c.id === editingId ? conn : c)));
-    } else {
-      setConnections((prev) => [...prev, conn]);
     }
 
     resetForm();
@@ -324,6 +328,9 @@ function App() {
         connection: conn,
       });
     }
+
+    // 简单防抖：防止快速双击保存按钮产生重复记录
+    setTimeout(() => setSaving(false), 300);
   };
 
   const handleDelete = (id: string) => {
@@ -349,8 +356,18 @@ function App() {
   };
 
   const handleConnect = (conn: SshConnection) => {
+    if (connectingIds.has(conn.id)) return;
+    setConnectingIds((prev) => new Set(prev).add(conn.id));
     const vscode = getVsCodeApi();
     if (vscode) vscode.postMessage({ command: 'connect', connectionId: conn.id });
+    // 2 秒后清除前端锁（宿主也会在连接完成后广播最新状态）
+    setTimeout(() => {
+      setConnectingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(conn.id);
+        return next;
+      });
+    }, 2000);
   };
 
   const handleDisconnect = (sessionId: string) => {
@@ -398,7 +415,7 @@ function App() {
     connectionSessions[connectionId]?.some((s) => s.status === 'connected');
 
   const hasConnecting = (connectionId: string) =>
-    connectionSessions[connectionId]?.some((s) => s.status === 'connecting');
+    connectingIds.has(connectionId) || connectionSessions[connectionId]?.some((s) => s.status === 'connecting');
 
   const toggleConnection = (conn: SshConnection) => {
     const activeSessions = connectionSessions[conn.id]?.filter((s) => s.status === 'connected') || [];
@@ -615,7 +632,7 @@ function App() {
             </div>
           )}
           <div className="form-actions">
-            <button className="btn" onClick={handleSave}>
+            <button className="btn" onClick={handleSave} disabled={saving} type="button">
               {editingId ? '更新' : '保存'}
             </button>
             <button className="btn btn-secondary" onClick={resetForm}>

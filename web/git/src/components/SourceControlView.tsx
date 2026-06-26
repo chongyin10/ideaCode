@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   GitBranch,
   GitPullRequest,
@@ -23,8 +23,10 @@ export default function SourceControlView() {
   const gitAvailable = useGitStore((s) => s.gitAvailable);
   const status = useGitStore((s) => s.status);
   const lastError = useGitStore((s) => s.lastError);
+  const activeFile = useGitStore((s) => s.activeFile);
 
   const [busy, setBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
   // 错误显示 5 秒后自动清除
@@ -35,19 +37,14 @@ export default function SourceControlView() {
     }
   }, [actionError]);
 
-  const totalChanges = useMemo(() => {
-    if (!status) return 0;
-    return status.staged.length + status.changes.length + status.merge.length + status.untracked.length;
-  }, [status]);
-
   const handleRefresh = async () => {
-    setBusy(true);
+    setRefreshing(true);
     try {
       await sendRpc('refresh');
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      setRefreshing(false);
     }
   };
 
@@ -268,16 +265,16 @@ export default function SourceControlView() {
       )}
 
       <div className="git-sc__toolbar">
-        <button className="git-btn" onClick={handleRefresh} disabled={busy} title="刷新">
-          <RefreshCw size={14} className={busy ? 'git-spin' : ''} />
+        <button className="git-btn" onClick={handleRefresh} disabled={refreshing} title="刷新">
+          <RefreshCw size={14} className={refreshing ? 'git-spin' : ''} />
         </button>
-        <button className="git-btn" onClick={handlePull} disabled={busy} title="拉取">
+        <button className="git-btn" onClick={handlePull} title="拉取">
           <GitPullRequest size={14} />
         </button>
-        <button className="git-btn" onClick={handlePush} disabled={busy} title="推送">
+        <button className="git-btn" onClick={handlePush} title="推送">
           <GitBranch size={14} />
         </button>
-        <button className="git-btn" onClick={handleFetch} disabled={busy} title="获取">
+        <button className="git-btn" onClick={handleFetch} title="获取">
           <GitMerge size={14} />
         </button>
       </div>
@@ -292,6 +289,7 @@ export default function SourceControlView() {
         collapsible
         defaultOpen
         emptyText="没有已暂存的更改"
+        activeFile={activeFile}
         actions={[
           { label: '全部取消暂存', handler: handleUnstageAll, disabled: status.staged.length === 0 },
         ]}
@@ -308,6 +306,7 @@ export default function SourceControlView() {
         collapsible
         defaultOpen
         emptyText="工作区干净"
+        activeFile={activeFile}
         actions={[
           { label: '全部暂存', handler: handleStageAll, disabled: status.changes.length === 0 },
           { label: '全部放弃', handler: handleDiscardAllChanges, disabled: status.changes.length === 0 },
@@ -326,6 +325,7 @@ export default function SourceControlView() {
           collapsible
           defaultOpen
           emptyText="无合并冲突"
+          activeFile={activeFile}
           onOpen={(p) => handleOpenFile(p)}
         />
       )}
@@ -353,12 +353,7 @@ export default function SourceControlView() {
         />
       )}
 
-      {totalChanges === 0 && (
-        <div className="git-sc__clean">
-          <GitBranch size={16} />
-          <span>工作区干净</span>
-        </div>
-      )}
+
     </div>
   );
 }

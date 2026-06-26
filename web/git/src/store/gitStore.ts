@@ -19,6 +19,7 @@ interface GitStoreState {
   stashes: GitStash[];
   lastError: string | null;
   loading: boolean;
+  activeFile: { path: string | null; staged: boolean | null };
 }
 
 const initialState: GitStoreState = {
@@ -32,6 +33,7 @@ const initialState: GitStoreState = {
   stashes: [],
   lastError: null,
   loading: false,
+  activeFile: { path: null, staged: null },
 };
 
 let state: GitStoreState = initialState;
@@ -86,6 +88,10 @@ export const gitStore = {
 
   applyStashes(stashes: GitStash[]) {
     setState({ stashes });
+  },
+
+  applyActiveFile(activeFile: { path: string | null; staged: boolean | null }) {
+    setState({ activeFile });
   },
 
   reset() {

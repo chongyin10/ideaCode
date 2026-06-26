@@ -442,6 +442,19 @@ const terminalSlice = createSlice({
       state.panelLayout.activeGroupId = groupId;
     },
 
+    /**
+     * 将终端从编辑器 Tab 区域移回独立 Modal（不加入底部面板）。
+     * 保留 tab 与底层进程，仅标记其不再属于编辑器终端。
+     */
+    moveToModal(state, action: PayloadAction<string>) {
+      const id = action.payload;
+      state.editorTerminals = state.editorTerminals.filter(tid => tid !== id);
+      const tab = state.tabs[id];
+      if (tab) {
+        tab.isEditorTerminal = false;
+      }
+    },
+
     /* — Shell Profile — */
     setProfiles(state, action: PayloadAction<{ profiles: TerminalProfile[]; defaultProfile: TerminalProfile }>) {
       state.profiles = action.payload.profiles;
@@ -501,7 +514,7 @@ export const {
   setPanelVisible, togglePanel, setPanelHeight, toggleMaximize, setSidebarWidth,
   setActiveGroup, splitPane, closePane, setActivePane,
   reorderTerminalTab,
-  moveToEditor, moveToPanel,
+  moveToEditor, moveToPanel, moveToModal,
   setProfiles,
   addBookmark, removeBookmark,
   setBroadcastMode, toggleBroadcastReceiver,

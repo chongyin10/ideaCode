@@ -23,6 +23,10 @@ import { DiffEditor } from '@monaco-editor/react';
 import { beforeMount, toMonacoTheme } from '../MonacoEditor/index';
 import { ensureLanguage } from '../../services/languageLoader';
 import { computeLineDiff } from '../../services/diffAlgorithm';
+import {
+  registerDiffSemanticTokensProvider,
+  SEMANTIC_LANGUAGES,
+} from '../../services/monacoSemanticTokens';
 import './DiffEditorPanel.css';
 
 /* ─── Props ─── */
@@ -42,6 +46,7 @@ const DiffEditorPanel = ({ diffData, groupId }: DiffEditorPanelProps) => {
 
   const diffEditorRef = useRef<Monaco.editor.IStandaloneDiffEditor | null>(null);
   const monacoRef = useRef<typeof Monaco | null>(null);
+  const semTokensDisposableRef = useRef<Monaco.IDisposable | null>(null);
   const [currentDiffIndex, setCurrentDiffIndex] = useState(-1);
   const [lineChanges, setLineChanges] = useState<Monaco.editor.ILineChange[]>([]);
 
@@ -70,6 +75,14 @@ const DiffEditorPanel = ({ diffData, groupId }: DiffEditorPanelProps) => {
       const language = diffData.language;
       if (language) {
         ensureLanguage(language).catch(() => {});
+      }
+
+      // 注册语义高亮 provider，让方法/属性/变量/参数在 Diff 视图中也能按语义着色
+      // 仅 TS/JS 系语言走 tsserver；其它语言仅靠 Monaco 内置 tokenizer
+      if (language && SEMANTIC_LANGUAGES.has(language)) {
+        // 防止 groupId 切换或重渲染时重复注册
+        semTokensDisposableRef.current?.dispose();
+        semTokensDisposableRef.current = registerDiffSemanticTokensProvider(monaco, language, groupId);
       }
 
       // 为内部编辑器启用语义高亮
@@ -110,7 +123,7 @@ const DiffEditorPanel = ({ diffData, groupId }: DiffEditorPanelProps) => {
         }
       });
     },
-    [diffData.language, semanticHighlightingEnabled],
+    [diffData.language, semanticHighlightingEnabled, groupId],
   );
 
   /* ── 语义高亮开关变化时同步更新内部编辑器 ── */
@@ -145,6 +158,8 @@ const DiffEditorPanel = ({ diffData, groupId }: DiffEditorPanelProps) => {
     return () => {
       diffEditorRef.current = null;
       monacoRef.current = null;
+      semTokensDisposableRef.current?.dispose();
+      semTokensDisposableRef.current = null;
     };
   }, []);
 

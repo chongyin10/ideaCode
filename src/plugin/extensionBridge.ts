@@ -18,7 +18,7 @@
 import path from 'path';
 import type { Store } from '@reduxjs/toolkit';
 import type { RootState } from '../store';
-import { openFile, openVirtualFile, addWorkspaceFolder, removeWorkspaceFolder, setFileContent, markFileSaved, toggleAiEditMode, setGitStatus } from '../store/slices/workspaceSlice';
+import { openFile, openVirtualFile, addWorkspaceFolder, removeWorkspaceFolder, setFileContent, markFileSaved, toggleAiEditMode, setGitStatus, setGitBranch } from '../store/slices/workspaceSlice';
 import { addPanelToOrder, removePanelFromOrder, registerDockableItem, unregisterDockableItem, switchPanel, switchRightItem, setDockableItemBadge } from '../store/slices/layoutSlice';
 import { readFile as fsReadFile, writeFile as fsWriteFile, isPath } from '../services/fileService';
 import { getMonacoEditorActions } from '../services/monacoEditorBridge';
@@ -96,10 +96,51 @@ export class ExtensionBridge {
   private webviewMessageCallbacks: Map<string, ((message: unknown) => void)[]> = new Map();
   private disabledExtensions: Set<string> = new Set();
 
+  /** 上一次通知 Git 扩展的 active file 相对路径 */
+  private lastGitActivePath: string | null = null;
+
   constructor(store: Store<RootState>) {
     this.store = store;
     this._setupRpcHandlers();
     this._setupIpcListeners();
+    this._subscribeActiveFile();
+  }
+
+  /**
+   * 订阅当前激活文件变化，并通知 Git 扩展高亮对应变更文件
+   */
+  private _subscribeActiveFile(): void {
+    this.store.subscribe(() => {
+      const state = this.store.getState().workspace;
+      const source = state.activeFileSource;
+      const root = state.rootSource;
+
+      if (!source || typeof source !== 'string' || !root || typeof root !== 'string') {
+        if (this.lastGitActivePath !== null) {
+          this.lastGitActivePath = null;
+          this._notifyGitActiveFile(null);
+        }
+        return;
+      }
+
+      const rel = source.startsWith(root + '/') ? source.slice(root.length + 1) : null;
+      if (rel && rel !== this.lastGitActivePath) {
+        this.lastGitActivePath = rel;
+        this._notifyGitActiveFile(rel);
+      } else if (!rel && this.lastGitActivePath !== null) {
+        this.lastGitActivePath = null;
+        this._notifyGitActiveFile(null);
+      }
+    });
+  }
+
+  private _notifyGitActiveFile(path: string | null): void {
+    if (!window.electronAPI?.extension?.rpc) return;
+    window.electronAPI.extension.rpc('ext.invoke', {
+      extId: 'ideacode-git',
+      method: 'setActiveFile',
+      args: [{ path }],
+    }).catch(() => {});
   }
 
   /* ─── 初始化 ─── */
@@ -735,7 +776,18 @@ export class ExtensionBridge {
 
     /** 在 IDE 中打开一个文件（普通模式或 Diff 模式） */
     this.rpcHandlers.set('git.openFile', async (params) => {
-      const { path } = params as { path: string };
+      const {
+        path,
+        original = '',
+        modified = '',
+        isBinary = false,
+      } = params as {
+        path: string;
+        staged?: boolean;
+        original?: string;
+        modified?: string;
+        isBinary?: boolean;
+      };
       if (!path || typeof path !== 'string') {
         return { success: false, error: '缺少 path 参数' };
       }
@@ -745,14 +797,49 @@ export class ExtensionBridge {
       }
       const base = String(root).replace(/\/$/, '');
       const fullPath = `${base}/${path}`;
+      const fileName = path.split('/').pop() || path;
+
+      // 根据文件扩展名推断 Monaco 语言（统一走 utils/languageFromPath，
+      // 保证与 openFile thunk 使用同一套规则，避免遗漏 .mts/.cts 等变体）
+      const { getLanguageFromPath } = await import('../utils/languageFromPath');
+      const language = getLanguageFromPath(path);
+
       try {
-        const { openFile } = await import('../store/slices/workspaceSlice');
-        // 完整 Diff 支持可通过扩展后续获取 HEAD 版本后通过 openDiffView 渲染
+        const { openFile, openDiffView } = await import('../store/slices/workspaceSlice');
+
+        // 二进制文件无法 Diff，回退为普通打开
+        if (isBinary) {
+          this.store.dispatch(
+            openFile({
+              name: fileName,
+              kind: 'file',
+              source: fullPath,
+            }) as any
+          );
+          return { success: true };
+        }
+
+        // 原 HEAD 内容或当前工作区内容均为空（极少见，例如全新仓库没有任何提交），
+        // 直接打开文件而不是空 Diff，避免无意义的视图
+        if (!original && !modified) {
+          this.store.dispatch(
+            openFile({
+              name: fileName,
+              kind: 'file',
+              source: fullPath,
+            }) as any
+          );
+          return { success: true };
+        }
+
+        // 打开 Diff 视图：左侧 = HEAD（原始），右侧 = 工作树（修改后）
         this.store.dispatch(
-          openFile({
-            name: path.split('/').pop() || path,
-            kind: 'file',
-            source: fullPath,
+          openDiffView({
+            filePath: fullPath,
+            fileName,
+            original,
+            modified,
+            language,
           }) as any
         );
         return { success: true };
@@ -784,6 +871,13 @@ export class ExtensionBridge {
     this.rpcHandlers.set('git.statusChanged', (params) => {
       const { status } = (params || {}) as { status?: Record<string, string> };
       this.store.dispatch(setGitStatus(status || {}));
+      return { updated: true };
+    });
+
+    /** Git 扩展推送当前分支名 */
+    this.rpcHandlers.set('git.branchChanged', (params) => {
+      const { branch } = (params || {}) as { branch?: string };
+      this.store.dispatch(setGitBranch(branch || null));
       return { updated: true };
     });
 

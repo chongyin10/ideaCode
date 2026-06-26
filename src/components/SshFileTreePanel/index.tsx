@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
-import { useAppDispatch } from '../../store/hooks';
-import { setFileContent, addWorkspaceFolder, openFile } from '../../store/slices/workspaceSlice';
+import { useAppDispatch, useAppSelector } from '../../store/hooks';
+import { setFileContent, openFile, loadDirectory, clearWorkspaceFolders } from '../../store/slices/workspaceSlice';
 import { terminalSDK } from '../../services/terminalSDK';
 import { getExtensionBridge } from '../../plugin/extensionBridge';
 import ContextMenu, { type MenuItem } from '../ContextMenu';
@@ -138,6 +138,9 @@ function getUniqueName(parent: FileTreeNode, name: string): string {
 
 export default function SshFileTreePanel({ content, fileId }: SshFileTreePanelProps) {
   const dispatch = useAppDispatch();
+  const gitWebviewPanel = useAppSelector((state) =>
+    state.extensionUI.webviewPanels.find((p) => p.viewType === 'git.changesView')
+  );
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; node: FileTreeNode } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [inputDialog, setInputDialog] = useState<{
@@ -355,16 +358,29 @@ export default function SshFileTreePanel({ content, fileId }: SshFileTreePanelPr
 
   const handleAddToExplorer = (node: FileTreeNode) => {
     if (!data || node.type !== 'directory') return;
-    const rootId = `ssh-${data.connectionId}-${node.path.replace(/\//g, '-')}`;
     const uri = `ssh://${data.connectionId}${node.path}`;
+    // 重新初始化目录结构：清空现有远程根目录与 Git 状态，并将选中目录加载为主工作区
+    dispatch(clearWorkspaceFolders());
     dispatch(
-      addWorkspaceFolder({
-        id: rootId,
-        name: `${data.connection.name} · ${node.name}`,
+      loadDirectory({
         source: uri,
+        name: `${data.connection.name} · ${node.name}`,
       })
     );
-    showNotice('已添加到资源管理器');
+    // 立即清空 Git WebView 面板中的旧仓库文件，避免扩展 host 轮询延迟导致残留
+    const bridge = getExtensionBridge();
+    if (bridge && gitWebviewPanel) {
+      bridge.postMessageToWebView(gitWebviewPanel.id, {
+        type: 'state',
+        rootPath: null,
+        repoRoot: null,
+        isRepo: false,
+        gitAvailable: true,
+        state: null,
+        lastError: null,
+      });
+    }
+    showNotice('已重新加载目录结构');
   };
 
   const handleViewFileContent = (node: FileTreeNode) => {

@@ -1118,7 +1118,11 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
 
           lspDisposablesRef.current.push(monaco.languages.registerDocumentSemanticTokensProvider(language, {
             getLegend: () => semanticTokensLegend ?? defaultSemanticTokensLegend,
-            provideDocumentSemanticTokens: async () => {
+            provideDocumentSemanticTokens: async (model: monaco.editor.ITextModel) => {
+              // 只处理 file:// 模型；gitdiff-* 等虚拟模型交给 DiffEditorPanel 注册的 provider
+              if (model && model.uri && model.uri.scheme !== 'file') {
+                return null;
+              }
               const currentPath = pathRef.current;
 
               // 1. 优先使用 onMount 预取结果（首次加载，大概率已缓存）

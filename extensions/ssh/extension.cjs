@@ -20950,7 +20950,9 @@ async function activate(context) {
       case "updateConnection": {
         const { connection } = message;
         if (message.command === "addConnection") {
-          connections.push(connection);
+          if (!connections.find((c) => c.id === connection.id)) {
+            connections.push(connection);
+          }
         } else {
           const idx = connections.findIndex((c) => c.id === connection.id);
           if (idx >= 0) connections[idx] = connection;
@@ -20968,6 +20970,13 @@ async function activate(context) {
       case "connect": {
         const conn = connections.find((c) => c.id === message.connectionId);
         if (!conn) return;
+        const existing = Array.from(sessions.values()).find(
+          (s) => s.connectionId === conn.id && ["connecting", "connected"].includes(s.status)
+        );
+        if (existing) {
+          log("log", "[SSH Extension] \u5DF2\u5B58\u5728\u6D3B\u52A8\u4F1A\u8BDD\uFF0C\u8DF3\u8FC7\u91CD\u590D\u8FDE\u63A5:", conn.host, conn.username);
+          return;
+        }
         log("log", "[SSH Extension] \u6536\u5230\u8FDE\u63A5\u8BF7\u6C42:", conn.host, conn.username);
         const sessionId = generateId();
         const session = {

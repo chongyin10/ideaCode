@@ -299,14 +299,14 @@ class Repository {
 
   async listBranches() {
     const { code, stdout, stderr } = await execGit(
-      ['for-each-ref', '--format=%(refname:short)%09%(HEAD)%09%(upstream:short)%09%(upstream:track)', 'refs/heads'],
+      ['for-each-ref', "--format=%(refname:short)%09%(HEAD)%09%(upstream:short)%09%(upstream:track)%09%(objectname)%09%(objectname:short)%09%(subject)%09%(authordate:unix)%09%(authorname)", 'refs/heads'],
       { cwd: this.rootPath }
     );
     if (code !== 0) throw new GitError(`listBranches failed: ${stderr}`);
     const branches = [];
     for (const line of stdout.split('\n')) {
       if (!line) continue;
-      const [name, head, upstream, track] = line.split('\t');
+      const [name, head, upstream, track, hash, shortHash, subject, timestamp, authorName] = line.split('\t');
       let ahead = 0, behind = 0;
       if (track) {
         const m = track.match(/ahead (\d+)/);
@@ -321,17 +321,24 @@ class Repository {
         ahead,
         behind,
         isRemote: false,
+        lastCommit: hash ? {
+          hash,
+          shortHash,
+          subject: subject || '',
+          authorName: authorName || '',
+          timestamp: parseInt(timestamp, 10) * 1000,
+        } : undefined,
       });
     }
     // 远程分支
     const { code: rc, stdout: rOut } = await execGit(
-      ['for-each-ref', '--format=%(refname:short)%09%(upstream:track)', 'refs/remotes'],
+      ['for-each-ref', "--format=%(refname:short)%09%(HEAD)%09%(upstream:short)%09%(upstream:track)%09%(objectname)%09%(objectname:short)%09%(subject)%09%(authordate:unix)%09%(authorname)", 'refs/remotes'],
       { cwd: this.rootPath }
     );
     if (rc === 0) {
       for (const line of rOut.split('\n')) {
         if (!line) continue;
-        const [name, track] = line.split('\t');
+        const [name, head, upstream, track, hash, shortHash, subject, timestamp, authorName] = line.split('\t');
         if (name.endsWith('/HEAD')) continue;
         let ahead = 0, behind = 0;
         if (track) {
@@ -347,6 +354,13 @@ class Repository {
           ahead,
           behind,
           isRemote: true,
+          lastCommit: hash ? {
+            hash,
+            shortHash,
+            subject: subject || '',
+            authorName: authorName || '',
+            timestamp: parseInt(timestamp, 10) * 1000,
+          } : undefined,
         });
       }
     }

@@ -3,6 +3,8 @@ import { GitBranch, ChevronDown, Plus } from 'lucide-react';
 import type { GitStatus } from '../types';
 import { useGitStore } from '../store/gitStore';
 import { sendRpc } from '../api';
+import { branchPickerEvents } from '../utils/events';
+import { formatRelativeTime } from '../utils/time';
 
 interface Props {
   status: GitStatus;
@@ -18,6 +20,7 @@ export default function RepositoryHeader({ status, rootPath, onCheckout, onCreat
   const [newName, setNewName] = useState('');
   const ref = useRef<HTMLDivElement>(null);
 
+  // 点击下拉框外部关闭
   useEffect(() => {
     if (!open) return;
     const onDocClick = (e: MouseEvent) => {
@@ -31,6 +34,23 @@ export default function RepositoryHeader({ status, rootPath, onCheckout, onCreat
     return () => document.removeEventListener('mousedown', onDocClick);
   }, [open]);
 
+  // 点击 WebView iframe 外部（主窗口）时关闭下拉框
+  useEffect(() => {
+    if (!open) return;
+    const onBlur = () => {
+      setOpen(false);
+      setCreating(false);
+      setNewName('');
+    };
+    window.addEventListener('blur', onBlur);
+    return () => window.removeEventListener('blur', onBlur);
+  }, [open]);
+
+  // 响应宿主下发的“打开分支选择器”命令
+  useEffect(() => {
+    return branchPickerEvents.on(() => setOpen(true));
+  }, []);
+
   const currentBranch = branches.find((b) => b.current) || branches.find((b) => b.name === status.branch);
   const displayName = currentBranch?.name || status.branch || '(no branch)';
 
@@ -41,6 +61,40 @@ export default function RepositoryHeader({ status, rootPath, onCheckout, onCreat
     setCreating(false);
     setNewName('');
     setOpen(false);
+  };
+
+  const renderBranchItem = (b: typeof branches[number]) => {
+    const commit = b.lastCommit;
+    return (
+      <button
+        key={b.name}
+        className={`git-branch-item ${b.current ? 'current' : ''}`}
+        onClick={() => {
+          if (!b.current) {
+            onCheckout(b.name);
+            setOpen(false);
+          }
+        }}
+      >
+        <GitBranch size={12} />
+        <span className="git-branch-item__content">
+          <span className="git-branch-item__row">
+            <span className="git-branch-item__name">{b.name}</span>
+            {b.current && <span className="git-branch-item__badge">当前</span>}
+            {b.ahead > 0 && <span className="git-branch-item__ab ahead">↑{b.ahead}</span>}
+            {b.behind > 0 && <span className="git-branch-item__ab behind">↓{b.behind}</span>}
+          </span>
+          {commit && (
+            <span className="git-branch-item__meta" title={`${commit.authorName} • ${commit.subject}`}>
+              <span className="git-branch-item__time">{formatRelativeTime(commit.timestamp)}</span>
+              <span className="git-branch-item__author">{commit.authorName}</span>
+              <span className="git-branch-item__hash">{commit.shortHash}</span>
+              <span className="git-branch-item__subject">{commit.subject}</span>
+            </span>
+          )}
+        </span>
+      </button>
+    );
   };
 
   return (
@@ -102,24 +156,7 @@ export default function RepositoryHeader({ status, rootPath, onCheckout, onCreat
             )}
             {branches
               .filter((b) => !b.isRemote)
-              .map((b) => (
-                <button
-                  key={b.name}
-                  className={`git-branch-item ${b.current ? 'current' : ''}`}
-                  onClick={() => {
-                    if (!b.current) {
-                      onCheckout(b.name);
-                      setOpen(false);
-                    }
-                  }}
-                >
-                  <GitBranch size={12} />
-                  <span className="git-branch-item__name">{b.name}</span>
-                  {b.current && <span className="git-branch-item__badge">当前</span>}
-                  {b.ahead > 0 && <span className="git-branch-item__ab ahead">↑{b.ahead}</span>}
-                  {b.behind > 0 && <span className="git-branch-item__ab behind">↓{b.behind}</span>}
-                </button>
-              ))}
+              .map(renderBranchItem)}
           </div>
 
           {branches.some((b) => b.isRemote) && (
@@ -130,20 +167,7 @@ export default function RepositoryHeader({ status, rootPath, onCheckout, onCreat
               <div className="git-branch-popover__list">
                 {branches
                   .filter((b) => b.isRemote)
-                  .map((b) => (
-                    <button
-                      key={b.name}
-                      className="git-branch-item"
-                      onClick={() => {
-                        const localName = b.name.includes('/') ? b.name.split('/').slice(1).join('/') : b.name;
-                        onCheckout(localName);
-                        setOpen(false);
-                      }}
-                    >
-                      <GitBranch size={12} />
-                      <span className="git-branch-item__name">{b.name}</span>
-                    </button>
-                  ))}
+                  .map(renderBranchItem)}
               </div>
             </>
           )}

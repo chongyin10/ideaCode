@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { ChevronRight, Plus, Minus, Undo2, FileText, Trash2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { ChevronRight, Plus, Minus, Undo2, FileText, Trash2, Inbox } from 'lucide-react';
 import type { GitChange } from '../types';
 
 interface SectionAction {
@@ -16,6 +16,7 @@ interface Props {
   collapsible?: boolean;
   defaultOpen?: boolean;
   emptyText?: string;
+  activeFile?: { path: string | null; staged: boolean | null };
   actions?: SectionAction[];
   onStage?: (paths: string[]) => void;
   onUnstage?: (paths: string[]) => void;
@@ -60,6 +61,7 @@ export default function ChangesSection({
   collapsible = true,
   defaultOpen = true,
   emptyText = '空',
+  activeFile = { path: null, staged: null },
   actions = [],
   onStage,
   onUnstage,
@@ -68,27 +70,19 @@ export default function ChangesSection({
   onOpen,
 }: Props) {
   const [open, setOpen] = useState(defaultOpen);
+  const [optimisticActive, setOptimisticActive] = useState<{ path: string; staged: boolean } | null>(null);
 
-  const handleStageAll = () => {
-    onStage?.(items.map((i) => i.path));
-  };
-  const handleUnstageAll = () => {
-    onUnstage?.(items.map((i) => i.path));
-  };
-  const handleDiscardAll = () => {
-    onDiscard?.(items.map((i) => i.path));
-  };
-  const handleDeleteAll = () => {
-    onDelete?.(items.map((i) => i.path));
-  };
+  useEffect(() => {
+    setOptimisticActive(null);
+  }, [activeFile?.path, activeFile?.staged]);
 
   const isEmpty = items.length === 0;
 
   return (
     <div className={`git-section ${isEmpty ? 'git-section--empty' : ''} ${open && !isEmpty ? 'git-section--expanded' : ''}`}>
-      <div className="git-section__header" onClick={() => collapsible && !isEmpty && setOpen((v) => !v)}>
+      <div className="git-section__header" onClick={() => collapsible && setOpen((v) => !v)}>
         {collapsible && (
-          <ChevronRight size={12} className={open && !isEmpty ? 'git-rotated' : ''} />
+          <ChevronRight size={12} className={open ? 'git-rotated' : ''} />
         )}
         <span className="git-section__title">{title}</span>
         <span className="git-section__badge">{badge}</span>
@@ -118,15 +112,25 @@ export default function ChangesSection({
           {items.map((item) => (
             <div
               key={item.path}
-              className={`git-item git-item--${statusBadge(item.workingStatus !== ' ' ? item.workingStatus : item.indexStatus)}`}
-              onClick={() => onOpen?.(item.path)}
+              className={`git-item git-item--${statusBadge(item.workingStatus !== ' ' ? item.workingStatus : item.indexStatus)} ${
+                (activeFile?.path === item.path && activeFile?.staged === (kind === 'staged')) ||
+                (optimisticActive?.path === item.path && optimisticActive?.staged === (kind === 'staged'))
+                  ? 'git-item--active'
+                  : ''
+              }`}
+              onClick={() => {
+                setOptimisticActive({ path: item.path, staged: kind === 'staged' });
+                onOpen?.(item.path);
+              }}
               title={item.path}
             >
               <span className="git-item__status">
                 {statusLabel(item.workingStatus !== ' ' ? item.workingStatus : item.indexStatus)}
               </span>
-              <span className="git-item__name">{item.path.split('/').pop()}</span>
-              <span className="git-item__path">{item.path}</span>
+              <span className="git-item__name-row">
+                <span className="git-item__name">{item.path.split('/').pop()}</span>
+                <span className="git-item__path">{item.path}</span>
+              </span>
               <span className="git-item__actions" onClick={(e) => e.stopPropagation()}>
                 {kind === 'changes' && (
                   <>
@@ -175,7 +179,12 @@ export default function ChangesSection({
           ))}
         </div>
       )}
-      {open && isEmpty && <div className="git-section__empty">{emptyText}</div>}
+      {open && isEmpty && (
+        <div className="git-section__empty">
+          <Inbox size={16} strokeWidth={1.5} />
+          <span>{emptyText}</span>
+        </div>
+      )}
     </div>
   );
 }

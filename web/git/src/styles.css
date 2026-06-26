@@ -77,14 +77,7 @@ input:focus, textarea:focus {
   border-bottom: 1px solid var(--vscode-sideBarSectionHeader-background, #252526);
 }
 
-.git-sc__clean {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 12px 10px;
-  color: var(--vscode-gitDecoration-untrackedResourceForeground, #969696);
-  font-size: 12px;
-}
+
 
 /* ─── 按钮 ─── */
 
@@ -99,6 +92,7 @@ input:focus, textarea:focus {
   border: 1px solid transparent;
   font-size: 12px;
   white-space: nowrap;
+  transition: opacity 0.1s linear, background 0.1s linear;
 }
 
 .git-btn:hover:not(:disabled) {
@@ -198,11 +192,12 @@ input:focus, textarea:focus {
 .git-branch-popover {
   position: absolute;
   top: calc(100% + 2px);
-  right: 8px;
+  right: 10px;
+  left: auto;
   z-index: 100;
-  min-width: 240px;
-  max-width: 320px;
-  max-height: 400px;
+  min-width: 220px;
+  max-width: calc(100% - 20px);
+  max-height: 460px;
   overflow: auto;
   background: var(--vscode-menu-background, #252526);
   border: 1px solid var(--vscode-menu-border, #454545);
@@ -243,9 +238,9 @@ input:focus, textarea:focus {
 
 .git-branch-item {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
-  padding: 4px 12px;
+  padding: 5px 12px;
   text-align: left;
   width: 100%;
   background: transparent;
@@ -258,8 +253,28 @@ input:focus, textarea:focus {
 }
 
 .git-branch-item.current {
-  opacity: 0.6;
+  opacity: 0.7;
   cursor: default;
+}
+
+.git-branch-item > svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.git-branch-item__content {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+
+.git-branch-item__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
 }
 
 .git-branch-item__name {
@@ -282,6 +297,41 @@ input:focus, textarea:focus {
 }
 .git-branch-item__ab.ahead { color: #73c991; }
 .git-branch-item__ab.behind { color: #f48771; }
+
+.git-branch-item__meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground, #969696);
+  min-width: 0;
+}
+
+.git-branch-item__meta > span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.git-branch-item__time {
+  flex: 0 0 auto;
+}
+
+.git-branch-item__author {
+  flex: 0 1 auto;
+  max-width: 80px;
+}
+
+.git-branch-item__hash {
+  flex: 0 0 auto;
+  font-family: var(--vscode-editor-font-family, monospace);
+  opacity: 0.8;
+}
+
+.git-branch-item__subject {
+  flex: 1 1 auto;
+  min-width: 40px;
+}
 
 /* ─── 提交框 ─── */
 
@@ -383,17 +433,24 @@ input:focus, textarea:focus {
 }
 
 .git-section__empty {
-  padding: 4px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 16px;
   font-size: 12px;
   color: var(--vscode-descriptionForeground, #969696);
-  font-style: italic;
+  text-align: center;
+  min-height: 80px;
 }
 
 /* ─── 文件条目 ─── */
 
 .git-item {
+  position: relative;
   display: grid;
-  grid-template-columns: 24px 1fr auto;
+  grid-template-columns: 24px 1fr;
   align-items: center;
   gap: 6px;
   padding: 3px 10px 3px 0;
@@ -413,6 +470,14 @@ input:focus, textarea:focus {
   zoom: 1;
 }
 
+.git-item--active {
+  background: var(--vscode-list-activeSelectionBackground, #094771);
+}
+
+.git-item--active:hover {
+  background: var(--vscode-list-activeSelectionBackground, #094771);
+}
+
 .git-item__status {
   text-align: center;
   font-family: var(--vscode-editor-font-family, monospace);
@@ -422,25 +487,49 @@ input:focus, textarea:focus {
   padding: 0 2px;
 }
 
+.git-item__name-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+}
+
 .git-item__name {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   font-family: var(--vscode-editor-font-family, monospace);
   font-size: 12px;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .git-item__path {
-  display: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground, #969696);
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 /*
- * 操作按钮始终占位（避免 hover 时切换 display 导致网格列宽突变 → 抖动）
- * 通过 opacity + visibility 控制显示状态，不影响布局
+ * 操作按钮采用绝对定位覆盖在右侧，不占用布局空间。
+ * 这样无 hover 时文件名称区域可以撑满整个宽度；
+ * hover 时按钮浮现，其背景色与当前行背景一致，遮挡下方文字。
  */
 .git-item__actions {
+  position: absolute;
+  right: 4px;
+  top: 0;
+  bottom: 0;
   display: inline-flex;
+  align-items: center;
   gap: 2px;
+  padding: 0 4px 0 6px;
+  background: var(--vscode-list-hoverBackground, #2a2d2e);
   opacity: 0;
   visibility: hidden;
   transition: opacity 0.1s linear;
@@ -449,6 +538,10 @@ input:focus, textarea:focus {
 .git-item:hover .git-item__actions {
   opacity: 1;
   visibility: visible;
+}
+
+.git-item--active .git-item__actions {
+  background: var(--vscode-list-activeSelectionBackground, #094771);
 }
 
 /* 防止任何可能的图标/按钮 hover 缩放 */
@@ -485,6 +578,11 @@ input:focus, textarea:focus {
 .git-item--unmerged .git-item__name,
 .git-item--conflict .git-item__name { color: #f48771; }
 .git-item--untracked .git-item__name { color: #73c991; }
+
+/* 已删除文件：文件名添加中划线 */
+.git-item--deleted .git-item__name {
+  text-decoration: line-through;
+}
 
 /* ─── 空状态 ─── */
 

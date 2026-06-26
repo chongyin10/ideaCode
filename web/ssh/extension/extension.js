@@ -622,7 +622,10 @@ async function activate(context) {
       case 'updateConnection': {
         const { connection } = message;
         if (message.command === 'addConnection') {
-          connections.push(connection);
+          // 幂等：按 ID 去重，避免重复消息或快速双击导致重复记录
+          if (!connections.find((c) => c.id === connection.id)) {
+            connections.push(connection);
+          }
         } else {
           const idx = connections.findIndex((c) => c.id === connection.id);
           if (idx >= 0) connections[idx] = connection;
@@ -642,6 +645,15 @@ async function activate(context) {
       case 'connect': {
         const conn = connections.find((c) => c.id === message.connectionId);
         if (!conn) return;
+
+        // 防止同一连接重复创建活动会话
+        const existing = Array.from(sessions.values()).find(
+          (s) => s.connectionId === conn.id && ['connecting', 'connected'].includes(s.status)
+        );
+        if (existing) {
+          log('log', '[SSH Extension] 已存在活动会话，跳过重复连接:', conn.host, conn.username);
+          return;
+        }
 
         log('log', '[SSH Extension] 收到连接请求:', conn.host, conn.username);
         const sessionId = generateId();

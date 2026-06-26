@@ -101,6 +101,8 @@ interface WorkspaceState {
   aiEditMode: boolean;
   /** Git 文件状态映射（由 web/git 扩展推送） */
   gitStatus: Record<string, string>;
+  /** 当前 Git 分支名（由 web/git 扩展推送） */
+  gitBranch: string | null;
 }
 
 const initialState: WorkspaceState = {
@@ -129,6 +131,7 @@ const initialState: WorkspaceState = {
   remoteRoots: [],
   aiEditMode: true,
   gitStatus: {},
+  gitBranch: null,
 };
 
 /* ─── 工具函数 ─── */
@@ -325,21 +328,12 @@ export const openFile = createAsyncThunk(
   async (entry: FileEntry & { readOnly?: boolean }) => {
     if (entry.kind !== 'file') return null;
     const content = await readFile(entry.source);
-    const ext = entry.name.split('.').pop()?.toLowerCase() || '';
-    const langMap: Record<string, string> = {
-      ts: 'typescript', tsx: 'typescript',
-      js: 'javascript', jsx: 'javascript',
-      cjs: 'javascript', mjs: 'javascript',
-      css: 'css', scss: 'scss', sass: 'scss', less: 'less',
-      html: 'html', htm: 'html', json: 'json',
-      md: 'markdown', py: 'python',
-      java: 'java',
-      c: 'c', h: 'c', cpp: 'cpp', cc: 'cpp', cxx: 'cpp', hpp: 'cpp',
-      cs: 'csharp',
-    };
-    const language = langMap[ext] || 'plaintext';
+    // 统一使用 utils/languageFromPath 推断 Monaco 语言，避免遗漏 .mts/.cts 等变体
+    const { getLanguageFromPath } = await import('../../utils/languageFromPath');
+    const sourceStr = typeof entry.source === 'string' ? entry.source : entry.name;
+    const language = getLanguageFromPath(sourceStr);
     // 用完整路径作为唯一 id，避免不同目录下的同名文件（如 index.tsx）冲突
-    const id = typeof entry.source === 'string' ? entry.source : entry.name;
+    const id = sourceStr;
     return { id, name: entry.name, source: entry.source, content, language, isDirty: false, readOnly: entry.readOnly ?? false };
   }
 );
@@ -516,6 +510,21 @@ const workspaceSlice = createSlice({
      */
     setGitStatus: (state, action) => {
       state.gitStatus = action.payload as Record<string, string>;
+    },
+    /**
+     * 设置当前 Git 分支名
+     */
+    setGitBranch: (state, action) => {
+      state.gitBranch = typeof action.payload === 'string' && action.payload ? action.payload : null;
+    },
+    /**
+     * 清空所有远程工作区根目录，同时清除关联的 Git 状态，
+     * 避免切换到非 Git 远程目录时仍显示旧仓库信息。
+     */
+    clearWorkspaceFolders: (state) => {
+      state.remoteRoots = [];
+      state.gitStatus = {};
+      state.gitBranch = null;
     },
     closeFile: (state, action) => {
       const payload = action.payload;
@@ -963,6 +972,8 @@ const workspaceSlice = createSlice({
         state.expandedDirs = [];
         state.clipboard = null;
         state.pendingSearchQuery = null;
+        state.gitStatus = {};
+        state.gitBranch = null;
       })
       .addCase(openFile.fulfilled, (state, action) => {
         if (!action.payload) return;
@@ -1083,6 +1094,8 @@ export const {
   setSettingsVisible, closeSettings, setMissingFileIds, openVirtualFile,
   addWorkspaceFolder, removeWorkspaceFolder, toggleFileReadOnly, toggleAiEditMode,
   setGitStatus,
+  setGitBranch,
+  clearWorkspaceFolders,
 } = workspaceSlice.actions;
 
 export default workspaceSlice.reducer;

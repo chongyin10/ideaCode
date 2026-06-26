@@ -4,6 +4,7 @@ import { GitBranch, AlertCircle, XCircle, FileText, ChevronDown, Cpu, MemoryStic
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import { setFileLanguage } from '../../store/slices/workspaceSlice';
 import { openBottomTab, switchPanel } from '../../store/slices/layoutSlice';
+import { getExtensionBridge } from '../../plugin/extensionBridge';
 import { isPath } from '../../services/fileService';
 import type { SystemStats } from '../../types/electron';
 import './StatusBar.css';
@@ -46,8 +47,11 @@ const StatusBar = () => {
   const { t } = useTranslation();
   const dispatch = useAppDispatch();
   const [pathMode, setPathMode] = useState<'relative' | 'absolute'>('relative');
-  const { openedFiles, activeFileId, rootSource, rootName } = useAppSelector(
+  const { openedFiles, activeFileId, rootSource, rootName, gitBranch } = useAppSelector(
     (state) => state.workspace
+  );
+  const gitWebviewPanel = useAppSelector((state) =>
+    state.extensionUI.webviewPanels.find((p) => p.viewType === 'git.changesView')
   );
 
   const [langOpen, setLangOpen] = useState(false);
@@ -103,14 +107,19 @@ const StatusBar = () => {
   return (
     <div className="status-bar">
       <div className="status-bar__left">
-        {/* Git 入口：点击打开源代码管理面板（web/git 扩展提供） */}
+        {/* Git 入口：显示当前分支名，点击打开源代码管理面板并展开分支选择器 */}
         <span
           className="status-bar__branch status-bar__item--clickable"
-          onClick={() => dispatch(switchPanel('workbench.scm'))}
-          title={t('statusBar.sourceControl') || '源代码管理'}
+          onClick={() => {
+            dispatch(switchPanel('workbench.scm'));
+            if (gitWebviewPanel) {
+              getExtensionBridge()?.postMessageToWebView(gitWebviewPanel.id, { type: 'showBranchPicker' });
+            }
+          }}
+          title={gitBranch ? `当前分支: ${gitBranch}` : t('statusBar.sourceControl') || '源代码管理'}
         >
           <GitBranch size={12} strokeWidth={1.5} />
-          <span>源代码管理</span>
+          <span>{gitBranch || t('statusBar.sourceControl') || '源代码管理'}</span>
         </span>
 
         <span

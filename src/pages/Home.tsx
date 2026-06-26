@@ -23,13 +23,16 @@ import {
   equalizeGroupRatios,
   reorderTab,
 } from '../store/slices/workspaceSlice';
+import { removeEditorTerminal } from '../store/slices/terminalSlice';
 
 import { openDirectory, warmupFileCache } from '../services/fileService';
+import { terminalSDK } from '../services/terminalSDK';
 import TabBar from '../components/TabBar';
 import MonacoEditor from '../components/MonacoEditor';
 import DiffEditorPanel from '../components/DiffEditorPanel';
 import ExtensionDetail from '../components/ExtensionDetail';
 import SshFileTreePanel from '../components/SshFileTreePanel';
+import TerminalEditorView from '../components/TerminalEditorView';
 import ConfirmDialog, { type ConfirmResult } from '../components/ConfirmDialog';
 import QuickOpen from '../components/QuickOpen';
 import SettingsPanel from '../components/SettingsPanel';
@@ -378,6 +381,13 @@ function Home() {
         setPendingClose([{ id, groupIndex }]);
         return;
       }
+      // 终端标签关闭时需要同步清理 terminal 状态与底层进程
+      if (file?.language === 'terminal') {
+        dispatch(closeFile({ id, groupIndex }));
+        dispatch(removeEditorTerminal(id));
+        terminalSDK.disposeTab(id).catch(() => {});
+        return;
+      }
       // Diff 文件和普通文件一样按组关闭：closeFile 只从指定组移除，
       // 当文件不再被任何组引用时自动从 openedFiles 清理。
       // 避免使用 closeDiffView（它会从所有组中移除，导致多面板时全部关闭）。
@@ -400,7 +410,16 @@ function Home() {
       targets
         .slice()
         .sort((a, b) => b.groupIndex - a.groupIndex)
-        .forEach((t) => dispatch(closeFile(t)));
+        .forEach((t) => {
+          const file = openedFilesRef.current.find((f) => f.id === t.id);
+          if (file?.language === 'terminal') {
+            dispatch(closeFile(t));
+            dispatch(removeEditorTerminal(t.id));
+            terminalSDK.disposeTab(t.id).catch(() => {});
+          } else {
+            dispatch(closeFile(t));
+          }
+        });
     },
     [dispatch]
   );
@@ -428,7 +447,16 @@ function Home() {
       targets
         .slice()
         .sort((a, b) => b.groupIndex - a.groupIndex)
-        .forEach((t) => dispatch(closeFile(t)));
+        .forEach((t) => {
+          const file = openedFilesRef.current.find((f) => f.id === t.id);
+          if (file?.language === 'terminal') {
+            dispatch(closeFile(t));
+            dispatch(removeEditorTerminal(t.id));
+            terminalSDK.disposeTab(t.id).catch(() => {});
+          } else {
+            dispatch(closeFile(t));
+          }
+        });
     },
     [pendingClose, dispatch]
   );
@@ -669,7 +697,7 @@ function Home() {
             onPin={() => dispatch(pinPreviewFile())}
             onToggleReadOnly={(id) => dispatch(toggleFileReadOnly(id))}
             onReorder={(fromId, toId, position) => dispatch(reorderTab({ fromId, toId, position }))}
-            onSplitView={file?.language === 'extension' || file?.language === 'ssh-file-tree' ? undefined : () => dispatch(toggleSplitView())}
+            onSplitView={file?.language === 'extension' || file?.language === 'ssh-file-tree' || file?.language === 'terminal' ? undefined : () => dispatch(toggleSplitView())}
             splitActive={splitView}
             focused={focused}
             loadingFiles={loadingFiles}
@@ -681,6 +709,13 @@ function Home() {
                 <ExtensionDetail key={`ext-${file.id}-${group.id}`} extensionId={file.id.replace('extension://', '')} />
               ) : file.language === 'ssh-file-tree' ? (
                 <SshFileTreePanel key={`ssh-tree-${file.id}-${group.id}`} content={file.content} fileId={file.id} />
+              ) : file.language === 'terminal' ? (
+                <TerminalEditorView
+                  key={`terminal-${file.id}-${group.id}`}
+                  terminalId={file.id}
+                  title={file.name}
+                  active={focused && group.activeFileId === file.id}
+                />
               ) : file.isDiff && file.diffData ? (
                 <DiffEditorPanel key={`diff-${file.id}-${group.id}`} diffData={file.diffData} groupId={group.id} />
               ) : (

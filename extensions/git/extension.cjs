@@ -692,14 +692,14 @@ var require_repository = __commonJS({
       }
       async listBranches() {
         const { code, stdout, stderr } = await execGit(
-          ["for-each-ref", "--format=%(refname:short)%09%(HEAD)%09%(upstream:short)%09%(upstream:track)", "refs/heads"],
+          ["for-each-ref", "--format=%(refname:short)%09%(HEAD)%09%(upstream:short)%09%(upstream:track)%09%(objectname)%09%(objectname:short)%09%(subject)%09%(authordate:unix)%09%(authorname)", "refs/heads"],
           { cwd: this.rootPath }
         );
         if (code !== 0) throw new GitError2(`listBranches failed: ${stderr}`);
         const branches = [];
         for (const line of stdout.split("\n")) {
           if (!line) continue;
-          const [name, head, upstream, track] = line.split("	");
+          const [name, head, upstream, track, hash, shortHash, subject, timestamp, authorName] = line.split("	");
           let ahead = 0, behind = 0;
           if (track) {
             const m = track.match(/ahead (\d+)/);
@@ -713,17 +713,24 @@ var require_repository = __commonJS({
             upstream: upstream || null,
             ahead,
             behind,
-            isRemote: false
+            isRemote: false,
+            lastCommit: hash ? {
+              hash,
+              shortHash,
+              subject: subject || "",
+              authorName: authorName || "",
+              timestamp: parseInt(timestamp, 10) * 1e3
+            } : void 0
           });
         }
         const { code: rc, stdout: rOut } = await execGit(
-          ["for-each-ref", "--format=%(refname:short)%09%(upstream:track)", "refs/remotes"],
+          ["for-each-ref", "--format=%(refname:short)%09%(HEAD)%09%(upstream:short)%09%(upstream:track)%09%(objectname)%09%(objectname:short)%09%(subject)%09%(authordate:unix)%09%(authorname)", "refs/remotes"],
           { cwd: this.rootPath }
         );
         if (rc === 0) {
           for (const line of rOut.split("\n")) {
             if (!line) continue;
-            const [name, track] = line.split("	");
+            const [name, head, upstream, track, hash, shortHash, subject, timestamp, authorName] = line.split("	");
             if (name.endsWith("/HEAD")) continue;
             let ahead = 0, behind = 0;
             if (track) {
@@ -738,7 +745,14 @@ var require_repository = __commonJS({
               upstream: null,
               ahead,
               behind,
-              isRemote: true
+              isRemote: true,
+              lastCommit: hash ? {
+                hash,
+                shortHash,
+                subject: subject || "",
+                authorName: authorName || "",
+                timestamp: parseInt(timestamp, 10) * 1e3
+              } : void 0
             });
           }
         }
@@ -894,6 +908,8 @@ var currentRepo = null;
 var currentRootPath = null;
 var webviewPanel = null;
 var gitAvailable = true;
+var activeFile = { path: null, staged: null };
+var lastOpenedFile = { path: null, staged: null, time: 0 };
 var workspaceChangeTimer = null;
 function getWebviewHtml(extensionPath) {
   const htmlPath = path.join(extensionPath, "webview", "index.html");
@@ -949,12 +965,37 @@ function buildStatusMap(state) {
   add(state.untracked, () => "U");
   return map;
 }
+function pushActiveFile() {
+  if (!webviewPanel) return;
+  try {
+    webviewPanel.webview.postMessage({ type: "activeFile", path: activeFile.path, staged: activeFile.staged });
+  } catch (e) {
+    console.error("[Git Extension] push active file failed:", e.message);
+  }
+}
+function resolveActiveFileStaged(path2) {
+  if (!currentRepo || !path2) return null;
+  const state = currentRepo.state;
+  const inStaged = state.staged.some((c) => c.path === path2);
+  const inUnstaged = state.changes.some((c) => c.path === path2) || state.merge.some((c) => c.path === path2) || state.untracked.some((c) => c.path === path2);
+  if (inStaged && !inUnstaged) return true;
+  if (!inStaged && inUnstaged) return false;
+  if (lastOpenedFile.path === path2 && Date.now() - lastOpenedFile.time < 2e3) {
+    return lastOpenedFile.staged;
+  }
+  return null;
+}
 function pushState() {
   const state = currentRepo?.state || null;
   try {
     send("git.statusChanged", { status: buildStatusMap(state) });
   } catch (e) {
     console.error("[Git Extension] push git status failed:", e.message);
+  }
+  try {
+    send("git.branchChanged", { branch: state?.branch || "" });
+  } catch (e) {
+    console.error("[Git Extension] push branch failed:", e.message);
   }
   if (!webviewPanel) return;
   const message = {
@@ -970,6 +1011,10 @@ function pushState() {
     webviewPanel.webview.postMessage(message);
   } catch (e) {
     console.error("[Git Extension] postMessage failed:", e.message);
+  }
+  if (activeFile.path) {
+    activeFile.staged = resolveActiveFileStaged(activeFile.path);
+    pushActiveFile();
   }
   const badge = state ? (state.staged?.length || 0) + (state.changes?.length || 0) + (state.merge?.length || 0) + (state.untracked?.length || 0) : 0;
   try {
@@ -1209,10 +1254,35 @@ async function handleWebviewMessage(message) {
       case "openFile": {
         if (!message.path) return reply({ success: false, error: "\u7F3A\u5C11 path" });
         try {
+          let originalContent = "";
+          if (currentRepo) {
+            try {
+              originalContent = await currentRepo.getOriginalContent(message.path) || "";
+            } catch (e) {
+            }
+          }
+          let modifiedContent = "";
+          let isBinary = false;
+          try {
+            const repoRoot = currentRepo ? currentRepo.rootPath : currentRootPath;
+            const fullPath = path.join(repoRoot || "", message.path);
+            const buf = fs.readFileSync(fullPath);
+            isBinary = buf.includes(0);
+            if (!isBinary) {
+              modifiedContent = buf.toString("utf8");
+            }
+          } catch (e) {
+          }
           await sendRpc("git.openFile", {
             path: message.path,
-            staged: !!message.staged
+            staged: !!message.staged,
+            original: originalContent,
+            modified: modifiedContent,
+            isBinary
           });
+          activeFile = { path: message.path, staged: !!message.staged };
+          lastOpenedFile = { path: message.path, staged: !!message.staged, time: Date.now() };
+          pushActiveFile();
           reply({ success: true });
         } catch (e) {
           reply({ success: false, error: e.message });
@@ -1328,4 +1398,11 @@ function deactivate() {
   }
   webviewPanel = null;
 }
-module.exports = { activate, deactivate };
+module.exports = {
+  activate,
+  deactivate,
+  setActiveFile({ path: path2 }) {
+    activeFile = { path: path2 || null, staged: resolveActiveFileStaged(path2) };
+    pushActiveFile();
+  }
+};

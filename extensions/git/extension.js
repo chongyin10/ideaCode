@@ -23,6 +23,8 @@ let currentRepo = null;
 let currentRootPath = null;
 let webviewPanel = null;
 let gitAvailable = true;
+let activeFile = { path: null, staged: null };
+let lastOpenedFile = { path: null, staged: null, time: 0 };
 
 // 防抖：工作区根变更时延迟一点再处理（避免快速切换）
 let workspaceChangeTimer = null;
@@ -94,6 +96,31 @@ function buildStatusMap(state) {
   return map;
 }
 
+function pushActiveFile() {
+  if (!webviewPanel) return;
+  try {
+    webviewPanel.webview.postMessage({ type: 'activeFile', path: activeFile.path, staged: activeFile.staged });
+  } catch (e) {
+    console.error('[Git Extension] push active file failed:', e.message);
+  }
+}
+
+function resolveActiveFileStaged(path) {
+  if (!currentRepo || !path) return null;
+  const state = currentRepo.state;
+  const inStaged = state.staged.some((c) => c.path === path);
+  const inUnstaged = state.changes.some((c) => c.path === path) ||
+    state.merge.some((c) => c.path === path) ||
+    state.untracked.some((c) => c.path === path);
+  if (inStaged && !inUnstaged) return true;
+  if (!inStaged && inUnstaged) return false;
+  // 暂存区和工作区同时存在该文件（部分暂存）时，优先采用最近一次打开 diff 时的分区
+  if (lastOpenedFile.path === path && Date.now() - lastOpenedFile.time < 2000) {
+    return lastOpenedFile.staged;
+  }
+  return null;
+}
+
 function pushState() {
   const state = currentRepo?.state || null;
 
@@ -102,6 +129,13 @@ function pushState() {
     send('git.statusChanged', { status: buildStatusMap(state) });
   } catch (e) {
     console.error('[Git Extension] push git status failed:', e.message);
+  }
+
+  // 同步当前分支到主应用状态栏
+  try {
+    send('git.branchChanged', { branch: state?.branch || '' });
+  } catch (e) {
+    console.error('[Git Extension] push branch failed:', e.message);
   }
 
   if (!webviewPanel) return;
@@ -118,6 +152,12 @@ function pushState() {
     webviewPanel.webview.postMessage(message);
   } catch (e) {
     console.error('[Git Extension] postMessage failed:', e.message);
+  }
+
+  // 状态变更后重新评估当前激活文件所在分区
+  if (activeFile.path) {
+    activeFile.staged = resolveActiveFileStaged(activeFile.path);
+    pushActiveFile();
   }
 
   // 同步活动栏徽标：暂存 + 工作区修改 + 冲突 + 未跟踪
@@ -406,11 +446,41 @@ async function handleWebviewMessage(message) {
         // 打开工作区中的文件
         if (!message.path) return reply({ success: false, error: '缺少 path' });
         try {
+          // 获取 HEAD 版本（原始）和工作树版本（修改后），供渲染进程展示 Diff
+          let originalContent = '';
+          if (currentRepo) {
+            try {
+              originalContent = (await currentRepo.getOriginalContent(message.path)) || '';
+            } catch (e) {
+              // 文件在 HEAD 中不存在（如新增/未跟踪文件），original 留空即可
+            }
+          }
+          let modifiedContent = '';
+          let isBinary = false;
+          try {
+            const repoRoot = currentRepo ? currentRepo.rootPath : currentRootPath;
+            const fullPath = path.join(repoRoot || '', message.path);
+            const buf = fs.readFileSync(fullPath);
+            // 简易二进制检测：含 NUL 字节视为二进制
+            isBinary = buf.includes(0);
+            if (!isBinary) {
+              modifiedContent = buf.toString('utf8');
+            }
+          } catch (e) {
+            // 文件在工作区不存在（如删除），modified 留空
+          }
           // 直接调用 git.openFile RPC（这个 handler 在 renderer 的 extensionBridge 中）
           await sendRpc('git.openFile', {
             path: message.path,
             staged: !!message.staged,
+            original: originalContent,
+            modified: modifiedContent,
+            isBinary,
           });
+          // 记录本次打开的文件分区，用于区分 staged / changes 高亮
+          activeFile = { path: message.path, staged: !!message.staged };
+          lastOpenedFile = { path: message.path, staged: !!message.staged, time: Date.now() };
+          pushActiveFile();
           reply({ success: true });
         } catch (e) {
           reply({ success: false, error: e.message });
@@ -543,4 +613,11 @@ function deactivate() {
   webviewPanel = null;
 }
 
-module.exports = { activate, deactivate };
+module.exports = {
+  activate,
+  deactivate,
+  setActiveFile({ path }) {
+    activeFile = { path: path || null, staged: resolveActiveFileStaged(path) };
+    pushActiveFile();
+  },
+};
