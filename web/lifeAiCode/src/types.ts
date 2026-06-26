@@ -86,6 +86,11 @@ export interface DiagnosticInfo {
 
 export type ProviderType = 'openai' | 'anthropic' | 'deepseek' | 'glm' | 'qwen' | 'kimi' | 'MiniMax' | 'doubao' | 'ollama' | 'custom';
 
+/** 模型下拉/卡片展示时的厂商排序 */
+export const PROVIDER_ORDER: ProviderType[] = [
+  'openai', 'anthropic', 'deepseek', 'qwen', 'glm', 'kimi', 'MiniMax', 'doubao', 'ollama', 'custom',
+];
+
 export const PROVIDER_META: Record<ProviderType, {
   label: string;
   icon: string;
@@ -255,6 +260,7 @@ export type WebViewRequest =
   | { command: 'explainCode'; code: string; context: CodeContext }
   | { command: 'suggestRefactor'; context: CodeContext }
   | { command: 'configure'; config: LlmConfig }
+  | { command: 'updateConfigs'; configs: LlmConfig[] }
   | { command: 'testConnection'; config: LlmConfig }
   | { command: 'switchConfig'; configId: string }
   | { command: 'requestConfig' }

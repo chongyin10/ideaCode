@@ -1133,6 +1133,24 @@ async function activate(context) {
           }
           break;
         }
+        case 'updateConfigs': {
+          // WebView 拖拽排序后整体替换配置列表
+          if (Array.isArray(message.configs)) {
+            configs = message.configs.slice();
+            if (!configs.find((c) => c.id === activeConfigId)) {
+              activeConfigId = configs[0]?.id || '';
+            }
+            const activeConfig = configs.find((c) => c.id === activeConfigId);
+            if (activeConfig) {
+              setActiveConfig(activeConfig);
+            } else {
+              persistConfigs();
+              broadcastConfigs();
+            }
+            console.log('[LifeAiCode] 配置列表已更新顺序:', configs.length);
+          }
+          break;
+        }
         case 'testConnection': {
           const testConfig = message.config;
           try {

@@ -337,7 +337,7 @@ export default function SourceControlView() {
           items={status.untracked}
           kind="untracked"
           collapsible
-          defaultOpen={false}
+          defaultOpen
           emptyText="没有未跟踪的文件"
           actions={[
             { label: '全部暂存', handler: handleStageAll, disabled: status.untracked.length === 0 },

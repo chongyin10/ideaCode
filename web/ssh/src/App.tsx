@@ -529,7 +529,23 @@ function App() {
               );
             })
           )}
-        </div>
+          {connections.length > 0 && (
+              <div
+                className="connection-card connection-card--add"
+                onClick={() => {
+                  resetForm();
+                  setExpandedSections((prev) => ({ ...prev, addForm: true }));
+                  setTimeout(() => formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
+                }}
+                role="button"
+                tabIndex={0}
+                title="添加连接"
+              >
+                <span className="connection-card__add-icon">+</span>
+                <span className="connection-card__add-text">添加连接</span>
+              </div>
+            )}
+          </div>
         </>)
         }
       </div>

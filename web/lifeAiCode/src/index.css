@@ -161,6 +161,7 @@ body {
   min-height: 0;
   height: 100%;
   overflow: hidden;
+  position: relative;
 }
 
 /* ════════════════════════════════════════════════════════════════ */
@@ -174,6 +175,128 @@ body {
   padding: 24px 0 16px;
   position: relative;
 }
+
+/* ════════════════════════════════════════════════════════════════ */
+/*  History Sidebar                                                 */
+/* ════════════════════════════════════════════════════════════════ */
+
+.history-sidebar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 280px;
+  background: var(--surface-1);
+  border-right: 1px solid var(--border-default);
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  animation: historySlideIn 0.22s var(--ease-out);
+}
+@keyframes historySlideIn {
+  from { opacity: 0; transform: translateX(-12px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.history-sidebar__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.history-sidebar__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.history-sidebar__close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+.history-sidebar__close:hover {
+  background: var(--surface-3);
+  color: var(--text-primary);
+}
+
+.history-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.history-empty {
+  padding: 24px 12px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.history-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  user-select: none;
+  transition: background var(--duration-fast);
+}
+.history-item:hover { background: var(--surface-2); }
+.history-item[draggable] { cursor: grab; }
+.history-item[draggable]:active { cursor: grabbing; }
+.history-item--dragging {
+  opacity: 0.55;
+  box-shadow: var(--shadow-md);
+}
+.history-item__drag {
+  display: flex;
+  align-items: center;
+  color: var(--text-muted);
+  cursor: grab;
+  flex-shrink: 0;
+}
+.history-item__drag:active { cursor: grabbing; }
+.history-item__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.history-item__title {
+  font-size: 12px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.history-item__meta {
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+.history-item__drop-line {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  background: var(--accent-500);
+  border-radius: 1px;
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.4);
+  z-index: 2;
+}
+.history-item__drop-line:first-child { top: 0; }
+.history-item__drop-line:last-child { bottom: 0; }
 
 /* ─── Message Row ─── */
 .message-row {
@@ -2250,7 +2373,7 @@ body {
   background: var(--surface-2);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-xl);
-  overflow: hidden;
+  overflow: visible;
   transition: border-color var(--duration-fast), box-shadow var(--duration-fast);
 }
 .input-wrapper:focus-within {
@@ -2287,7 +2410,9 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
-  overflow: hidden;
+  overflow: visible;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .input-tag {
@@ -2310,12 +2435,15 @@ body {
   color: var(--accent-400);
   background: rgba(59, 130, 246, 0.08);
   border-color: rgba(59, 130, 246, 0.22);
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .input-actions {
   display: flex;
   align-items: center;
   gap: 4px;
+  flex-shrink: 0;
 }
 
 .input-icon-btn {
@@ -2495,6 +2623,11 @@ body {
   transition: background var(--duration-fast);
 }
 .kc-dropdown__item:hover { background: var(--surface-3); }
+.kc-dropdown__item--active {
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--accent-400);
+}
+.kc-dropdown__item--active:hover { background: rgba(59, 130, 246, 0.18); }
 .kc-dropdown__item-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kc-dropdown__item-meta { font-size: 11px; color: var(--text-tertiary); }
 .kc-dropdown__divider { height: 1px; background: var(--border-subtle); margin: 4px 0; }
@@ -2512,6 +2645,55 @@ body {
   border-radius: var(--radius-sm);
 }
 .kc-dropdown__manage:hover { background: rgba(59, 130, 246, 0.08); }
+
+.kc-dropdown--models {
+  min-width: 260px;
+  max-height: 420px;
+  top: auto;
+  bottom: 100%;
+  margin-top: 0;
+  margin-bottom: 6px;
+}
+.kc-dropdown__group + .kc-dropdown__group {
+  border-top: 1px solid var(--border-subtle);
+  margin-top: 4px;
+  padding-top: 4px;
+}
+.kc-dropdown__item--disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.kc-dropdown__item--disabled:hover { background: transparent; }
+.kc-dropdown__item-note {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.kc-config-selector__label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kc-config-selector__model {
+  color: var(--text-secondary);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kc-config-selector__chevron {
+  margin-left: 2px;
+  transition: transform var(--duration-fast) var(--ease-out);
+  flex-shrink: 0;
+}
+.kc-config-selector__chevron--open { transform: rotate(180deg); }
 
 /* ════════════════════════════════════════════════════════════════ */
 /*  Config Panel                                                    */
@@ -2992,6 +3174,28 @@ body {
   cursor: pointer;
   user-select: none;
   transition: background var(--duration-fast);
+}
+.config-card[draggable] { cursor: grab; }
+.config-card[draggable]:active { cursor: grabbing; }
+.config-card--dragging {
+  opacity: 0.6;
+  box-shadow: var(--shadow-lg);
+}
+.config-card__drag {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  cursor: grab;
+  margin-left: -4px;
+}
+.config-card__drag:active { cursor: grabbing; }
+.config-card__drop-line {
+  height: 2px;
+  background: var(--accent-500);
+  border-radius: 1px;
+  margin: 0 14px;
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.4);
 }
 .config-card__main:hover {
   background: rgba(255, 255, 255, 0.02);

@@ -275,6 +275,34 @@ body {
   background: #1a2f45;
 }
 
+.connection-card--add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 120px;
+  border-style: dashed;
+  border-color: #3c3c3c;
+  background: transparent;
+  cursor: pointer;
+  color: #858585;
+  gap: 8px;
+  user-select: none;
+}
+.connection-card--add:hover {
+  border-color: #007acc;
+  color: #cccccc;
+  background: rgba(0, 122, 204, 0.08);
+}
+.connection-card__add-icon {
+  font-size: 28px;
+  font-weight: 300;
+  line-height: 1;
+}
+.connection-card__add-text {
+  font-size: 13px;
+  font-weight: 500;
+}
+
 .connection-card__header {
   display: flex;
   align-items: center;

@@ -104,8 +104,11 @@ function parseStatus(output) {
     if (!line || line.startsWith('#')) continue;
 
     if (line.startsWith('? ')) {
+      const untrackedPath = line.slice(2);
+      // 未跟踪的目录（以 / 结尾）不加入列表，因为点击后无法在编辑器中打开
+      if (untrackedPath.endsWith('/')) continue;
       status.untracked.push({
-        path: line.slice(2),
+        path: untrackedPath,
         originalPath: null,
         indexStatus: 'untracked',
         workingStatus: 'untracked',

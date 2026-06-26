@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { ChatPanel } from './components/ChatPanel';
 import { ConfigPanel } from './components/ConfigPanel';
 import type { CodeContext, ExtensionMessage, LlmConfig } from './types';
@@ -17,6 +17,8 @@ function App() {
   const [activeConfigId, setActiveConfigId] = useState<string>('');
   const [configReady, setConfigReady] = useState(false);
   const vscode = useMemo(() => getVsCodeApi(), []);
+  const configsRef = useRef(configs);
+  configsRef.current = configs;
 
   useEffect(() => {
     const popupData = (window as unknown as { __lifeAiCodePopupData?: CodeContext }).__lifeAiCodePopupData;
@@ -57,8 +59,6 @@ function App() {
   const activeConfig = configs.find((c) => c.id === activeConfigId) || configs[0] || null;
 
   const handleConfigsChange = useCallback((newConfigs: LlmConfig[], newActiveId?: string) => {
-    setConfigs(newConfigs);
-
     const nextActiveId = newActiveId
       || (newConfigs.find((c) => c.id === activeConfigId) ? activeConfigId : newConfigs[0]?.id)
       || '';
@@ -66,11 +66,19 @@ function App() {
     if (nextActiveId !== activeConfigId) {
       setActiveConfigId(nextActiveId);
     }
+    setConfigs(newConfigs);
 
-    // 同步到 Extension Host
+    // 同步到 Extension Host：如果只是顺序调整，发送 updateConfigs；否则发送单个 configure
     const active = newConfigs.find((c) => c.id === nextActiveId);
     if (active && vscode) {
-      vscode.postMessage({ command: 'configure', config: active });
+      const prevIds = configsRef.current.map((c) => c.id);
+      const nextIds = newConfigs.map((c) => c.id);
+      const orderChanged = prevIds.length !== nextIds.length || prevIds.some((id, i) => id !== nextIds[i]);
+      if (orderChanged) {
+        vscode.postMessage({ command: 'updateConfigs', configs: newConfigs });
+      } else {
+        vscode.postMessage({ command: 'configure', config: active });
+      }
     }
   }, [activeConfigId, vscode]);
 
@@ -99,7 +107,6 @@ function App() {
           isPopup={!!initialContext}
           activeConfig={activeConfig}
           configs={configs}
-          onSwitchConfig={handleSwitchConfig}
           onOpenConfig={() => setView('config')}
         />
       ) : (

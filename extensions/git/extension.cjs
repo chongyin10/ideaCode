@@ -344,8 +344,10 @@ var require_statusParser = __commonJS({
         const line = lines[i];
         if (!line || line.startsWith("#")) continue;
         if (line.startsWith("? ")) {
+          const untrackedPath = line.slice(2);
+          if (untrackedPath.endsWith("/")) continue;
           status.untracked.push({
-            path: line.slice(2),
+            path: untrackedPath,
             originalPath: null,
             indexStatus: "untracked",
             workingStatus: "untracked"

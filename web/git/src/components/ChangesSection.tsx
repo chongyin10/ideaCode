@@ -35,6 +35,7 @@ function statusBadge(code: string) {
     U: 'conflict',
     '?': 'untracked',
     ' ': ' ',
+    untracked: 'untracked',
   };
   return map[code] || code.toLowerCase();
 }
@@ -49,6 +50,7 @@ function statusLabel(code: string) {
     U: 'U',
     '?': 'U',
     ' ': '·',
+    untracked: 'U',
   };
   return map[code] || code || '?';
 }
@@ -69,17 +71,16 @@ export default function ChangesSection({
   onDelete,
   onOpen,
 }: Props) {
-  const [open, setOpen] = useState(defaultOpen);
+  const isEmpty = items.length === 0;
+  const [open, setOpen] = useState(isEmpty ? false : defaultOpen);
   const [optimisticActive, setOptimisticActive] = useState<{ path: string; staged: boolean } | null>(null);
 
   useEffect(() => {
     setOptimisticActive(null);
   }, [activeFile?.path, activeFile?.staged]);
 
-  const isEmpty = items.length === 0;
-
   return (
-    <div className={`git-section ${isEmpty ? 'git-section--empty' : ''} ${open && !isEmpty ? 'git-section--expanded' : ''}`}>
+    <div className={`git-section ${isEmpty ? 'git-section--empty' : ''} ${open ? 'git-section--expanded' : ''}`}>
       <div className="git-section__header" onClick={() => collapsible && setOpen((v) => !v)}>
         {collapsible && (
           <ChevronRight size={12} className={open ? 'git-rotated' : ''} />
@@ -109,7 +110,10 @@ export default function ChangesSection({
 
       {open && !isEmpty && (
         <div className="git-section__content">
-          {items.map((item) => (
+          {items.map((item) => {
+            const fileName = item.path.replace(/\/$/, '').split('/').pop() || item.path;
+            const showPath = item.path !== fileName;
+            return (
             <div
               key={item.path}
               className={`git-item git-item--${statusBadge(item.workingStatus !== ' ' ? item.workingStatus : item.indexStatus)} ${
@@ -128,8 +132,8 @@ export default function ChangesSection({
                 {statusLabel(item.workingStatus !== ' ' ? item.workingStatus : item.indexStatus)}
               </span>
               <span className="git-item__name-row">
-                <span className="git-item__name">{item.path.split('/').pop()}</span>
-                <span className="git-item__path">{item.path}</span>
+                <span className="git-item__name">{fileName}</span>
+                {showPath && <span className="git-item__path">{item.path}</span>}
               </span>
               <span className="git-item__actions" onClick={(e) => e.stopPropagation()}>
                 {kind === 'changes' && (
@@ -176,8 +180,9 @@ export default function ChangesSection({
                 )}
               </span>
             </div>
-          ))}
-        </div>
+          );
+        })}
+      </div>
       )}
       {open && isEmpty && (
         <div className="git-section__empty">

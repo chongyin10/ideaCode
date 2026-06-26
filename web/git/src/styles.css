@@ -485,11 +485,14 @@ input:focus, textarea:focus {
   font-weight: 700;
   text-transform: uppercase;
   padding: 0 2px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: clip;
 }
 
 .git-item__name-row {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 6px;
   min-width: 0;
   overflow: hidden;
@@ -516,7 +519,8 @@ input:focus, textarea:focus {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 1.5;
   color: var(--vscode-descriptionForeground, #969696);
   flex: 1 1 auto;
   min-width: 0;
@@ -540,6 +544,11 @@ input:focus, textarea:focus {
   opacity: 0;
   visibility: hidden;
   transition: opacity 0.1s linear;
+  pointer-events: none;
+}
+.git-item__actions .git-icon-btn,
+.git-item__actions button {
+  pointer-events: auto;
 }
 
 .git-item:hover .git-item__actions {

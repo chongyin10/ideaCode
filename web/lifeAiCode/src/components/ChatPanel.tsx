@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import type { ChatMessage, CodeContext, WebViewRequest, ExtensionMessage, LlmConfig, ToolCallInfo } from '../types';
+import type { ChatMessage, CodeContext, WebViewRequest, ExtensionMessage, LlmConfig, ProviderType, ToolCallInfo } from '../types';
 import { PROVIDER_META, getConnectionStatusColor } from '../types';
 import { SuggestionList } from './SuggestionList';
 import { ContentBlocks } from './ContentBlocks';
@@ -7,9 +7,22 @@ import { AgentModeToggle } from './agent/AgentModeToggle';
 import { AgentStatusBar } from './agent/AgentStatusBar';
 import { ToolCallLog } from './agent/ToolCallLog';
 import { DiffConfirmDialog } from './agent/DiffConfirmDialog';
-import { ShieldCheck, Brain, ArrowDown, User, Sparkles, Paperclip, Send, MessageSquare, Loader2, Check, Square } from 'lucide-react';
+import { ShieldCheck, Brain, ArrowDown, User, Sparkles, Paperclip, Send, MessageSquare, Loader2, Check, Square, ChevronDown, X, GripVertical } from 'lucide-react';
 
 /** 预处理：检测并补齐未闭合的 markdown 结构（供 chatResponse 处理时使用） */
+function groupConfigsByProviderOrder(configs: LlmConfig[]) {
+  const order: ProviderType[] = [];
+  const map = new Map<ProviderType, LlmConfig[]>();
+  for (const cfg of configs) {
+    if (!map.has(cfg.provider)) {
+      order.push(cfg.provider);
+      map.set(cfg.provider, []);
+    }
+    map.get(cfg.provider)!.push(cfg);
+  }
+  return order.map((provider) => ({ provider, configs: map.get(provider)! }));
+}
+
 function preprocessMarkdown(content: string): { processed: string; incomplete: boolean; reasons: string[] } {
   let result = content;
   const reasons: string[] = [];
@@ -98,15 +111,14 @@ interface ChatPanelProps {
   isPopup?: boolean;
   activeConfig: LlmConfig | null;
   configs: LlmConfig[];
-  onSwitchConfig: (id: string) => void;
   onOpenConfig: () => void;
 }
 
-export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSwitchConfig, onOpenConfig }: ChatPanelProps) {
+export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOpenConfig }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
-  const [context, setContext] = useState<CodeContext | null>(initialContext || null);
+  const [context] = useState<CodeContext | null>(initialContext || null);
   const [error, setError] = useState<string | null>(null);
   const [aiEditMode, setAiEditMode] = useState(true);
   const [autoAccept, setAutoAccept] = useState(false);
@@ -114,6 +126,8 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
   const [showConfigPicker, setShowConfigPicker] = useState(false);
   const [history, setHistory] = useState<ChatHistoryItem[]>(loadHistory);
   const [showHistory, setShowHistory] = useState(false);
+  const [historyDragId, setHistoryDragId] = useState<string | null>(null);
+  const [historyDropTarget, setHistoryDropTarget] = useState<{ id: string; after: boolean } | null>(null);
   const [shellOutputs, setShellOutputs] = useState<Record<string, { output: string; status: 'running' | 'success' | 'error' }>>({});
   const [notice, setNotice] = useState<{ level: 'info' | 'success' | 'warning' | 'error'; message: string; id: number } | null>(null);
   const [agentMode, setAgentMode] = useState(false);
@@ -143,6 +157,16 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
     document.addEventListener('mousedown', close);
     return () => document.removeEventListener('mousedown', close);
   }, [showConfigPicker, showHistory]);
+
+  // WebView 失去焦点时（点击面板外部）关闭下拉
+  useEffect(() => {
+    const handleBlur = () => {
+      setShowConfigPicker(false);
+      setShowHistory(false);
+    };
+    window.addEventListener('blur', handleBlur);
+    return () => window.removeEventListener('blur', handleBlur);
+  }, []);
 
   // 自动滚动到底部（仅在用户未主动上滑时即时跟随，避免平滑滚动导致按钮抖动）
   useEffect(() => {
@@ -367,28 +391,30 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
     return () => window.removeEventListener('message', handler);
   }, [onOpenConfig, autoAccept, pendingAgentEdit, vscode]);
 
-  // 新开对话：保存当前对话到历史，然后清空
-  const newChat = useCallback(() => {
-    const realMessages = messages.filter((m) => !m.placeholder);
-    if (realMessages.length > 0) {
-      const item: ChatHistoryItem = {
-        id: `chat-${Date.now()}`,
-        title: historyTitle(realMessages),
-        timestamp: Date.now(),
-        messages: realMessages,
-      };
-      const updated = [item, ...history.filter((h) => h.id !== item.id)];
-      setHistory(updated);
-      saveHistory(updated);
-    }
-    setMessages([]);
-    setError(null);
-  }, [messages, history]);
-
   // 从历史恢复对话
   const restoreHistory = useCallback((item: ChatHistoryItem) => {
     setMessages(item.messages);
     setShowHistory(false);
+  }, []);
+
+  const reorderHistory = useCallback((fromId: string, toId: string, after: boolean) => {
+    if (fromId === toId) return;
+    setHistory((prev) => {
+      const fromIndex = prev.findIndex((h) => h.id === fromId);
+      const toIndex = prev.findIndex((h) => h.id === toId);
+      if (fromIndex < 0 || toIndex < 0) return prev;
+      const next = prev.slice();
+      const [moved] = next.splice(fromIndex, 1);
+      let insertIndex = toIndex;
+      if (after) {
+        insertIndex = toIndex > fromIndex ? toIndex : toIndex + 1;
+      } else {
+        insertIndex = toIndex > fromIndex ? toIndex - 1 : toIndex;
+      }
+      next.splice(insertIndex, 0, moved);
+      saveHistory(next);
+      return next;
+    });
   }, []);
 
   const sendMessage = async (text: string) => {
@@ -515,6 +541,80 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
 
   return (
     <div className={`lifeAiCode-panel ${isPopup ? 'lifeAiCode-panel--popup' : ''}`}>
+      {/* 对话历史侧边栏 */}
+      {showHistory && (
+        <div className="history-sidebar" ref={historyRef}>
+          <div className="history-sidebar__header">
+            <span className="history-sidebar__title">对话历史</span>
+            <button
+              className="history-sidebar__close"
+              onClick={() => setShowHistory(false)}
+              title="关闭"
+            >
+              <X size={14} strokeWidth={2} />
+            </button>
+          </div>
+          <div className="history-list">
+            {history.length === 0 && (
+              <div className="history-empty">暂无历史对话</div>
+            )}
+            {history.map((item) => (
+              <div
+                key={item.id}
+                draggable
+                className={`history-item ${historyDragId === item.id ? 'history-item--dragging' : ''}`}
+                onClick={() => restoreHistory(item)}
+                onDragStart={(e) => {
+                  e.dataTransfer.effectAllowed = 'move';
+                  e.dataTransfer.setData('text/plain', item.id);
+                  setHistoryDragId(item.id);
+                }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  if (historyDragId === item.id || !historyDragId) return;
+                  const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
+                  setHistoryDropTarget({ id: item.id, after: e.clientY > rect.top + rect.height / 2 });
+                }}
+                onDragLeave={() => {
+                  if (historyDropTarget?.id === item.id) setHistoryDropTarget(null);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const fromId = e.dataTransfer.getData('text/plain');
+                  if (fromId && historyDropTarget) {
+                    reorderHistory(fromId, historyDropTarget.id, historyDropTarget.after);
+                  }
+                  setHistoryDragId(null);
+                  setHistoryDropTarget(null);
+                }}
+                onDragEnd={() => {
+                  setHistoryDragId(null);
+                  setHistoryDropTarget(null);
+                }}
+              >
+                {historyDropTarget?.id === item.id && !historyDropTarget.after && (
+                  <div className="history-item__drop-line" />
+                )}
+                <span className="history-item__drag" title="拖拽排序">
+                  <GripVertical size={14} strokeWidth={2} />
+                </span>
+                <div className="history-item__body">
+                  <div className="history-item__title">{item.title}</div>
+                  <div className="history-item__meta">
+                    {new Date(item.timestamp).toLocaleString('zh-CN', {
+                      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+                    })}
+                  </div>
+                </div>
+                {historyDropTarget?.id === item.id && historyDropTarget.after && (
+                  <div className="history-item__drop-line" />
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="messages-container" ref={messagesContainerRef}>
         {notice && (
           <div className={`chat-notice chat-notice--${notice.level}`}>
@@ -742,7 +842,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
                   {fileName}
                 </button>
               )}
-              {/* Config selector */}
+              {/* Model selector */}
               <div className="kc-config-selector" ref={configPickerRef} style={{ position: 'relative' }}>
                 <button
                   className="input-tag input-tag--model"
@@ -752,30 +852,47 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onSw
                   <span className="kc-config-indicator" style={{
                     background: getConnectionStatusColor(activeConfig?.connectionStatus),
                   }} />
-                  {activeMeta?.label || '未配置'}
-                  {activeConfig?.model && ` / ${activeConfig.model}`}
+                  <span className="kc-config-selector__label">
+                    {activeMeta?.label || '未配置'}
+                    {activeConfig?.model && <span className="kc-config-selector__model">/ {activeConfig.model}</span>}
+                  </span>
+                  <ChevronDown size={12} strokeWidth={2} className={`kc-config-selector__chevron ${showConfigPicker ? 'kc-config-selector__chevron--open' : ''}`} />
                 </button>
 
                 {showConfigPicker && (
-                  <div className="kc-dropdown">
-                    {configs.map((cfg) => {
-                      const m = PROVIDER_META[cfg.provider];
-                      return (
-                        <button
-                          key={cfg.id}
-                          className={`kc-dropdown__item ${cfg.id === activeConfig?.id ? 'kc-dropdown__item--active' : ''}`}
-                          onClick={() => { onSwitchConfig(cfg.id); setShowConfigPicker(false); }}
-                        >
-                          <span className="kc-dropdown__item-title">
-                            {cfg.name || m?.label || cfg.provider}
-                          </span>
-                          <span className="kc-dropdown__item-meta">{cfg.model} · {m?.label}</span>
-                        </button>
-                      );
-                    })}
+                  <div className="kc-dropdown kc-dropdown--models">
                     {configs.length === 0 && (
                       <div className="kc-dropdown__header">暂无配置</div>
                     )}
+                    {groupConfigsByProviderOrder(configs).map(({ provider, configs: group }) => {
+                      const meta = PROVIDER_META[provider];
+                      return (
+                        <div key={provider} className="kc-dropdown__group">
+                          <div className="kc-dropdown__header">{meta.label}</div>
+                          {group.map((cfg) => {
+                            const isActive = cfg.id === activeConfig?.id;
+                            return (
+                              <button
+                                key={cfg.id}
+                                className={`kc-dropdown__item ${isActive ? 'kc-dropdown__item--active' : ''}`}
+                                onClick={() => {
+                                  if (isActive) {
+                                    setShowConfigPicker(false);
+                                    return;
+                                  }
+                                  vscode?.postMessage({ command: 'switchConfig', configId: cfg.id } as WebViewRequest);
+                                  setShowConfigPicker(false);
+                                }}
+                                title={`${cfg.name || meta.label} / ${cfg.model}`}
+                              >
+                                <span className="kc-dropdown__item-title">{cfg.name || meta.label}</span>
+                                <span className="kc-dropdown__item-meta">{cfg.model}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      );
+                    })}
                     <div className="kc-dropdown__divider" />
                     <button className="kc-dropdown__manage" onClick={() => { setShowConfigPicker(false); onOpenConfig(); }}>
                       <Sparkles size={13} strokeWidth={2} />

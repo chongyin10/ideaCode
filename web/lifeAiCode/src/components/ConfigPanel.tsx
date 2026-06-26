@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ArrowLeft, Plus, Trash2, Edit3, Check, X, Loader2,
-  Power, Eye, EyeOff, FlaskConical, Save, Sparkles, Settings, Globe,
+  Power, Eye, EyeOff, FlaskConical, Save, Sparkles, Settings, Globe, GripVertical,
 } from 'lucide-react';
 import type { LlmConfig, ProviderType } from '../types';
 import {
@@ -33,6 +33,8 @@ export function ConfigPanel({
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [customModels, setCustomModels] = useState<string[]>([]);
   const [showApiKey, setShowApiKey] = useState(false);
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ id: string; after: boolean } | null>(null);
   const vscode = getVsCodeApi();
 
   const configsRef = useRef(configs);
@@ -75,7 +77,7 @@ export function ConfigPanel({
     };
     window.addEventListener('message', handler);
     return () => window.removeEventListener('message', handler);
-  }, []);
+  }, [testingId]);
 
   const startNew = () => {
     setEditing(defaultLlmConfig());
@@ -125,6 +127,24 @@ export function ConfigPanel({
     const newActive = id === activeConfigId ? newConfigs[0]?.id : undefined;
     onConfigsChange(newConfigs, newActive);
     if (expandedId === id) setExpandedId(null);
+  };
+
+  const handleReorder = (fromId: string, toId: string, after: boolean) => {
+    if (fromId === toId) return;
+    const fromIndex = configs.findIndex((c) => c.id === fromId);
+    const toIndex = configs.findIndex((c) => c.id === toId);
+    if (fromIndex < 0 || toIndex < 0) return;
+    const next = configs.slice();
+    const [moved] = next.splice(fromIndex, 1);
+    let insertIndex = toIndex;
+    if (after) {
+      insertIndex = toIndex > fromIndex ? toIndex : toIndex + 1;
+    } else {
+      insertIndex = toIndex > fromIndex ? toIndex - 1 : toIndex;
+    }
+    next.splice(insertIndex, 0, moved);
+    onConfigsChange(next);
+    if (expandedId === moved.id) setExpandedId(null);
   };
 
   const testConnection = (cfg: LlmConfig) => {
@@ -457,12 +477,48 @@ export function ConfigPanel({
             return (
               <div
                 key={cfg.id}
-                className={`config-card ${isActive ? 'config-card--active' : ''} ${isExpanded ? 'config-card--expanded' : ''}`}
+                draggable
+                className={`config-card ${isActive ? 'config-card--active' : ''} ${isExpanded ? 'config-card--expanded' : ''} ${dragId === cfg.id ? 'config-card--dragging' : ''}`}
+                onDragStart={(e) => {
+                  e.dataTransfer.effectAllowed = 'move';
+                  e.dataTransfer.setData('text/plain', cfg.id);
+                  setDragId(cfg.id);
+                  if (expandedId === cfg.id) setExpandedId(null);
+                }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  if (dragId === cfg.id || !dragId) return;
+                  const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
+                  const after = e.clientY > rect.top + rect.height / 2;
+                  setDropTarget({ id: cfg.id, after });
+                }}
+                onDragLeave={() => {
+                  if (dropTarget?.id === cfg.id) setDropTarget(null);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const fromId = e.dataTransfer.getData('text/plain');
+                  if (fromId && dropTarget) {
+                    handleReorder(fromId, dropTarget.id, dropTarget.after);
+                  }
+                  setDragId(null);
+                  setDropTarget(null);
+                }}
+                onDragEnd={() => {
+                  setDragId(null);
+                  setDropTarget(null);
+                }}
               >
+                {dropTarget?.id === cfg.id && !dropTarget.after && (
+                  <div className="config-card__drop-line" />
+                )}
                 <div
                   className="config-card__main"
                   onClick={() => setExpandedId(isExpanded ? null : cfg.id)}
                 >
+                  <span className="config-card__drag" title="拖拽排序">
+                    <GripVertical size={14} strokeWidth={2} />
+                  </span>
                   <span
                     className="config-card__indicator"
                     style={{ background: statusColor }}
@@ -501,6 +557,9 @@ export function ConfigPanel({
                     </button>
                   </div>
                 </div>
+                {dropTarget?.id === cfg.id && dropTarget.after && (
+                  <div className="config-card__drop-line" />
+                )}
 
                 {isExpanded && (
                   <div className="config-card__detail">
