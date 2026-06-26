@@ -29,11 +29,6 @@ const ActivityBar = () => {
   const dispatch = useAppDispatch();
   const activePanel = useAppSelector((state) => state.layout.activePanel);
   const dockableItems = useAppSelector((state) => state.layout.dockableItems);
-  const gitStagedCount = Object.keys(useAppSelector((s) => s.git.staged)).length;
-  const gitChangesCount = Object.keys(useAppSelector((s) => s.git.changes)).length;
-  const gitMergeCount = Object.keys(useAppSelector((s) => s.git.merge)).length;
-  const gitUntrackedCount = Object.keys(useAppSelector((s) => s.git.untracked)).length;
-  const gitBadgeCount = gitStagedCount + gitChangesCount + gitMergeCount + gitUntrackedCount;
 
   const leftItems = useMemo(() => {
     return dockableItems.filter((i) => i.location === 'left');
@@ -156,8 +151,8 @@ const ActivityBar = () => {
               onClick={() => dispatch(switchPanel(item.id))}
             >
               <IconComp size={20} strokeWidth={1.5} />
-              {item.id === 'git' && gitBadgeCount > 0 && (
-                <span className="activity-bar__badge">{gitBadgeCount}</span>
+              {item.badge && item.badge > 0 && (
+                <span className="activity-bar__badge">{item.badge}</span>
               )}
             </div>
           );

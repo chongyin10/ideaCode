@@ -18,8 +18,8 @@
 import path from 'path';
 import type { Store } from '@reduxjs/toolkit';
 import type { RootState } from '../store';
-import { openFile, openVirtualFile, addWorkspaceFolder, removeWorkspaceFolder, setFileContent, markFileSaved, toggleAiEditMode } from '../store/slices/workspaceSlice';
-import { addPanelToOrder, removePanelFromOrder, registerDockableItem, unregisterDockableItem, switchPanel, switchRightItem } from '../store/slices/layoutSlice';
+import { openFile, openVirtualFile, addWorkspaceFolder, removeWorkspaceFolder, setFileContent, markFileSaved, toggleAiEditMode, setGitStatus } from '../store/slices/workspaceSlice';
+import { addPanelToOrder, removePanelFromOrder, registerDockableItem, unregisterDockableItem, switchPanel, switchRightItem, setDockableItemBadge } from '../store/slices/layoutSlice';
 import { readFile as fsReadFile, writeFile as fsWriteFile, isPath } from '../services/fileService';
 import { getMonacoEditorActions } from '../services/monacoEditorBridge';
 import { getPluginManager } from './core';
@@ -425,7 +425,8 @@ export class ExtensionBridge {
 
     this.rpcHandlers.set('webview.message', (params) => {
       const { id, message } = params as { id: string; message: unknown };
-      console.log(`[WebView] 收到消息: ${id}`, message);
+      // 派发到已注册的 WebView 消息回调
+      this.postMessageToWebView(id, message);
       return { received: true };
     });
 
@@ -718,6 +719,107 @@ export class ExtensionBridge {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error('[LifeAiCode] 写入文件失败:', msg);
+        return { success: false, error: msg };
+      }
+    });
+
+    /* ─── Git 扩展 ─── */
+    // 这些 RPC 由 web/git 扩展调用，用于与 IDE 主进程交互
+    // （打开文件、加载目录、克隆仓库等需要主进程能力的操作）
+
+    /** 获取当前工作区根路径 */
+    this.rpcHandlers.set('workspace.getRootPath', () => {
+      const root = this.store.getState().workspace.rootSource;
+      return typeof root === 'string' ? root : null;
+    });
+
+    /** 在 IDE 中打开一个文件（普通模式或 Diff 模式） */
+    this.rpcHandlers.set('git.openFile', async (params) => {
+      const { path } = params as { path: string };
+      if (!path || typeof path !== 'string') {
+        return { success: false, error: '缺少 path 参数' };
+      }
+      const root = this.store.getState().workspace.rootSource;
+      if (!root || typeof root !== 'string') {
+        return { success: false, error: '没有打开的工作区' };
+      }
+      const base = String(root).replace(/\/$/, '');
+      const fullPath = `${base}/${path}`;
+      try {
+        const { openFile } = await import('../store/slices/workspaceSlice');
+        // 完整 Diff 支持可通过扩展后续获取 HEAD 版本后通过 openDiffView 渲染
+        this.store.dispatch(
+          openFile({
+            name: path.split('/').pop() || path,
+            kind: 'file',
+            source: fullPath,
+          }) as any
+        );
+        return { success: true };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { success: false, error: msg };
+      }
+    });
+
+    /** 加载目录（git 扩展要求打开新仓库时调用） */
+    this.rpcHandlers.set('git.loadDirectory', async (params) => {
+      const { path } = params as { path: string };
+      if (!path || typeof path !== 'string') {
+        return { success: false, error: '缺少 path 参数' };
+      }
+      try {
+        const { loadDirectory } = await import('../store/slices/workspaceSlice');
+        this.store.dispatch(
+          loadDirectory({ source: path, name: path.split(/[\\/]/).pop() || path }) as any
+        );
+        return { success: true };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { success: false, error: msg };
+      }
+    });
+
+    /** Git 扩展推送文件状态映射 */
+    this.rpcHandlers.set('git.statusChanged', (params) => {
+      const { status } = (params || {}) as { status?: Record<string, string> };
+      this.store.dispatch(setGitStatus(status || {}));
+      return { updated: true };
+    });
+
+    /** 扩展设置 ActivityBar 徽标 */
+    this.rpcHandlers.set('ui.activityBar.setBadge', (params) => {
+      const { id, badge } = params as { id: string; badge?: number };
+      this.store.dispatch(setDockableItemBadge({ id, badge }));
+      return { updated: true };
+    });
+
+    /** 弹出原生目录选择对话框 */
+    this.rpcHandlers.set('git.openRepositoryDialog', async () => {
+      try {
+        const selected = await window.electronAPI?.dialog?.openDirectory?.();
+        return selected || null;
+      } catch {
+        return null;
+      }
+    });
+
+    /** 克隆远程仓库（web/git 扩展调用，使用 child_process 直接 spawn git） */
+    this.rpcHandlers.set('git.clone', async (params) => {
+      const { url, targetPath } = params as { url: string; targetPath: string };
+      if (!url || !targetPath) {
+        return { success: false, error: '缺少 url 或 targetPath' };
+      }
+      try {
+        const { loadDirectory } = await import('../store/slices/workspaceSlice');
+        // web/git 扩展会自行执行 git clone（在自己的子进程中）
+        // 克隆完成后通过 loadDirectory 加载到 IDE
+        this.store.dispatch(
+          loadDirectory({ source: targetPath, name: targetPath.split(/[\\/]/).pop() || targetPath }) as any
+        );
+        return { success: true };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
         return { success: false, error: msg };
       }
     });

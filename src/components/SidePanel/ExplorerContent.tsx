@@ -23,18 +23,15 @@ import {
   openFile,
   refreshDirectory,
   setPendingSearchQuery,
-  refreshGitStatus,
   refreshAllFilePaths,
   clearExpandPaths,
   toggleExpandDir,
   activateFile,
   removeWorkspaceFolder,
 } from '../../store/slices/workspaceSlice';
-import { setShowCloneForm, refreshGitStatus as refreshGitSliceStatus } from '../../store/slices/gitSlice';
 import { switchPanel } from '../../store/slices/layoutSlice';
 import { openDirectory } from '../../services/fileService';
 import type { FileEntry, FileSource } from '../../services/fileService';
-import type { GitStatusMap } from '../../types/electron';
 import {
   isPath,
   isElectron,
@@ -148,16 +145,19 @@ const ExplorerContent = () => {
   const entries = useAppSelector((state) => state.workspace.entries);
   const remoteRoots = useAppSelector((state) => state.workspace.remoteRoots);
   const activeFileSource = useAppSelector((state) => state.workspace.activeFileSource);
-  const gitStaged = useAppSelector((s) => s.git.staged);
-  const gitChanges = useAppSelector((s) => s.git.changes);
-  const gitMerge = useAppSelector((s) => s.git.merge);
-  const gitUntracked = useAppSelector((s) => s.git.untracked);
-  // 合并供 FileTree 使用
-  const gitStatus = useMemo<GitStatusMap>(() => ({ ...gitStaged, ...gitChanges, ...gitMerge, ...gitUntracked }) as GitStatusMap, [gitStaged, gitChanges, gitMerge, gitUntracked]);
+  // Git 文件状态由 web/git 扩展通过 extension bridge 推送到 Redux
+  const gitStatus = useAppSelector((state) => state.workspace.gitStatus);
   const expandPaths = useAppSelector((state) => state.workspace.expandPaths);
   const expandedDirs = useAppSelector((state) => state.workspace.expandedDirs);
   const openedFiles = useAppSelector((state) => state.workspace.openedFiles);
+  const editorGroups = useAppSelector((state) => state.workspace.editorGroups);
   const activeFileId = useAppSelector((state) => state.workspace.activeFileId);
+
+  // 打开的编辑器只显示当前被至少一个编辑器组引用的文件，保持与 Tab 栏同步
+  const visibleOpenedFiles = useMemo(() => {
+    const referencedIds = new Set(editorGroups.flatMap((g) => g.fileIds));
+    return openedFiles.filter((f) => referencedIds.has(f.id));
+  }, [openedFiles, editorGroups]);
 
   // 各区域展开状态
   const [openEditorsExpanded, setOpenEditorsExpanded] = useState(true);
@@ -318,8 +318,6 @@ const ExplorerContent = () => {
       }
       setPendingCreate(null);
       notifyChange(parentSource);
-      dispatch(refreshGitStatus());
-      dispatch(refreshGitSliceStatus());
       dispatch(refreshAllFilePaths());
       if (rootSource && isSameSource(parentSource, rootSource)) {
         dispatch(refreshDirectory(parentSource));
@@ -358,8 +356,6 @@ const ExplorerContent = () => {
       await renameEntry(parentSource, oldName, newName, kind);
       setPendingRename(null);
       notifyChange(parentSource);
-      dispatch(refreshGitStatus());
-      dispatch(refreshGitSliceStatus());
       dispatch(refreshAllFilePaths());
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -431,8 +427,6 @@ const ExplorerContent = () => {
 
       // 通知源目录和目标目录刷新
       notifyChange(dragParentSource, destDir);
-      dispatch(refreshGitStatus());
-      dispatch(refreshGitSliceStatus());
       dispatch(refreshAllFilePaths());
       if (isSameSource(destDir as FileSource, rootSource)) {
         dispatch(refreshDirectory(rootSource));
@@ -473,7 +467,6 @@ const ExplorerContent = () => {
 
     parentSources.add(destSource);
     notifyChange(...Array.from(parentSources));
-    dispatch(refreshGitStatus());
     if (rootSource && isSameSource(destSource, rootSource)) {
       dispatch(refreshDirectory(destSource));
     }
@@ -674,9 +667,6 @@ const ExplorerContent = () => {
             for (const ps of parentSources) {
               notifyChange(ps);
             }
-      dispatch(refreshGitStatus());
-      dispatch(refreshGitSliceStatus());
-      dispatch(refreshGitSliceStatus());
       dispatch(refreshAllFilePaths());
           }),
         }
@@ -775,7 +765,7 @@ const ExplorerContent = () => {
                 <FolderOpenIcon size={14} strokeWidth={1.5} />
                 {t('explorer.empty.openFolder')}
               </button>
-              <button className="explorer-empty__btn" onClick={() => dispatch(setShowCloneForm(true))}>
+              <button className="explorer-empty__btn" onClick={() => dispatch(switchPanel('workbench.scm'))}>
                 <Download size={14} strokeWidth={1.5} />
                 {t('explorer.empty.cloneRepo')}
               </button>
@@ -801,12 +791,12 @@ const ExplorerContent = () => {
             </div>
             {openEditorsExpanded && (
               <div className="explorer-section__content" style={{ maxHeight: OPEN_EDITORS_MAX_HEIGHT }}>
-                {openedFiles.length === 0 && (
+                {visibleOpenedFiles.length === 0 && (
                   <div className="explorer-open-editor explorer-open-editor--empty">
                     {t('explorer.empty.noOpenEditors')}
                   </div>
                 )}
-                {openedFiles.map((file) => {
+                {visibleOpenedFiles.map((file) => {
                   const fileRelPath = typeof file.source === 'string' && typeof rootSource === 'string' && rootSource
                     ? file.source.replace(rootSource + '/', '')
                     : '';

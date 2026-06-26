@@ -20,6 +20,7 @@
 
 import { TFIDFCalculator } from './mathUtils';
 import { ARCCache } from './arcCache';
+import { SimHashFilter } from './simHash';
 
 export interface FuzzyResult {
   target: string;
@@ -296,14 +297,19 @@ export class FuzzySearchEngine {
   private tfidfCalc: TFIDFCalculator;
   private avgDocLen = 10;
   private corpusIndexed = false;
+  private simHashFilter: SimHashFilter;
+
+  // UCB1 Bandit 动态剪枝状态
+  private banditSelections = new Map<string, { count: number; reward: number }>();
 
   constructor(cacheSize = 100) {
     this.cache = new ARCCache<string, FuzzyResult[]>(cacheSize);
     this.tfidfCalc = new TFIDFCalculator();
+    this.simHashFilter = new SimHashFilter(2000);
   }
 
   /**
-   * 索引语料库 (计算 IDF)
+   * 索引语料库 (计算 IDF + SimHash)
    * 在搜索前调用，传入所有可能的目标字符串
    */
   indexCorpus(targets: string[]): void {
@@ -312,9 +318,12 @@ export class FuzzySearchEngine {
     for (const target of targets) {
       this.tfidfCalc.indexDocument(target);
       totalLen += target.length;
+      // 预热 SimHash 缓存
+      this.simHashFilter.getSimHash(target);
     }
     this.avgDocLen = targets.length > 0 ? totalLen / targets.length : 10;
     this.corpusIndexed = true;
+    this.banditSelections.clear();
   }
 
   private makeKey(query: string, targets: string[]): string {
@@ -322,6 +331,15 @@ export class FuzzySearchEngine {
     return `${query}::${targets.length}::${preview.length}::${preview.slice(0, 200)}`;
   }
 
+  /**
+   * 带 SimHash 预过滤 + UCB1 Bandit 动态剪枝的搜索
+   *
+   * 管道:
+   *   1. ARC 缓存检查
+   *   2. SimHash LSH 预过滤 (淘汰 60%~95% 候选)
+   *   3. UCB1 Bandit 动态剪枝 (在评分过程中逐步淘汰低分候选)
+   *   4. TF-IDF + BM25 精确 DP 评分
+   */
   search(query: string, targets: string[]): FuzzyResult[] {
     const key = this.makeKey(query, targets);
 
@@ -335,7 +353,36 @@ export class FuzzySearchEngine {
       this.indexCorpus(targets);
     }
 
-    const results = fuzzySearchWithBM25(query, targets, this.tfidfCalc, this.avgDocLen);
+    // ── SimHash 预过滤 ──
+    let candidateIndices: number[];
+    let filteredTargets: string[];
+
+    if (targets.length > 50 && query.length >= 2) {
+      // 大于 50 个候选 + query 至少 2 个字符时启用 SimHash 预过滤
+      const simHashPassed = this.simHashFilter.filter(query, targets);
+      if (simHashPassed.length > 0) {
+        candidateIndices = simHashPassed;
+        filteredTargets = candidateIndices.map((i) => targets[i]);
+      } else {
+        // SimHash 过滤太激进，回退到全部候选
+        filteredTargets = targets;
+        candidateIndices = targets.map((_, i) => i);
+      }
+    } else {
+      filteredTargets = targets;
+      candidateIndices = targets.map((_, i) => i);
+    }
+
+    // ── UCB1 Bandit 动态剪枝评分 ──
+    const results = fuzzySearchWithBanditPruning(
+      query,
+      filteredTargets,
+      candidateIndices,
+      this.tfidfCalc,
+      this.avgDocLen,
+      this.banditSelections,
+    );
+
     this.cache.set(key, results);
 
     return results;
@@ -344,11 +391,149 @@ export class FuzzySearchEngine {
   clearCache() {
     this.cache.clear();
     this.corpusIndexed = false;
+    this.banditSelections.clear();
+    this.simHashFilter.clearCache();
   }
 
   getStats() {
-    return this.cache.getStats();
+    return {
+      ...this.cache.getStats(),
+      simHashStats: this.simHashFilter.getStats(),
+    };
   }
+}
+
+/**
+ * UCB1 Bandit 动态剪枝的模糊搜索
+ *
+ * 将候选文件视为多臂老虎机的臂 (arms)。
+ * 每轮: 对 top-K 个上置信界 (UCB) 最高的候选做精确 DP，
+ *       用轻量评分排除下置信界最低的候选。
+ *
+ * UCB_i = μ̂_i + √(2 ln N / n_i)
+ *   μ̂_i = 已观察得分平均值
+ *   n_i  = 该臂被选择的次数
+ *   N    = 总选择次数
+ */
+function fuzzySearchWithBanditPruning(
+  query: string,
+  targets: string[],
+  originalIndices: number[],
+  tfidf: TFIDFCalculator,
+  avgDocLen: number,
+  banditState: Map<string, { count: number; reward: number }>,
+): FuzzyResult[] {
+  if (!query || targets.length === 0) {
+    return targets.map((t, i) => ({
+      target: t,
+      score: 0,
+      matches: new Array(t.length).fill(false),
+      isExact: false,
+    }));
+  }
+
+  const N = targets.length;
+
+  // 候选数量少 → 直接全量评分
+  if (N <= 30) {
+    const results = fuzzySearchWithBM25Subset(query, targets, tfidf, avgDocLen);
+    return results;
+  }
+
+  // UCB1 动态剪枝主循环
+  const totalRounds = Math.min(3, Math.ceil(N / 30));
+  let activeSet = new Set<number>(targets.map((_, i) => i));
+  const scored = new Map<number, FuzzyResult>();
+  let totalPlays = 0;
+
+  for (let round = 0; round < totalRounds; round++) {
+    const activeList = Array.from(activeSet);
+    const roundSize = Math.min(activeList.length, Math.ceil(N / (totalRounds - round)));
+
+    // 按 UCB 排序选择本轮候选
+    const ucbScores: Array<{ idx: number; ucb: number }> = [];
+    for (const idx of activeList) {
+      const state = banditState.get(targets[idx]);
+      const ni = state?.count ?? 0;
+      const mu = state?.reward ?? 0.5; // 先验均值 0.5
+      const ucb = ni > 0
+        ? mu + Math.sqrt(2 * Math.log(Math.max(1, totalPlays + 1)) / ni)
+        : Infinity; // 未探索的候选优先
+      ucbScores.push({ idx, ucb });
+    }
+
+    ucbScores.sort((a, b) => b.ucb - a.ucb);
+    const roundCandidates = ucbScores.slice(0, roundSize).map((s) => s.idx);
+
+    // 对本轮候选做精确 DP 评分
+    const roundTargets = roundCandidates.map((i) => targets[i]);
+    const roundResults = fuzzySearchWithBM25Subset(query, roundTargets, tfidf, avgDocLen);
+    totalPlays += roundResults.length;
+
+    // 更新 Bandit 状态
+    for (let j = 0; j < roundResults.length; j++) {
+      const origIdx = roundCandidates[j];
+      const result = roundResults[j];
+      scored.set(origIdx, result);
+
+      const key = targets[origIdx];
+      const old = banditState.get(key) || { count: 0, reward: 0 };
+      // reward: 将得分归一化到 [0, 1]
+      const reward = Math.min(1, Math.max(0, (result.score + 1) / 5));
+      banditState.set(key, {
+        count: old.count + 1,
+        reward: (old.reward * old.count + reward) / (old.count + 1),
+      });
+    }
+
+    // 剪枝: 去除下置信界最低的 30% 候选
+    if (round < totalRounds - 1 && scored.size > 10) {
+      const lcbScores = Array.from(scored.entries()).map(([idx, res]) => {
+        const state = banditState.get(targets[idx]);
+        const ni = state?.count ?? 0;
+        const mu = state?.reward ?? 0;
+        const lcb = ni > 0
+          ? mu - Math.sqrt(2 * Math.log(Math.max(1, totalPlays + 1)) / Math.max(1, ni))
+          : -Infinity;
+        return { idx, lcb };
+      });
+      lcbScores.sort((a, b) => a.lcb - b.lcb);
+      const pruneCount = Math.floor(scored.size * 0.3);
+      for (let p = 0; p < pruneCount && p < lcbScores.length; p++) {
+        activeSet.delete(lcbScores[p].idx);
+        scored.delete(lcbScores[p].idx);
+      }
+    }
+
+    // 移除已评分的候选
+    for (const idx of roundCandidates) {
+      activeSet.delete(idx);
+    }
+
+    if (activeSet.size === 0) break;
+  }
+
+  // 收集所有评分结果
+  const finalResults = Array.from(scored.values());
+
+  return finalResults.sort((a, b) => b.score - a.score);
+}
+
+/** 对指定子集做 TF-IDF + BM25 模糊评分 (不排序，由调用方处理) */
+function fuzzySearchWithBM25Subset(
+  query: string,
+  targets: string[],
+  tfidf: TFIDFCalculator,
+  avgDocLen: number,
+): FuzzyResult[] {
+  const results: FuzzyResult[] = [];
+  for (const target of targets) {
+    const result = fuzzyScoreWithIDF(query, target, tfidf, avgDocLen);
+    if (result) {
+      results.push(result);
+    }
+  }
+  return results.sort((a, b) => b.score - a.score);
 }
 
 /**

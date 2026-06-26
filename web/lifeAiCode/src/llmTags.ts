@@ -114,6 +114,62 @@ const CANONICAL_PATTERN =
   /<(reasoning|edit|shell|fileStatus|step)\b([^>]*?)\/?>(?:([\s\S]*?)<\/\1>)?/gi;
 
 /* ─────────────────────────────────────────────────────────────────── */
+/*  区间补集工具：从源串中删除一组标签区间                                   */
+/* ─────────────────────────────────────────────────────────────────── */
+
+/**
+ * 从字符串中删除一组半开区间 [start, end) 并拼接剩余文本（区间补集）。
+ *
+ * 数学/算法说明
+ * ──────────────
+ *   设源串 S 长度为 n，待删除标签区间集合 R = { [sᵢ, eᵢ) }（共 k 个）。
+ *
+ *   · 朴素法（旧实现）：对每个区间各做一次 `slice` 拼接。每次都整串重建，
+ *     单次 Θ(n)，k 个区间合计 Θ(k·n)；在流式渲染下每个 token 触发一次解析，
+ *     长回复会退化成平方甚至立方级开销。更关键的是它倒序删除、用的是固定
+ *     绝对索引——一旦区间重叠/嵌套（如 <think> 内嵌 <step/>），前一次删除
+ *     就会让后续区间的绝对位置失效，导致 cleanedText 错位甚至越界。
+ *
+ *   · 线性法（本实现）：两步经典算法在同一遍扫描内完成
+ *       ① 区间合并 (Merge Intervals)：输入已按 start 升序，用单调右边界
+ *         pos 把重叠/嵌套区间归并为互不相交的极大删除区间，O(k)。
+ *       ② 区间补集 (Complement Scan)：顺序收集相邻删除区间之间的「保留段」，
+ *         最后一次性 join，单遍 O(n)。
+ *     合计 Θ(n + k)，无平方级串重建，且对任意重叠/嵌套天然正确。
+ *
+ * @param source     源字符串 S
+ * @param intervals  已按 start 升序排列的标签区间（含 start / end 字段）
+ */
+function removeIntervals(
+  source: string,
+  intervals: ReadonlyArray<{ start: number; end: number }>,
+): string {
+  if (intervals.length === 0) return source;
+
+  const kept: string[] = [];
+  // pos = 已删除前缀的右边界，也是下一段「保留文本」的起点。
+  // 它单调不减，等价于「当前合并删除区间」的右端点。
+  let pos = 0;
+
+  for (let i = 0; i < intervals.length; i++) {
+    const s = intervals[i].start;
+    const e = intervals[i].end;
+    if (s > pos) {
+      // 与已删除前缀不相交：先收集中间的保留段 [pos, s)，再开启新删除区间。
+      kept.push(source.slice(pos, s));
+      pos = e;
+    } else if (e > pos) {
+      // 与已删除前缀重叠/嵌套/紧邻：仅向右扩展删除边界（合并），无保留段。
+      pos = e;
+    }
+    // e <= pos：完全被已删除区间覆盖，直接跳过。
+  }
+
+  if (pos < source.length) kept.push(source.slice(pos));
+  return kept.join('');
+}
+
+/* ─────────────────────────────────────────────────────────────────── */
 /*  核心解析函数                                                         */
 /* ─────────────────────────────────────────────────────────────────── */
 
@@ -196,13 +252,11 @@ export function parseProviderTags(text: string, provider: ProviderId): TagParseR
     }
   }
 
-  // 6. 构造 cleanedText：移除所有已知标签的原始文本
-  let cleaned = text;
-  // 倒序 splice 避免索引偏移
-  for (let i = tags.length - 1; i >= 0; i--) {
-    const tag = tags[i];
-    cleaned = cleaned.slice(0, tag.start) + cleaned.slice(tag.end);
-  }
+  // 6. 构造 cleanedText：删除所有已知标签占据的区间（区间补集）。
+  //    tags 已在第 4 步按 start 升序排列，removeIntervals 在单遍 Θ(n+k) 内
+  //    完成「区间合并 + 补集拼接」，对重叠/嵌套标签天然正确——
+  //    取代旧的倒序 slice（Θ(k·n) 串重建 + 重叠时索引错位）。
+  const cleaned = removeIntervals(text, tags);
 
   return {
     cleanedText: cleaned,

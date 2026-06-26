@@ -1,5 +1,5 @@
 /**
- * 差异对比算法 (Diff Algorithm) — Myers O(ND) 实现
+ * 差异对比算法 (Diff Algorithm) — Myers O(ND) 实现 + Walsh-Hadamard 加速
  * ============================================================================
  *
  * 应用场景：
@@ -19,9 +19,15 @@
  * 时间复杂度：O((m+n)×D)，D = 编辑距离（通常远小于 m+n）
  * 空间复杂度：O(m+n)（只保留前后两条蛇形线状态）
  *
+ * ## Walsh-Hadamard 加速：
+ * 对超过阈值的文本，先计算每行的 FWHT 签名，按签名相似度预聚类。
+ * 在聚类内部做精确 Myers/LCS diff，将 O(L²) 降为 O(L log L + K·C²)。
+ *
  * 参考：Eugene W. Myers, "An O(ND) Difference Algorithm and Its Variations"
  * ============================================================================
  */
+
+import { WalshLineClusterer } from './walshHadamard';
 
 export type DiffType = 'equal' | 'insert' | 'delete';
 
@@ -593,6 +599,126 @@ function escapeHtml(text: string): string {
 }
 
 /* ─── 语法感知差异比较 ─── */
+
+/**
+ * 计算行级 Hash（用于 Myers 快速匹配）
+ */
+function lineHash(line: string): number {
+  let hash = 0;
+  for (let i = 0; i < line.length; i++) {
+    hash = ((hash << 5) - hash + line.charCodeAt(i)) | 0;
+  }
+  return hash;
+}
+
+/**
+ * Walsh-Hadamard 加速版 Diff (大文本优化)
+ *
+ * 当文本行数 ≥ 200 行时自动启用：
+ *  1. 计算所有行的 Walsh-Hadamard 签名
+ *  2. 在新旧文本间找高相似度行对作为锚点
+ *  3. 在锚点间用 Myers Diff
+ *
+ * 复杂度：O(L log L + K·D²)，其中 K ≤ L/ancHorCount
+ */
+export function computeDiffFast(oldText: string, newText: string): DiffResult {
+  const oldLines = oldText.split('\n');
+  const newLines = newText.split('\n');
+
+  if (oldLines[oldLines.length - 1] === '') oldLines.pop();
+  if (newLines[newLines.length - 1] === '') newLines.pop();
+
+  // 小文本直接使用标准 Myers
+  if (oldLines.length < 200 && newLines.length < 200) {
+    return computeDiff(oldText, newText);
+  }
+
+  // Walsh-Hadamard 预聚类
+  const clusterer = new WalshLineClusterer(8);
+  clusterer.indexLines([...oldLines, ...newLines]);
+
+  // 寻找锚点行对
+  const anchorCandidates = clusterer.findAnchorCandidates(
+    oldLines.map((_, i) => i),
+    oldLines.map((_, i) => i + oldLines.length),
+    0.75,
+  );
+
+  // 筛选有效锚点（newIdx = original - oldLines.length）
+  const anchors: Array<{ oldIdx: number; newIdx: number }> = [];
+  for (const cand of anchorCandidates) {
+    const newIdx = cand.newIdx - oldLines.length;
+    if (newIdx >= 0 && newIdx < newLines.length) {
+      // 验证内容一致
+      if (oldLines[cand.oldIdx] === newLines[newIdx]) {
+        anchors.push({ oldIdx: cand.oldIdx, newIdx });
+      }
+    }
+  }
+
+  // 按 oldIdx 排序并去除重复 newIdx
+  anchors.sort((a, b) => a.oldIdx - b.oldIdx);
+  const filtered: typeof anchors = [];
+  let lastNew = -1;
+  for (const a of anchors) {
+    if (a.newIdx > lastNew) {
+      filtered.push(a);
+      lastNew = a.newIdx;
+    }
+  }
+
+  // 在锚点间用 Myers diff
+  const result: DiffChunk[] = [];
+  let prevOld = -1;
+  let prevNew = -1;
+
+  for (const anchor of filtered) {
+    const oldSlice = oldLines.slice(prevOld + 1, anchor.oldIdx);
+    const newSlice = newLines.slice(prevNew + 1, anchor.newIdx);
+    if (oldSlice.length > 0 || newSlice.length > 0) {
+      const subChunks = myersDiff(oldSlice, newSlice);
+      for (const chunk of subChunks) {
+        result.push({
+          ...chunk,
+          oldLine: chunk.oldLine !== null ? chunk.oldLine + prevOld + 1 : null,
+          newLine: chunk.newLine !== null ? chunk.newLine + prevNew + 1 : null,
+        });
+      }
+    }
+    result.push({
+      type: 'equal',
+      oldLine: anchor.oldIdx + 1,
+      newLine: anchor.newIdx + 1,
+      content: oldLines[anchor.oldIdx],
+    });
+    prevOld = anchor.oldIdx;
+    prevNew = anchor.newIdx;
+  }
+
+  // 尾部
+  const oldTail = oldLines.slice(prevOld + 1);
+  const newTail = newLines.slice(prevNew + 1);
+  if (oldTail.length > 0 || newTail.length > 0) {
+    const subChunks = myersDiff(oldTail, newTail);
+    for (const chunk of subChunks) {
+      result.push({
+        ...chunk,
+        oldLine: chunk.oldLine !== null ? chunk.oldLine + prevOld + 1 : null,
+        newLine: chunk.newLine !== null ? chunk.newLine + prevNew + 1 : null,
+      });
+    }
+  }
+
+  const compressed = compressChunks(result);
+  const stats = {
+    insertions: result.filter((c) => c.type === 'insert').length,
+    deletions: result.filter((c) => c.type === 'delete').length,
+    unchanged: result.filter((c) => c.type === 'equal').length,
+  };
+
+  clusterer.clear();
+  return { chunks: compressed, stats };
+}
 
 /**
  * 基于词法分析的分词差异

@@ -12,6 +12,8 @@ import {
   PathTrie,
   searchInText,
   multiPatternSearch,
+  FileSearchPreFilter,
+  CountMinSketch,
   type MatchResult,
   type SearchOptions,
 } from '../utils/algorithms';
@@ -247,10 +249,39 @@ export async function findFileReferences(
     if (relPathNoExt) patterns.add(relPathNoExt);
   }
 
+  // ── Count-Min Sketch 预过滤：快速排除不含目标模式的文件 ──
+  // 仅当项目文件数量超过 50 个时启用，小项目直接搜索
+  const usePreFilter = allFilePaths.length > 50;
+  const preFilter = usePreFilter ? new FileSearchPreFilter() : null;
+  let filteredPaths = allFilePaths;
+
+  if (usePreFilter && preFilter) {
+    // 先对候选文件做轻量级索引 (仅索引代码文件)
+    const codeFilePaths = allFilePaths.filter((p) => CODE_EXTENSIONS.has(getFileExt(p)));
+    // 分批索引，避免阻塞：每批 20 个文件
+    const BATCH_SIZE = 20;
+    for (let i = 0; i < codeFilePaths.length; i += BATCH_SIZE) {
+      const batch = codeFilePaths.slice(i, i + BATCH_SIZE);
+      await Promise.all(
+        batch.map(async (fp) => {
+          if (fp === targetRelativePath) return;
+          try {
+            const content = await readFile(rootPath + '/' + fp);
+            preFilter!.indexFile(fp, content.slice(0, 65536)); // 只索引前 64KB
+          } catch { /* 跳过不可读文件 */ }
+        })
+      );
+    }
+
+    // 使用 Count-Min Sketch 过滤
+    const primaryPattern = [...patterns][0] || basename;
+    filteredPaths = preFilter.filterFiles(allFilePaths, primaryPattern);
+  }
+
   const results: FileSearchResult[] = [];
 
   await Promise.all(
-    allFilePaths.map(async (relPath) => {
+    filteredPaths.map(async (relPath) => {
       if (relPath === targetRelativePath) return;
       if (!CODE_EXTENSIONS.has(getFileExt(relPath))) return;
 

@@ -439,19 +439,18 @@
 }
 
 .explorer-open-editor__name.git-m {
-  color: #cca700;
+  color: #e2c08d;
 }
 
-.explorer-open-editor__name.git-a {
-  color: #73c991;
-}
-
+.explorer-open-editor__name.git-a,
+.explorer-open-editor__name.git-r,
+.explorer-open-editor__name.git-c,
 .explorer-open-editor__name.git-u {
   color: #73c991;
 }
 
 .explorer-open-editor__name.git-d {
-  color: #f85149;
+  color: #c74e39;
 }
 
 .explorer-open-editor__name.git-r {
@@ -615,8 +614,8 @@
 }
 
 .git-status.M {
-  color: #cca700;   /* 已修改 — 琥珀色 */
-  background: rgba(204, 167, 0, 0.1);
+  color: #e2c08d;   /* 已修改 — 琥珀色 */
+  background: rgba(226, 192, 141, 0.1);
   border-radius: 3px;
   padding: 0 3px;
 }
@@ -629,38 +628,34 @@
 }
 
 .git-status.D {
-  color: #f85149;   /* 删除 — 红色 */
-  background: rgba(248, 81, 73, 0.1);
+  color: #c74e39;   /* 删除 — 红色 */
+  background: rgba(199, 78, 57, 0.1);
   border-radius: 3px;
   padding: 0 3px;
 }
 
-.git-status.R {
-  color: #4a9eff;   /* 重命名 — 蓝色 */
-  background: rgba(74, 158, 255, 0.1);
+.git-status.R,
+.git-status.C {
+  color: #73c991;   /* 重命名/复制 — 绿色 */
+  background: rgba(115, 201, 145, 0.1);
   border-radius: 3px;
   padding: 0 3px;
 }
 
 /* 文件名文字着色 — 方便快速定位变更文件 */
 .tree-item__label.git-m {
-  color: #cca700;
+  color: #e2c08d;
 }
 
-.tree-item__label.git-a {
-  color: #73c991;
-}
-
+.tree-item__label.git-a,
+.tree-item__label.git-r,
+.tree-item__label.git-c,
 .tree-item__label.git-u {
   color: #73c991;
 }
 
 .tree-item__label.git-d {
-  color: #f85149;
-}
-
-.tree-item__label.git-r {
-  color: #4a9eff;
+  color: #c74e39;
 }
 
 .git-status.M {
@@ -690,7 +685,7 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #f85149;
+  background: #e2c08d;
   margin-left: auto;
   flex-shrink: 0;
   display: inline-block;

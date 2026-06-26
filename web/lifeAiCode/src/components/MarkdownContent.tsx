@@ -489,9 +489,8 @@ function preprocessMarkdown(content: string): { processed: string; incomplete: b
 
   // 2. 未闭合的表格（最后一行是表头分隔符或单行 |...|）
   const lines = result.split('\n');
-  const lastLine = lines[lines.length - 1] || '';
-  // 检测最后是否有未结束的表格行
-  let inUnclosedTable = false;
+  // 自顶向下扫描，记录当前连续表格行块的起点；遇到非表格行即闭合该块。
+  // 若扫描结束时仍处于一个未闭合的表格块，则补齐分隔行。
   let tableOpenLine = -1;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();

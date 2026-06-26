@@ -133,23 +133,18 @@
 }
 
 .tab-bar__name.git-m {
-  color: #cca700;
+  color: #e2c08d;
 }
 
-.tab-bar__name.git-a {
-  color: #73c991;
-}
-
+.tab-bar__name.git-a,
+.tab-bar__name.git-r,
+.tab-bar__name.git-c,
 .tab-bar__name.git-u {
   color: #73c991;
 }
 
 .tab-bar__name.git-d {
-  color: #f85149;
-}
-
-.tab-bar__name.git-r {
-  color: #4a9eff;
+  color: #c74e39;
 }
 
 .tab-bar__close {

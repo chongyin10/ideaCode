@@ -266,7 +266,17 @@ const vscode = {
     // WebView - 插件渲染自定义 UI 的主要方式
     createWebviewPanel: (viewType, title, showOptions, options) => {
       const panelId = `webview-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-      
+
+      // 解析当前激活的扩展 id（解决 viewType 分隔符与扩展 id 不一致的问题）
+      // 例如 viewType='git.changesView'、'ssh-connections'、'lifeAiCode.xxx' 等
+      // 都对应不同的扩展 id（'ideacode-git'、'ideacode-ssh'、'lifeai-code'）
+      // 使用 global._currentExtensionId（activate 时设置）作为权威来源
+      const currentExtId = global._currentExtensionId;
+      const currentExt = currentExtId ? manager.extensions.get(currentExtId) : null;
+      const extPath = currentExt?.path
+        || manager.extensions.get(viewType.split('.')[0])?.path
+        || manager.extensions.get(viewType.split('-')[0])?.path;
+
       // 通知渲染进程创建 WebView 面板
       rpc.notify('webview.create', {
         id: panelId,
@@ -274,7 +284,7 @@ const vscode = {
         title,
         showOptions,
         options,
-        extensionPath: manager.extensions.get(viewType.split('.')[0])?.path,
+        extensionPath: extPath,
       });
       
       return {
@@ -711,19 +721,41 @@ for (const method of lifeAiCodeMethods) {
 }
 
 /* ─── webview.message 路由 ─── */
-// 从渲染进程发来的 webview 消息，转发到扩展注册的消息处理器
+// 从渲染进程发来的 webview 消息，转发到对应扩展注册的消息处理器
 rpc.on('webview.message', async (params) => {
   const { id, message } = params || {};
   if (!id || !message) return { forwarded: false };
-  
-  // 通过扩展的 api.js 注册的全局处理器转发
-  const handlers = global._lifeAiCodeWebviewHandlers?.get(id);
-  if (handlers) {
-    for (const handler of handlers) {
-      try { handler(message); } catch (e) { console.error('[ExtensionHost] webview handler error:', e); }
+
+  let forwarded = false;
+
+  // LifeAiCode 扩展注册的处理器
+  const lifeHandlers = global._lifeAiCodeWebviewHandlers?.get(id);
+  if (lifeHandlers) {
+    for (const handler of lifeHandlers) {
+      try { handler(message); } catch (e) { console.error('[ExtensionHost] lifeAiCode webview handler error:', e); }
     }
+    forwarded = true;
   }
-  return { forwarded: !!handlers };
+
+  // Git 扩展注册的处理器
+  const gitHandlers = global._gitWebviewHandlers?.get(id);
+  if (gitHandlers) {
+    for (const handler of gitHandlers) {
+      try { handler(message); } catch (e) { console.error('[ExtensionHost] git webview handler error:', e); }
+    }
+    forwarded = true;
+  }
+
+  // SSH 扩展注册的处理器（兼容旧版本使用 _webviewMessageHandlers 的情况）
+  const sshHandlers = global._webviewMessageHandlers?.get(id);
+  if (sshHandlers) {
+    for (const handler of sshHandlers) {
+      try { handler(message); } catch (e) { console.error('[ExtensionHost] ssh webview handler error:', e); }
+    }
+    forwarded = true;
+  }
+
+  return { forwarded };
 });
 
 console.log('[ExtensionHost] 扩展宿主已启动，等待连接...');

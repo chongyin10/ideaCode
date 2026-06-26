@@ -6,6 +6,7 @@ import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import { clearSearchHighlight } from '../../store/slices/workspaceSlice';
 import type { SearchHighlight, EditorSnapshot } from '../../store/slices/workspaceSlice';
 import { tsService } from '../../services/tsLanguageService';
+import type { TsSemanticTokens } from '../../services/tsLanguageService';
 import { ensureLanguage } from '../../services/languageLoader';
 import { eventBus } from '../../utils/eventBus';
 import { registerMonacoEditor, unregisterMonacoEditor } from '../../services/monacoEditorBridge';
@@ -818,13 +819,35 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
         let semTokensPrefetch: Promise<{ resultId?: string; data: Uint32Array } | null> | null = null;
         if (!isBrowser && path) {
           tsService.open(path, value).catch(() => {});
-          semTokensPrefetch = tsService.semanticTokens(path).then((tokens) => {
-            if (tokens && tokens.data && tokens.data.length > 0) {
-              const data = new Uint32Array(tokens.data);
+
+          // 预取语义 tokens。如果 tsserver 还在 handshake（用户极快地"开文件夹→点文件"
+          // 时可能出现），首次请求会立即返回 null；这里做一次短延迟重试兜底，
+          // 让高频场景下也能在几百毫秒内拿到正确结果，避免回退到 Monaco 内置 TS worker。
+          const fetchSemTokens = (): Promise<TsSemanticTokens | null> =>
+            tsService.semanticTokens(path).then(
+              (tokens) => (tokens && tokens.data && tokens.data.length > 0 ? tokens : null),
+              () => null,
+            );
+          semTokensPrefetch = fetchSemTokens().then((first) => {
+            if (first) {
+              const data = new Uint32Array(first.data);
               decodedTokensRef.current = decodeSemTokens(data);
-              return { resultId: tokens.resultId, data };
+              return { resultId: first.resultId, data };
             }
-            return null;
+            // 首次为空 → 等一个 tsserver initialize 窗口（约 600ms）后重试一次
+            return new Promise<{ resultId?: string; data: Uint32Array } | null>((resolve) => {
+              setTimeout(() => {
+                fetchSemTokens().then((retry) => {
+                  if (retry) {
+                    const data = new Uint32Array(retry.data);
+                    decodedTokensRef.current = decodeSemTokens(data);
+                    resolve({ resultId: retry.resultId, data });
+                  } else {
+                    resolve(null);
+                  }
+                }).catch(() => resolve(null));
+              }, 600);
+            });
           }).catch(() => null);
         }
 

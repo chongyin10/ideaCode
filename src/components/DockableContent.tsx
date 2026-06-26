@@ -7,15 +7,49 @@ import { getPluginManager } from '../plugin/core';
 import ExplorerContent from './SidePanel/ExplorerContent';
 import SearchPanel from './SearchPanel';
 import ExtensionsPanel from './ExtensionsPanel';
-import SourceControlPanel from './SourceControlPanel';
 import WebViewPanel from './WebViewPanel';
 import type { DockableItem } from '../store/slices/layoutSlice';
-import type { ExtensionView, ExtensionViewAction } from '../store/slices/extensionUISlice';
+import type { ExtensionView, ExtensionViewAction, ExtensionWebViewPanel } from '../store/slices/extensionUISlice';
 
 interface DockableContentProps {
   item: DockableItem;
   /** 是否在 viewContainer 内容顶部显示扩展自带的 header actions（右侧面板会关闭，改由 tab 栏统一渲染） */
   showViewHeader?: boolean;
+}
+
+/**
+ * Git 扩展的 Source Control 视图
+ *
+ * 渲染 web/git 扩展创建的 WebView（viewType='git.changesView'）。
+ * Git 功能完全由该扩展提供，不再有内置回退。
+ */
+function GitExtensionView() {
+  const webviewPanels = useAppSelector((s) => s.extensionUI.webviewPanels);
+  const { t } = useTranslation();
+
+  // 找到 git 扩展创建的 WebView
+  const gitWebview: ExtensionWebViewPanel | undefined = webviewPanels.find(
+    (p) => p.extensionId === 'ideacode-git'
+  );
+
+  if (gitWebview && gitWebview.html) {
+    return (
+      <WebViewPanel
+        html={gitWebview.html}
+        panelId={gitWebview.id}
+        extensionPath={gitWebview.extensionPath}
+      />
+    );
+  }
+
+  // WebView 还未挂载时显示占位
+  return (
+    <div className="panel-placeholder">
+      {gitWebview
+        ? t('common.loading') || '加载中…'
+        : 'Git 扩展正在加载…'}
+    </div>
+  );
 }
 
 const ACTION_ICONS: Record<string, JSX.Element> = {
@@ -147,8 +181,6 @@ export function DockableContent({ item, showViewHeader = true }: DockableContent
       return <ExplorerContent />;
     case 'search':
       return <SearchPanel />;
-    case 'git':
-      return <SourceControlPanel />;
     case 'extensions':
       return <ExtensionsPanel />;
     case 'debug':
@@ -161,6 +193,10 @@ export function DockableContent({ item, showViewHeader = true }: DockableContent
       const containerViews = views.filter((v) => v.containerId === item.sourceContainerId);
       if (containerViews.length === 0) {
         return <div className="panel-placeholder">{t(item.title) || item.title}</div>;
+      }
+      // Git 扩展的特殊处理：直接渲染其 WebView
+      if (item.sourceContainerId === 'workbench.scm') {
+        return <GitExtensionView />;
       }
       return (
         <div className="extension-views" style={{ height: '100%' }}>
@@ -175,7 +211,6 @@ export function DockableContent({ item, showViewHeader = true }: DockableContent
     case 'problems':
     case 'debug-console':
     case 'ports':
-    case 'gitlens':
       return (
         <div className="panel-placeholder">
           {t(item.title) || item.title}

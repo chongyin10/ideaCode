@@ -1,7 +1,7 @@
 import { createSlice } from '@reduxjs/toolkit';
 
-export type PanelId = 'explorer' | 'search' | 'git' | 'debug' | 'extensions' | string;
-export type BottomTabId = 'terminal' | 'problems' | 'output' | 'debug-console' | 'ports' | 'gitlens';
+export type PanelId = 'explorer' | 'search' | 'debug' | 'extensions' | string;
+export type BottomTabId = 'terminal' | 'problems' | 'output' | 'debug-console' | 'ports';
 export type DockLocation = 'left' | 'right' | 'bottom';
 
 export interface DockableItem {
@@ -9,9 +9,10 @@ export interface DockableItem {
   title: string;
   icon: string;
   location: DockLocation;
-  type: 'explorer' | 'search' | 'git' | 'debug' | 'extensions' | 'terminal' | 'output' | 'problems' | 'debug-console' | 'ports' | 'gitlens' | 'viewContainer' | 'custom';
+  type: 'explorer' | 'search' | 'debug' | 'extensions' | 'terminal' | 'output' | 'problems' | 'debug-console' | 'ports' | 'viewContainer' | 'custom';
   sourceContainerId?: string;
   sourceViewId?: string;
+  badge?: number;
 }
 
 export const DEFAULT_SIDEBAR_WIDTH = 260;
@@ -19,16 +20,16 @@ export const MIN_SIDEBAR_WIDTH = 150;
 export const MAX_SIDEBAR_WIDTH = 600;
 
 /** ActivityBar 面板默认顺序 */
-export const DEFAULT_PANEL_ORDER: PanelId[] = ['explorer', 'search', 'git', 'debug', 'extensions'];
+export const DEFAULT_PANEL_ORDER: PanelId[] = ['explorer', 'search', 'debug', 'extensions'];
 
 /** 底部面板 tab 默认顺序 */
-export const DEFAULT_BOTTOM_TAB_ORDER: BottomTabId[] = ['problems', 'output', 'debug-console', 'terminal', 'ports', 'gitlens'];
+export const DEFAULT_BOTTOM_TAB_ORDER: BottomTabId[] = ['problems', 'output', 'debug-console', 'terminal', 'ports'];
 
 /** 统一的 dockable items 默认配置 */
 const DEFAULT_DOCKABLE_ITEMS: DockableItem[] = [
   { id: 'explorer', title: 'activityBar.explorer', icon: '$(files)', location: 'left', type: 'explorer' },
   { id: 'search', title: 'activityBar.search', icon: '$(search)', location: 'left', type: 'search' },
-  { id: 'git', title: 'activityBar.sourceControl', icon: '$(git-branch)', location: 'left', type: 'git' },
+  // Source Control 由 web/git 扩展提供（contributes.viewsContainers.activitybar）
   { id: 'debug', title: 'activityBar.runAndDebug', icon: '$(bug)', location: 'left', type: 'debug' },
   { id: 'extensions', title: 'activityBar.extensions', icon: '$(blocks)', location: 'left', type: 'extensions' },
 
@@ -39,7 +40,6 @@ const DEFAULT_DOCKABLE_ITEMS: DockableItem[] = [
   { id: 'debug-console', title: 'bottomPanel.debugConsole', icon: '$(bug)', location: 'bottom', type: 'debug-console' },
   { id: 'terminal', title: 'bottomPanel.terminal', icon: '$(terminal)', location: 'bottom', type: 'terminal' },
   { id: 'ports', title: 'bottomPanel.ports', icon: '$(plug)', location: 'bottom', type: 'ports' },
-  { id: 'gitlens', title: 'bottomPanel.gitlens', icon: '$(git-branch)', location: 'bottom', type: 'gitlens' },
 ];
 
 interface LayoutState {
@@ -283,6 +283,16 @@ const layoutSlice = createSlice({
       const insertIdx = position === 'after' ? newToIdx + 1 : newToIdx;
       items.splice(insertIdx, 0, item);
     },
+    /**
+     * 设置 ActivityBar 面板徽标（由扩展推送）
+     */
+    setDockableItemBadge: (state, action) => {
+      const { id, badge } = action.payload as { id: string; badge?: number };
+      const item = state.dockableItems.find((i) => i.id === id);
+      if (item) {
+        item.badge = badge && badge > 0 ? badge : undefined;
+      }
+    },
     switchRightItem: (state, action) => {
       state.activeRightItem = action.payload as string;
       state.rightPanelVisible = true;
@@ -309,6 +319,7 @@ export const {
   unregisterDockableItem,
   moveDockableItem,
   reorderDockableItem,
+  setDockableItemBadge,
   switchRightItem,
 } = layoutSlice.actions;
 export default layoutSlice.reducer;

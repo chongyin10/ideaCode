@@ -157,26 +157,46 @@ function parseContentBlocks(content: string, provider: ProviderId = 'custom'): C
 /* ─────────────────────────────────────────────────────────────────── */
 
 function extractTitle(blocks: ContentBlockType[]): string {
+  // 单遍扫描 Θ(b)：首个非空 text 行命中即短路返回（最高优先级，与旧逻辑一致）；
+  // 否则在同一遍内顺带累计各类块计数，取代旧实现对 step/shell/edit/fileStatus
+  // 各做一次 filter（共 ~5 次全表扫描）的做法。
+  let stepCount = 0;
+  let firstStep: Extract<ContentBlockType, { type: 'step' }> | null = null;
+  let shellCount = 0;
+  let editCount = 0;
+  let fileStatusCount = 0;
+
   for (const block of blocks) {
-    if (block.type === 'text') {
-      const firstLine = block.content.split('\n')[0].trim();
-      const clean = firstLine.replace(/^#{1,6}\s+/, '').trim();
-      if (clean.length > 0) return clean.slice(0, 80) + (clean.length > 80 ? '…' : '');
+    switch (block.type) {
+      case 'text': {
+        const firstLine = block.content.split('\n')[0].trim();
+        const clean = firstLine.replace(/^#{1,6}\s+/, '').trim();
+        if (clean.length > 0) return clean.slice(0, 80) + (clean.length > 80 ? '…' : '');
+        break;
+      }
+      case 'step':
+        if (!firstStep) firstStep = block;
+        stepCount++;
+        break;
+      case 'shell':
+        shellCount++;
+        break;
+      case 'edit':
+        editCount++;
+        break;
+      case 'fileStatus':
+        fileStatusCount++;
+        break;
     }
   }
-  const steps = blocks.filter((b): b is Extract<ContentBlockType, { type: 'step' }> => b.type === 'step');
-  if (steps.length > 0) {
-    const first = steps[0];
-    const label = first.label || stepLabel(first.stepType);
-    if (steps.length === 1) return label;
-    return `${label} 等 ${steps.length} 步`;
+
+  if (firstStep) {
+    const label = firstStep.label || stepLabel(firstStep.stepType);
+    return stepCount === 1 ? label : `${label} 等 ${stepCount} 步`;
   }
-  const shells = blocks.filter((b) => b.type === 'shell').length;
-  if (shells > 0) return `执行 ${shells} 个命令`;
-  const edits = blocks.filter((b) => b.type === 'edit').length;
-  if (edits > 0) return `编辑 ${edits} 个文件`;
-  const fileChanges = blocks.filter((b) => b.type === 'fileStatus').length;
-  if (fileChanges > 0) return `更新 ${fileChanges} 个文件`;
+  if (shellCount > 0) return `执行 ${shellCount} 个命令`;
+  if (editCount > 0) return `编辑 ${editCount} 个文件`;
+  if (fileStatusCount > 0) return `更新 ${fileStatusCount} 个文件`;
   return 'AI 回复';
 }
 

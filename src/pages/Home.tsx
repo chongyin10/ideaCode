@@ -32,7 +32,6 @@ import ExtensionDetail from '../components/ExtensionDetail';
 import SshFileTreePanel from '../components/SshFileTreePanel';
 import ConfirmDialog, { type ConfirmResult } from '../components/ConfirmDialog';
 import QuickOpen from '../components/QuickOpen';
-import GitSetupPanel from '../components/GitSetupPanel';
 import SettingsPanel from '../components/SettingsPanel';
 import ContextMenu, { type MenuItem } from '../components/ContextMenu';
 import FileReferencesModal from '../components/FileReferencesModal';
@@ -98,15 +97,11 @@ function Home() {
   const workspace = useAppSelector((state) => state.workspace);
   const { openedFiles, recentProjects, editorGroups, activeGroupIndex, allFilePaths, mirrorContent, splitPhase, editorSnapshots: snapshots, missingFileIds } = workspace;
   const splitView = editorGroups.length > 1;
-  const showCloneForm = useAppSelector((state) => state.git.showCloneForm);
   const settingsVisible = useAppSelector((state) => state.workspace.settingsVisible);
   const rootSource = useAppSelector((state) => state.workspace.rootSource);
   const rootPath = typeof rootSource === 'string' ? rootSource : '';
-  const gitStaged = useAppSelector((s) => s.git.staged);
-  const gitChanges = useAppSelector((s) => s.git.changes);
-  const gitMerge = useAppSelector((s) => s.git.merge);
-  const gitUntracked = useAppSelector((s) => s.git.untracked);
-  const gitStatus = useMemo(() => ({ ...gitStaged, ...gitChanges, ...gitMerge, ...gitUntracked }), [gitStaged, gitChanges, gitMerge, gitUntracked]);
+  // Git 文件状态由 web/git 扩展通过 extension bridge 推送到 Redux
+  const gitStatus = useAppSelector((state) => state.workspace.gitStatus);
 
   /* ═══ BCM 神经启发 Tab 管理器 ═══ */
   const bcmRef = useRef(new BCMTabManager({
@@ -758,8 +753,6 @@ function Home() {
 
       {settingsVisible ? (
         <SettingsPanel />
-      ) : showCloneForm ? (
-        <GitSetupPanel />
       ) : allFileIds.length === 0 ? (
         <div className="welcome-screen">
           <h2>{t('home.welcome.title')}</h2>

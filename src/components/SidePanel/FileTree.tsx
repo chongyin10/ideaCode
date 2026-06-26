@@ -2,11 +2,16 @@ import { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronRight } from 'lucide-react';
 import type { FileEntry, FileSource } from '../../services/fileService';
-import type { GitStatusMap, GitStatusCode } from '../../types/electron';
 import { isSameSource } from '../../services/fileService';
 import type { FileClipboardItem } from '../../services/fileClipboard';
 import InlineInput from '../InlineInput';
 import { FileIcon, ClosedFolderIcon, DefaultFileIcon } from './FileTree.icons';
+
+// Git 状态由 web/git 扩展维护（后续可通过 extension bridge 暴露给主进程）
+// 此处保留 gitStatus 入参以便未来扩展
+export type GitStatusCode = 'M' | 'A' | 'D' | 'R' | 'U' | 'C' | string;
+export type GitStatusMap = Record<string, string>;
+
 
 /* ─── 拖拽移动：模块级状态（跨递归 FileTree 节点共享） ─── */
 interface DragState {
@@ -217,6 +222,11 @@ const FileTree = memo(({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [myPendingCreateType, myIsRenaming]);
 
+  // 目录 source 变化时（如切换项目），清空已缓存的子节点，避免旧数据残留
+  useEffect(() => {
+    setChildren([]);
+  }, [entry.source]);
+
   // 当 expanded 变为 true 且 children 为空时，异步加载子节点
   useEffect(() => {
     if (entry.kind === 'directory' && expanded && children.length === 0) {
@@ -259,14 +269,13 @@ const FileTree = memo(({
   const gitCode: GitStatusCode | undefined = gitStatus?.[entryRelPath];
 
   // 目录的派生 git 状态：检查是否有任何子文件被 git 跟踪变更
+  // 使用 for-of 逐键遍历 O(N)，但 `startsWith` 是原生快速路径
   const dirGitCode: GitStatusCode | undefined = useMemo(() => {
     if (entry.kind !== 'directory' || !gitStatus) return undefined;
     const prefix = entryRelPath + '/';
     for (const key of Object.keys(gitStatus)) {
       if (key.startsWith(prefix)) {
-        const code = gitStatus[key];
-        // 优先级: M > U > A > D > R
-        return code;
+        return gitStatus[key];
       }
     }
     return undefined;

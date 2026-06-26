@@ -18,6 +18,11 @@
  * - Personalized PageRank：文件重要性排序
  * - Entropy File Prefetch：条件熵文件预取
  * - Thompson Sampling Bandit：多臂老虎机搜索排序
+ * - Lyapunov Scheduler：Lyapunov 稳定性引导的自适应帧预算调度 (Θ-Algorithm)
+ * - SimHash：局部敏感哈希预过滤 (LSH)
+ * - Count-Min Sketch：概率计数搜索过滤
+ * - Walsh-Hadamard Transform：快速正交变换 Diff 加速
+ * - Incremental Entropy：递推 Shannon 熵增量更新
  */
 
 export { fuzzySearch, fuzzyScore, FuzzySearchEngine } from './fuzzySearch';
@@ -44,6 +49,7 @@ export type { MatchResult, SearchOptions } from './boyerMoore';
 
 export {
   computeDiff,
+  computeDiffFast,
   computePatienceDiff,
   formatUnifiedDiff,
   inlineDiff,
@@ -106,3 +112,37 @@ export { FMIndex } from './fmIndex';
 
 export { FileCommunityDetector } from './fileCommunity';
 export type { FileCommunity, FileRelationGraph } from './fileCommunity';
+
+// ── 高等数学 + 创新算法优化模块 ──
+export {
+  LyapunovScheduler,
+  getGlobalScheduler,
+  stopGlobalScheduler,
+} from './lyapunovScheduler';
+export type { SchedulerTask, LyapunovSchedulerConfig } from './lyapunovScheduler';
+
+export {
+  SimHashFilter,
+  computeSimHash,
+  hammingDistance,
+  hammingDistanceFast,
+} from './simHash';
+export type { SimHashValue } from './simHash';
+
+export {
+  CountMinSketch,
+  FileSearchPreFilter,
+} from './countMinSketch';
+export type { CountMinSketchConfig } from './countMinSketch';
+
+export {
+  fwht,
+  WalshLineClusterer,
+  computeWalshSignature,
+  walshSignatureSimilarity,
+} from './walshHadamard';
+
+export {
+  IncrementalEntropy,
+  SlidingWindowEntropy,
+} from './incrementalEntropy';

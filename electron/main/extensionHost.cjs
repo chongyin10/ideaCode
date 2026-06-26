@@ -392,7 +392,11 @@ class ExtensionHostManager {
       method.startsWith('configuration.') ||
       method.startsWith('storage.') ||
       method.startsWith('secrets.') ||
-      method.startsWith('env.')
+      method.startsWith('env.') ||
+      // Git 扩展调用的方法：需要从渲染进程获取真实数据或调用其能力
+      method.startsWith('git.') ||
+      // __ 开头的内部命令（如 __git_getRootPath）也走渲染进程
+      method.startsWith('__git_')
     );
   }
 

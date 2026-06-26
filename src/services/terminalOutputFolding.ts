@@ -1,14 +1,16 @@
 /**
  * useTerminalOutputFolding — 终端输出智能折叠
- * 
+ *
  * 数学优化:
- * - Shannon 熵分类 (#13): 自动跳过二进制/结构化块
+ * - 递推 Shannon 熵增量更新: 新行追加时 O(1) 更新熵值
+ * - 滑动窗熵: 局部二进制块检测，无需遍历全量历史
  * - 区间树 (#18): O(log n) 定位行所属段落
  */
 
 import { useMemo } from 'react';
 import { shannonEntropy, classifyBlock } from './terminalMath';
 import { IntervalTree } from './terminalIndexes';
+import { SlidingWindowEntropy } from '../utils/algorithms';
 
 export interface OutputSection {
   startLine: number;
@@ -24,20 +26,28 @@ function detectSections(lines: string[]): OutputSection[] {
 
   let currentStart = 0;
   let currentTitle = '';
+  // 使用滑动窗递推熵加速二进制块检测 (优化 #22)
+  const entropyWindow = new SlidingWindowEntropy(512);
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
-    // Shannon 熵分类 — 跳过二进制块 (优化 #13)
-    const entropy = shannonEntropy(line);
-    const category = classifyBlock(entropy);
-    if (category === 'binary' && line.length > 100) {
+    // 递推熵检测：推送当前行到滑动窗，O(1) 更新
+    const windowEntropy = entropyWindow.pushLine(line);
+
+    // 二进制块检测：滑动窗熵 ≥ 6.5 或 通过 shannonEntropy 确认
+    const isBinary =
+      (windowEntropy >= 6.5 && line.length > 50) ||
+      (line.length > 100 && shannonEntropy(line) > 6.5);
+
+    if (isBinary) {
       if (i > currentStart) {
         sections.push({ startLine: currentStart, endLine: i, title: currentTitle || undefined });
       }
       currentStart = i + 1;
       currentTitle = '';
       sections.push({ startLine: i, endLine: i + 1, title: '[二进制数据]', defaultCollapsed: true, severity: 'info' });
+      entropyWindow.reset(); // 重置滑动窗
       continue;
     }
 
@@ -48,9 +58,10 @@ function detectSections(lines: string[]): OutputSection[] {
       }
       currentStart = i + 1;
       currentTitle = '';
+      entropyWindow.reset();
       continue;
     }
-    if (line.includes('\x1b]633;B')) { currentStart = i; continue; }
+    if (line.includes('\x1b]633;B')) { currentStart = i; entropyWindow.reset(); continue; }
 
     // 分隔线
     if (/^[=*-]{20,}/.test(line.trim())) {
@@ -59,6 +70,7 @@ function detectSections(lines: string[]): OutputSection[] {
       }
       currentStart = i;
       currentTitle = line.trim();
+      entropyWindow.reset();
       continue;
     }
 
@@ -70,6 +82,7 @@ function detectSections(lines: string[]): OutputSection[] {
       currentStart = i;
       const cmdMatch = line.match(/[$#>❯]\s*(.+)/);
       currentTitle = cmdMatch ? cmdMatch[1] : line.trim();
+      entropyWindow.reset();
       continue;
     }
 

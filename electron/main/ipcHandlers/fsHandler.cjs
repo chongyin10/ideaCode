@@ -14,6 +14,23 @@ const { Channels } = require('../../shared/channels.cjs');
  * 2. 不暴露 rm、chmod 等危险操作
  * 3. 文件监听在后台模式持续运行，独立于窗口焦点状态
  */
+
+/**
+ * 向上查找 Git 仓库根目录
+ * @param {string} startPath
+ * @returns {string | null}
+ */
+function findGitRoot(startPath) {
+  let dir = startPath;
+  while (dir !== path.dirname(dir)) {
+    if (fsSync.existsSync(path.join(dir, '.git'))) {
+      return dir;
+    }
+    dir = path.dirname(dir);
+  }
+  return null;
+}
+
 function registerFsHandlers() {
   /* ── 读取目录 ── */
   ipcMain.handle(Channels.FS_READ_DIR, async (_event, dirPath) => {
@@ -97,22 +114,6 @@ function registerFsHandlers() {
   const gitRefreshTimers = new Map();
 
   /**
-   * 向上查找 Git 仓库根目录
-   * @param {string} startPath
-   * @returns {string | null}
-   */
-  function findGitRoot(startPath) {
-    let dir = startPath;
-    while (dir !== path.dirname(dir)) {
-      if (fsSync.existsSync(path.join(dir, '.git'))) {
-        return dir;
-      }
-      dir = path.dirname(dir);
-    }
-    return null;
-  }
-
-  /**
    * 触发 Git 状态刷新（防抖）
    * @param {string} changedPath
    */
@@ -191,4 +192,4 @@ function registerFsHandlers() {
   });
 }
 
-module.exports = { registerFsHandlers };
+module.exports = { registerFsHandlers, findGitRoot };

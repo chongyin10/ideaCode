@@ -1,4 +1,8 @@
 const { app } = require('electron');
+const { fixPath } = require('./main/utils/env.cjs');
+
+// 先补全 PATH，确保后续子进程能找到用户安装的 git 等命令（macOS GUI 启动时尤为重要）
+fixPath();
 
 // 抑制 Electron 安全警告与部分 DevTools CDP 无关错误
 process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = 'true';

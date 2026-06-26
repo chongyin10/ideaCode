@@ -1,5 +1,5 @@
 import { Outlet } from 'react-router-dom';
-import { useElectronEvents } from './hooks';
+import { useElectronEvents, useTsServerLifecycle } from './hooks';
 import TopBar from './components/TopBar';
 import ActivityBar from './components/ActivityBar';
 import SidePanel from './components/SidePanel';
@@ -13,6 +13,10 @@ import './App.css';
 function App() {
   // 挂载 Electron 系统事件监听（菜单、窗口焦点、文件变更）
   useElectronEvents();
+
+  // 监听根目录变化，提前启动/重启 tsserver，缩短打开文件后语义高亮（变量/方法/属性着色）
+  // 出现的延迟。
+  useTsServerLifecycle();
 
   return (
     <div className="app-layout">

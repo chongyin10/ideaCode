@@ -2,8 +2,7 @@ import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import type { FileEntry, FileSource } from '../../services/fileService';
 import { isSameSource, readFile, readDirectory, writeFile, isPath, isRemoteUri } from '../../services/fileService';
 import { addRecentProject, getRecentProjects, removeRecentProject } from '../../services/fileHistory';
-import type { RecentProject, GitStatusMap } from '../../types/electron';
-
+import type { RecentProject } from '../../types/electron';
 export interface OpenedFile {
   id: string;
   name: string;
@@ -78,7 +77,6 @@ interface WorkspaceState {
   searchHighlight: SearchHighlight | null;
   clipboard: ClipboardItem | null;
   pendingSearchQuery: string | null;
-  gitStatus: GitStatusMap;
   allFilePaths: string[];
   expandPaths: string[];
   expandedDirs: string[];
@@ -101,6 +99,8 @@ interface WorkspaceState {
   remoteRoots: WorkspaceRoot[];
   /** AI 编辑模式：true=AI可直接编辑代码 false=AI只给建议 */
   aiEditMode: boolean;
+  /** Git 文件状态映射（由 web/git 扩展推送） */
+  gitStatus: Record<string, string>;
 }
 
 const initialState: WorkspaceState = {
@@ -114,7 +114,6 @@ const initialState: WorkspaceState = {
   searchHighlight: null,
   clipboard: null,
   pendingSearchQuery: null,
-  gitStatus: {},
   allFilePaths: [],
   expandPaths: [],
   expandedDirs: [],
@@ -129,6 +128,7 @@ const initialState: WorkspaceState = {
   missingFileIds: [],
   remoteRoots: [],
   aiEditMode: true,
+  gitStatus: {},
 };
 
 /* ─── 工具函数 ─── */
@@ -170,11 +170,15 @@ function insertOpenedFile(state: WorkspaceState, file: OpenedFile) {
 
   const activeFile = state.openedFiles.find((f) => f.id === group.activeFileId);
   if (activeFile?.isPreview && !activeFile?.isDiff) {
-    const activeIdx = group.fileIds.indexOf(group.activeFileId!);
+    const oldId = group.activeFileId!;
+    const activeIdx = group.fileIds.indexOf(oldId);
     group.fileIds[activeIdx] = file.id;
-    group.tabHistory = removeFromHistory(group.tabHistory, group.activeFileId!);
+    group.tabHistory = removeFromHistory(group.tabHistory, oldId);
     group.activeFileId = file.id;
     group.tabHistory = pushToHistory(group.tabHistory, file.id);
+    if (!state.editorGroups.some((g) => g.fileIds.includes(oldId))) {
+      state.openedFiles = state.openedFiles.filter((f) => f.id !== oldId);
+    }
     syncGlobalActive(state);
     return;
   }
@@ -189,6 +193,9 @@ function insertOpenedFile(state: WorkspaceState, file: OpenedFile) {
     group.tabHistory = removeFromHistory(group.tabHistory, previewFileId);
     group.activeFileId = file.id;
     group.tabHistory = pushToHistory(group.tabHistory, file.id);
+    if (!state.editorGroups.some((g) => g.fileIds.includes(previewFileId))) {
+      state.openedFiles = state.openedFiles.filter((f) => f.id !== previewFileId);
+    }
     syncGlobalActive(state);
     return;
   }
@@ -305,8 +312,9 @@ export const loadDirectory = createAsyncThunk(
       try { await addRecentProject(source, name); } catch { /* 忽略 */ }
       // 启动 tsserver 语言服务
       try { window.electronAPI?.tsserver?.start(source); } catch { /* tsserver 未可用 */ }
-      dispatch(refreshGitStatus());
       dispatch(refreshAllFilePaths(source));
+      // Git 状态由 web/git 扩展自动监听 workspace 变更并刷新
+      // （扩展轮询 workspace.getRootPath，发现路径变更后自动 openRepository）
     }
     return { source, name, entries };
   }
@@ -374,7 +382,7 @@ export const removeRecentProjectThunk = createAsyncThunk(
 
 export const saveFile = createAsyncThunk(
   'workspace/saveFile',
-  async (payload: string | { id: string; groupIndex?: number }, { getState, dispatch }) => {
+  async (payload: string | { id: string; groupIndex?: number }, { getState }) => {
     const { id, groupIndex: gIdx = 0 } = typeof payload === 'string' ? { id: payload } : payload;
     const state = (getState() as { workspace: WorkspaceState }).workspace;
     const file = state.openedFiles.find((f) => f.id === id);
@@ -382,38 +390,8 @@ export const saveFile = createAsyncThunk(
     const mirrorKey = `${id}::${gIdx}`;
     const contentToSave = state.mirrorContent[mirrorKey] ?? file.content;
     await writeFile(file.source, contentToSave);
-    // 仅本地文件才刷新 Git 状态
-    if (!isRemoteUri(file.source)) {
-      dispatch(refreshGitStatus());
-      // 同步刷新 Git Slice 状态（FileTree 读取此 slice）
-      try {
-        const { refreshGitStatus: refreshGitSliceStatus } = await import('./gitSlice');
-        dispatch(refreshGitSliceStatus());
-      } catch { /* gitSlice 可能未初始化 */ }
-    }
+    // Git 状态由 web/git 扩展自动监听 .git 目录变更并刷新
     return { id, groupIndex: gIdx, content: contentToSave };
-  }
-);
-
-export const refreshGitStatus = createAsyncThunk(
-  'workspace/refreshGitStatus',
-  async (_: void, { getState }) => {
-    const state = (getState() as { workspace: WorkspaceState }).workspace;
-    if (!state.rootSource || !isPath(state.rootSource)) return {};
-    if (!window.electronAPI?.git) return {};
-    try {
-      // 仅当工作区根目录确实位于某个 Git 仓库内（且是该仓库本身或子目录）时才获取状态
-      const repoRoot = await window.electronAPI.git.getRepoRoot(state.rootSource);
-      if (!repoRoot) return {};
-      const normalizedRoot = state.rootSource.replace(/\\/g, '/').replace(/\/$/, '');
-      const normalizedRepo = repoRoot.replace(/\\/g, '/').replace(/\/$/, '');
-      // 仅当工作区根目录本身就是 Git 仓库根目录时才显示状态
-      if (normalizedRoot !== normalizedRepo) return {};
-      const result = await window.electronAPI.git.getStatus(state.rootSource);
-      // 合并所有分类为扁平 map，保持旧 API 兼容
-      return { ...result.staged, ...result.changes, ...result.merge, ...result.untracked };
-    }
-    catch { return {}; }
   }
 );
 
@@ -532,6 +510,12 @@ const workspaceSlice = createSlice({
     },
     setMissingFileIds: (state, action) => {
       state.missingFileIds = action.payload as string[];
+    },
+    /**
+     * 设置 Git 文件状态映射（key 为相对仓库根路径，value 为 M/A/D/R/U/C 等）
+     */
+    setGitStatus: (state, action) => {
+      state.gitStatus = action.payload as Record<string, string>;
     },
     closeFile: (state, action) => {
       const payload = action.payload;
@@ -961,6 +945,24 @@ const workspaceSlice = createSlice({
         state.rootSource = action.payload.source;
         state.rootName = action.payload.name;
         state.entries = action.payload.entries;
+        // 打开新文件夹/工程时，重置所有编辑会话状态
+        state.openedFiles = [];
+        state.activeFileId = null;
+        state.activeFileSource = null;
+        state.editorGroups = [{ id: 'g0', fileIds: [], activeFileId: null, tabHistory: [], ratio: 1 }];
+        state.activeGroupIndex = 0;
+        state.editorSnapshots = {};
+        state.mirrorContent = {};
+        state.splitPhase = 'closed';
+        state.nextGroupId = 1;
+        state.diffView = null;
+        state.settingsVisible = false;
+        state.missingFileIds = [];
+        state.remoteRoots = [];
+        state.expandPaths = [];
+        state.expandedDirs = [];
+        state.clipboard = null;
+        state.pendingSearchQuery = null;
       })
       .addCase(openFile.fulfilled, (state, action) => {
         if (!action.payload) return;
@@ -981,12 +983,15 @@ const workspaceSlice = createSlice({
         // 优先替换当前 active 的预览 Tab（如果它是预览态且非 Diff）
         const activeFile = state.openedFiles.find((f) => f.id === group.activeFileId);
         if (activeFile?.isPreview && !activeFile?.isDiff) {
-          const activeIdx = group.fileIds.indexOf(group.activeFileId!);
-          // 只替换 fileIds 中的 ID，保留 openedFiles 中的旧文件（避免 React 重新渲染 Tab 栏）
+          const oldId = group.activeFileId!;
+          const activeIdx = group.fileIds.indexOf(oldId);
           group.fileIds[activeIdx] = file.id;
-          group.tabHistory = removeFromHistory(group.tabHistory, group.activeFileId!);
+          group.tabHistory = removeFromHistory(group.tabHistory, oldId);
           group.activeFileId = file.id;
           group.tabHistory = pushToHistory(group.tabHistory, file.id);
+          if (!state.editorGroups.some((g) => g.fileIds.includes(oldId))) {
+            state.openedFiles = state.openedFiles.filter((f) => f.id !== oldId);
+          }
           syncGlobalActive(state);
           return;
         }
@@ -998,11 +1003,13 @@ const workspaceSlice = createSlice({
         });
         if (previewFileId) {
           const previewIdx = group.fileIds.indexOf(previewFileId);
-          // 只替换 fileIds 中的 ID，保留 openedFiles 中的旧文件
           group.fileIds[previewIdx] = file.id;
           group.tabHistory = removeFromHistory(group.tabHistory, previewFileId);
           group.activeFileId = file.id;
           group.tabHistory = pushToHistory(group.tabHistory, file.id);
+          if (!state.editorGroups.some((g) => g.fileIds.includes(previewFileId))) {
+            state.openedFiles = state.openedFiles.filter((f) => f.id !== previewFileId);
+          }
           syncGlobalActive(state);
           return;
         }
@@ -1045,9 +1052,6 @@ const workspaceSlice = createSlice({
           delete state.mirrorContent[`${id}::${idx}`];
         });
       })
-      .addCase(refreshGitStatus.fulfilled, (state, action) => {
-        state.gitStatus = action.payload;
-      })
       .addCase(refreshAllFilePaths.fulfilled, (state, action) => {
         state.allFilePaths = action.payload;
       })
@@ -1078,6 +1082,7 @@ export const {
   openDiffView, closeDiffView, updateDiffView, setFileLanguage,
   setSettingsVisible, closeSettings, setMissingFileIds, openVirtualFile,
   addWorkspaceFolder, removeWorkspaceFolder, toggleFileReadOnly, toggleAiEditMode,
+  setGitStatus,
 } = workspaceSlice.actions;
 
 export default workspaceSlice.reducer;

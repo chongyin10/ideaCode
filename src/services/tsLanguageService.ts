@@ -47,15 +47,64 @@ function api() {
   return window.electronAPI?.tsserver;
 }
 
+/**
+ * 当前已启动 tsserver 的工作区根路径。
+ *
+ * tsserver 是绑定 rootPath 启动的进程（启动时需要扫描 tsconfig.json、索引 node_modules/@types），
+ * 重复启动同一 rootPath 既浪费资源又会因为 `startServer` 中 `stopServer` 导致旧的立即被关掉、
+ * 重新冷启动，延误用户首次打开文件时的语义高亮出现。
+ *
+ * 在 rootPath 已就绪时直接跳过 IPC，避免渲染端任何重复触发（菜单打开、最近项目、
+ * Explorer 按钮、GitSetup 等）造成的"重启抖动"。
+ */
+let startedRootPath: string | null = null;
+let startInFlight: Promise<boolean> | null = null;
+
 export const tsService = {
-  /** 启动 tsserver */
-  start(rootPath: string) {
-    return api()?.start(rootPath) ?? Promise.resolve(false);
+  /** 启动 tsserver（幂等：相同 rootPath 不会重复启动） */
+  start(rootPath: string): Promise<boolean> {
+    const a = api();
+    if (!a) return Promise.resolve(false);
+    if (startedRootPath === rootPath) return Promise.resolve(true);
+    if (startInFlight) return startInFlight;
+    startInFlight = a.start(rootPath).then(
+      (ok) => {
+        startedRootPath = ok ? rootPath : startedRootPath;
+        return ok;
+      },
+      (err) => {
+        console.warn('[tsserver] 启动失败:', err);
+        return false;
+      },
+    ).finally(() => {
+      startInFlight = null;
+    });
+    return startInFlight;
   },
 
-  /** 停止 tsserver */
-  stop() {
-    return api()?.stop() ?? Promise.resolve(false);
+  /** 同步获取当前已启动的 rootPath（用于调试 / 状态显示） */
+  getStartedRootPath(): string | null {
+    return startedRootPath;
+  },
+
+  /**
+   * 停止 tsserver。切换工作区时由 useTsServerLifecycle 调用：
+   * 主进程 startServer 内部也会 stopServer，但显式 stop 可以立即让旧 server 退出，
+   * 避免 5s+ 的 stdin EOF 等待期间旧 server 仍占用资源。
+   */
+  stop(): Promise<boolean> {
+    const a = api();
+    if (!a) return Promise.resolve(false);
+    const prev = startedRootPath;
+    startedRootPath = null;
+    return Promise.resolve(a.stop()).then(
+      () => true,
+      (err) => {
+        console.warn('[tsserver] 停止失败:', err);
+        startedRootPath = prev;
+        return false;
+      },
+    );
   },
 
   /** 打开文件：tsserver 解析并生成诊断 */

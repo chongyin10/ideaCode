@@ -48,7 +48,7 @@ const MAX_PANEL_HEIGHT_RATIO = 0.85;
 function CrossAreaBottomContent({ activeBottomTab }: { activeBottomTab: BottomTabId }) {
   const item = useAppSelector((s) => s.layout.dockableItems.find((i) => i.id === activeBottomTab));
   if (!item) return null;
-  const standardIds = new Set(['terminal', 'problems', 'output', 'debug-console', 'ports', 'gitlens']);
+  const standardIds = new Set(['terminal', 'problems', 'output', 'debug-console', 'ports']);
   if (standardIds.has(item.id)) return null;
   return (
     <div className="bottom-panel__cross-area" style={{ display: 'flex', flex: 1, flexDirection: 'column', overflow: 'hidden' }}>
@@ -834,7 +834,6 @@ const BottomPanel = () => {
       <div className="bottom-panel__placeholder" style={{ display: activeBottomTab === 'output' ? 'flex' : 'none' }}>{t('bottomPanel.outputPanel')}</div>
       <div className="bottom-panel__placeholder" style={{ display: activeBottomTab === 'debug-console' ? 'flex' : 'none' }}>{t('bottomPanel.debugConsolePanel')}</div>
       <div className="bottom-panel__placeholder" style={{ display: activeBottomTab === 'ports' ? 'flex' : 'none' }}>{t('bottomPanel.portsPanel')}</div>
-      <div className="bottom-panel__placeholder" style={{ display: activeBottomTab === 'gitlens' ? 'flex' : 'none' }}>GITLENS</div>
       <CrossAreaBottomContent activeBottomTab={activeBottomTab} />
 
       {/* 终端右键菜单 */}

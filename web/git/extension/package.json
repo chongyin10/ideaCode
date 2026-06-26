@@ -1,0 +1,43 @@
+{
+  "name": "ideacode-git",
+  "displayName": "Git Source Control",
+  "description": "内置 Git 源码管理插件（VSCode vscode.git 风格），提供状态查看、暂存、提交、推送/拉取、分支管理等功能",
+  "version": "1.0.0",
+  "publisher": "ideacode",
+  "main": "extension.cjs",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "workbench.scm",
+          "title": "源代码管理",
+          "icon": "$(git-branch)"
+        }
+      ]
+    },
+    "views": {
+      "workbench.scm": [
+        {
+          "id": "git.changesView",
+          "name": "更改"
+        }
+      ]
+    },
+    "commands": [
+      { "command": "git.refresh", "title": "Git: 刷新", "category": "Git" },
+      { "command": "git.openRepository", "title": "Git: 打开仓库", "category": "Git" },
+      { "command": "git.clone", "title": "Git: 克隆仓库", "category": "Git" },
+      { "command": "git.init", "title": "Git: 初始化仓库", "category": "Git" }
+    ]
+  },
+  "dependencies": {},
+  "scripts": {
+    "build": "node build.cjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.21.0"
+  }
+}
