@@ -565,7 +565,7 @@ var require_repository = __commonJS({
       async _doRefresh() {
         try {
           const output = await execGit(
-            ["status", "--porcelain=v2", "--branch", "--untracked-files=normal", "--ignored=no"],
+            ["status", "--porcelain=v2", "--branch", "--untracked-files=all", "--ignored=no"],
             { cwd: this.rootPath, timeout: 1e4 }
           );
           if (output.code !== 0) {

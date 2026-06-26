@@ -246,11 +246,28 @@ class ExtensionManager {
 const manager = new ExtensionManager();
 
 /* ────────────────────────────────────────────── */
-/*  VSCode 兼容 API                               */
+/*  VSCode 兼容 API (微内核: 统一 vscode-api)       */
 /* ────────────────────────────────────────────── */
 
-// 创建全局 vscode 对象
-const vscode = {
+// 尝试加载统一 vscode-api 模块（微内核架构）
+// 封装在 try/catch 中确保回退到内联 API
+let vscode;
+try {
+  const { loadVscodeApi } = require('./vscode-api-bridge.cjs');
+  const shared = loadVscodeApi();
+  if (shared) {
+    // 使用统一 API 模块，但需要注入 rpc 引用和扩展管理功能
+    vscode = shared;
+    // 注入 rpc 到模块作用域（vscode-api 内部使用 send/request）
+    global.__vscode_rpc = rpc;
+    console.log('[ExtensionHost] 使用统一 vscode-api (微内核模式)');
+  } else {
+    throw new Error('回退到内联 API');
+  }
+} catch (_err) {
+  // 回退：使用内联定義的 vscode 對象
+  console.log('[ExtensionHost] 使用内联 vscode API (传统模式)');
+  vscode = {
   // 窗口 API
   window: {
     showInformationMessage: (message, ...items) => {
@@ -538,6 +555,7 @@ const vscode = {
   // 版本
   version: '1.0.0',
 };
+} // end catch/try for unified vscode-api loading
 
 // 将 vscode 对象挂载到全局
 global.vscode = vscode;

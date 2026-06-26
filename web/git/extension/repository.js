@@ -151,7 +151,7 @@ class Repository {
   async _doRefresh() {
     try {
       const output = await execGit(
-        ['status', '--porcelain=v2', '--branch', '--untracked-files=normal', '--ignored=no'],
+        ['status', '--porcelain=v2', '--branch', '--untracked-files=all', '--ignored=no'],
         { cwd: this.rootPath, timeout: 10000 }
       );
       if (output.code !== 0) {
