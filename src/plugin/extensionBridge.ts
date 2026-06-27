@@ -18,7 +18,7 @@
 import path from 'path';
 import type { Store } from '@reduxjs/toolkit';
 import type { RootState } from '../store';
-import { openFile, openVirtualFile, addWorkspaceFolder, removeWorkspaceFolder, setFileContent, markFileSaved, toggleAiEditMode, setGitStatus, setGitBranch } from '../store/slices/workspaceSlice';
+import { openFile, openVirtualFile, addWorkspaceFolder, removeWorkspaceFolder, setFileContent, markFileSaved, toggleAiEditMode, setGitStatus, setGitBranch, setExternalFileChange, reloadFilesFromDisk, refreshDirectory } from '../store/slices/workspaceSlice';
 import { addPanelToOrder, removePanelFromOrder, registerDockableItem, unregisterDockableItem, switchRightItem, setDockableItemBadge } from '../store/slices/layoutSlice';
 import { readFile as fsReadFile, writeFile as fsWriteFile, isPath } from '../services/fileService';
 import { getMonacoEditorActions } from '../services/monacoEditorBridge';
@@ -878,6 +878,32 @@ export class ExtensionBridge {
     this.rpcHandlers.set('git.branchChanged', (params) => {
       const { branch } = (params || {}) as { branch?: string };
       this.store.dispatch(setGitBranch(branch || null));
+      return { updated: true };
+    });
+
+    /** Git 扩展通知文件被外部修改（如 discard / checkout 恢复文件）。
+     *  触发资源管理器精准刷新受影响目录 + 强制重载已打开的编辑器内容。 */
+    this.rpcHandlers.set('git.filesChanged', (params) => {
+      const { paths } = (params || {}) as { paths?: string[] };
+      const fileList = paths || [];
+      if (fileList.length === 0) return { updated: true };
+
+      const state = this.store.getState() as RootState;
+      const rootSource = state.workspace.rootSource;
+      const rootPath = typeof rootSource === 'string' ? rootSource : '';
+
+      // 1. 通知资源管理器刷新受影响目录（ExplorerContent 监听后 dispatch refreshDirectory + notifyChange）
+      this.store.dispatch(setExternalFileChange({ paths: fileList, timestamp: Date.now() }));
+
+      // 2. 强制重载被 discard 的已打开文件（清除 isDirty，因为修改已被放弃）
+      // 注意：渲染进程无法使用 Node 的 path 模块（Vite 会将其外部化为空对象），
+      // git 返回的 paths 以 '/' 分隔，rootPath 通常末尾不带斜杠，直接拼接即可
+      if (rootPath) {
+        const normalizedRoot = rootPath.replace(/[/\\]+$/, '');
+        const absolutePaths = fileList.map((p) => `${normalizedRoot}/${p.replace(/^[/\\]+/, '')}`);
+        this.store.dispatch(reloadFilesFromDisk(absolutePaths));
+      }
+
       return { updated: true };
     });
 

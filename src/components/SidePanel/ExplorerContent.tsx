@@ -147,6 +147,8 @@ const ExplorerContent = () => {
   const activeFileSource = useAppSelector((state) => state.workspace.activeFileSource);
   // Git 文件状态由 web/git 扩展通过 extension bridge 推送到 Redux
   const gitStatus = useAppSelector((state) => state.workspace.gitStatus);
+  // 外部文件变更（如 git discard），触发文件树精准刷新
+  const externalFileChange = useAppSelector((state) => state.workspace.externalFileChange);
   const expandPaths = useAppSelector((state) => state.workspace.expandPaths);
   const openedFiles = useAppSelector((state) => state.workspace.openedFiles);
   const editorGroups = useAppSelector((state) => state.workspace.editorGroups);
@@ -248,6 +250,37 @@ const ExplorerContent = () => {
   const notifyChange = useCallback((...targets: FileSource[]) => {
     setLastOperation({ targets, timestamp: Date.now() });
   }, []);
+
+  // Git discard 等外部文件变更后，精准刷新受影响目录（不全量刷新，避免 CPU/GPU 卡顿）
+  useEffect(() => {
+    if (!externalFileChange || !rootSource) return;
+    const rootPath = typeof rootSource === 'string' ? rootSource : '';
+    if (!rootPath) return;
+
+    // 计算受影响的所有祖先目录链（paths 是相对于仓库根的路径）
+    // 例如 src/A/foo.ts → [rootPath/src, rootPath/src/A]
+    // 仅刷新直接父目录无法让被删除的文件夹重新出现：因为该文件夹节点
+    // 在删除操作时已被父目录的 children 移除，notifyChange(parent) 找不到
+    // 匹配的 FileTree 节点；必须从 rootPath 之后的每一段都加入刷新集合，
+    // 让最上层仍存在的祖先节点触发 refreshChildren 时逐级向下重建节点。
+    const parentSources = new Set<string>();
+    for (const p of externalFileChange.paths) {
+      const lastSlash = p.lastIndexOf('/');
+      if (lastSlash < 0) continue; // 顶级文件，由 refreshDirectory 刷新根级 entries
+      const parts = p.substring(0, lastSlash).split('/');
+      let current = rootPath;
+      for (const part of parts) {
+        if (!part) continue;
+        current = current + '/' + part;
+        parentSources.add(current);
+      }
+    }
+
+    // 刷新根级条目（refreshDirectory 只更新 state.entries，性能可控）
+    dispatch(refreshDirectory(rootSource));
+    // 通知 FileTree 刷新受影响的展开子目录（通过 lastOperation 精准匹配）
+    notifyChange(...Array.from(parentSources));
+  }, [externalFileChange, rootSource, dispatch, notifyChange]);
 
   const handleOpenFolder = useCallback(async () => {
     const dir = await openDirectory();

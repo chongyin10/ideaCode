@@ -24,16 +24,23 @@ class GitError extends Error {
 }
 
 /**
- * 执行 git 命令并返回结果
+ * 按仓库根目录分组的串行化队列。
+ *
+ * 同一仓库内的 git 命令串行执行，避免 discard / refresh / fastPoll 等并发
+ * 操作争抢 `.git/index.lock`；不同仓库之间互不阻塞。
+ * 灵感来自 VS Code git 扩展的 askpass / exec 串行化策略。
+ *
+ * @type {Map<string, Promise<void>>}
+ */
+const _gitQueues = new Map();
+
+/**
+ * 执行单个 git 子进程（不含队列逻辑）
  * @param {string[]} args
  * @param {object} options
- * @param {string} options.cwd - 工作目录（仓库根）
- * @param {number} [options.timeout] - 超时毫秒数
- * @param {string} [options.input] - stdin 输入
- * @param {Record<string, string>} [options.env] - 额外环境变量
  * @returns {Promise<{ stdout: string; stderr: string; code: number }>}
  */
-function execGit(args, options = {}) {
+function _spawnGit(args, options) {
   return new Promise((resolve) => {
     const { cwd, timeout = DEFAULT_TIMEOUT, input, env } = options;
 
@@ -82,6 +89,48 @@ function execGit(args, options = {}) {
       child.stdin.end();
     }
   });
+}
+
+/**
+ * 执行 git 命令并返回结果。
+ *
+ * 同一 `options.cwd` 下的命令会按调用顺序串行执行，防止并发修改 index
+ * 导致 `Unable to create '.git/index.lock': File exists`。
+ *
+ * @param {string[]} args
+ * @param {object} options
+ * @param {string} options.cwd - 工作目录（仓库根），用于队列分组
+ * @param {number} [options.timeout] - 超时毫秒数
+ * @param {string} [options.input] - stdin 输入
+ * @param {Record<string, string>} [options.env] - 额外环境变量
+ * @returns {Promise<{ stdout: string; stderr: string; code: number }>}
+ */
+function execGit(args, options = {}) {
+  const cwd = options.cwd;
+
+  // 无 cwd（如 git --version）的命令不进队列，直接执行
+  if (!cwd) {
+    return _spawnGit(args, options);
+  }
+
+  const run = () => _spawnGit(args, options);
+
+  let queue = _gitQueues.get(cwd);
+  if (!queue) {
+    queue = Promise.resolve();
+  }
+
+  // 无论前一个命令成功或失败，都继续执行下一个（then 第二参数 = onRejected）
+  const result = queue.then(run, run);
+
+  // 更新队列尾：result 完成后清空错误，避免一个失败阻塞后续所有命令
+  const nextTail = result.then(
+    () => undefined,
+    () => undefined
+  );
+  _gitQueues.set(cwd, nextTail);
+
+  return result;
 }
 
 /**

@@ -103,6 +103,8 @@ interface WorkspaceState {
   gitStatus: Record<string, string>;
   /** 当前 Git 分支名（由 web/git 扩展推送） */
   gitBranch: string | null;
+  /** 外部文件变更通知（如 git discard），触发资源管理器精准刷新 */
+  externalFileChange: { paths: string[]; timestamp: number } | null;
 }
 
 const initialState: WorkspaceState = {
@@ -132,6 +134,7 @@ const initialState: WorkspaceState = {
   aiEditMode: true,
   gitStatus: {},
   gitBranch: null,
+  externalFileChange: null,
 };
 
 /* ─── 工具函数 ─── */
@@ -465,6 +468,28 @@ export const refreshOpenedFiles = createAsyncThunk(
   }
 );
 
+/** 强制重载指定路径的已打开文件内容（用于 git discard 等外部修改后同步编辑器）。
+ *  与 refreshOpenedFiles 的区别：不跳过 isDirty 文件，且重载后清除 isDirty。 */
+export const reloadFilesFromDisk = createAsyncThunk(
+  'workspace/reloadFilesFromDisk',
+  async (absolutePaths: string[], { getState }) => {
+    const state = (getState() as { workspace: WorkspaceState }).workspace;
+    const pathSet = new Set(absolutePaths);
+    const updates: { id: string; content: string }[] = [];
+    for (const file of state.openedFiles) {
+      if (typeof file.source !== 'string' || isRemoteUri(file.source)) continue;
+      if (!pathSet.has(file.source)) continue;
+      try {
+        const content = await readFile(file.source);
+        updates.push({ id: file.id, content });
+      } catch {
+        // 文件不可读，忽略
+      }
+    }
+    return updates;
+  }
+);
+
 /* ─── Slice ─── */
 
 const workspaceSlice = createSlice({
@@ -516,6 +541,13 @@ const workspaceSlice = createSlice({
      */
     setGitBranch: (state, action) => {
       state.gitBranch = typeof action.payload === 'string' && action.payload ? action.payload : null;
+    },
+    /**
+     * 设置外部文件变更通知（如 git discard 后由扩展推送）。
+     * ExplorerContent 监听此字段变化后，精准刷新受影响目录的子节点。
+     */
+    setExternalFileChange: (state, action) => {
+      state.externalFileChange = action.payload as { paths: string[]; timestamp: number } | null;
     },
     /**
      * 清空所有远程工作区根目录，同时清除关联的 Git 状态，
@@ -1081,6 +1113,19 @@ const workspaceSlice = createSlice({
             });
           }
         }
+      })
+      .addCase(reloadFilesFromDisk.fulfilled, (state, action) => {
+        for (const { id, content } of action.payload) {
+          const file = state.openedFiles.find((f) => f.id === id);
+          if (file) {
+            file.content = content;
+            file.isDirty = false;  // discard 后文件回到干净状态
+            file.isPreview = false;
+            state.editorGroups.forEach((_, idx) => {
+              delete state.mirrorContent[`${id}::${idx}`];
+            });
+          }
+        }
       });
   },
 });
@@ -1095,6 +1140,7 @@ export const {
   addWorkspaceFolder, removeWorkspaceFolder, toggleFileReadOnly, toggleAiEditMode,
   setGitStatus,
   setGitBranch,
+  setExternalFileChange,
   clearWorkspaceFolders,
 } = workspaceSlice.actions;
 

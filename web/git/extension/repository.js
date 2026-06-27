@@ -21,6 +21,7 @@ const STATUS_POLL_INTERVAL = 30000;
 const FAST_POLL_INTERVAL = 500;          // 操作后快速刷新窗口
 const FAST_POLL_DURATION = 5000;          // 快速刷新持续时间
 const WATCHER_DEBOUNCE_MS = 300;          // 文件变更去抖，避免频繁刷 git status
+const STALE_LOCK_THRESHOLD_MS = 30000;     // 超过此时间的 index.lock 视为残留并清理
 
 class Repository {
   /**
@@ -174,6 +175,41 @@ class Repository {
     await this.refresh();
   }
 
+  /**
+   * 清理超时的 `.git/index.lock` 残留文件。
+   *
+   * 场景：历史遗留的崩溃 lock、外部 git 进程异常退出、或升级到串行队列前
+   * 产生的残留。execGit 已串行化，但首条命令仍可能命中残留 lock，故在
+   * 所有写操作前做一次兜底清理。
+   *
+   * 仅当 lock 文件存在且 mtime 距今超过 STALE_LOCK_THRESHOLD_MS 时才删除，
+   * 避免误删外部正在运行的合法 git 进程持有的锁。
+   */
+  async _cleanupStaleLock() {
+    const lockPath = path.join(this.rootPath, '.git', 'index.lock');
+    try {
+      const stat = await fsp.stat(lockPath);
+      const age = Date.now() - stat.mtimeMs;
+      if (age > STALE_LOCK_THRESHOLD_MS) {
+        await fsp.unlink(lockPath);
+        console.warn('[Repository] 清理超时的 .git/index.lock (age=%dms)', age);
+      }
+    } catch {
+      // lock 文件不存在：正常情况，无需处理
+    }
+  }
+
+  /**
+   * 执行会修改 git index 的命令。
+   *
+   * 与只读命令的区别：执行前先清理 stale lock，避免残留锁导致
+   * `Unable to create '.git/index.lock': File exists`。
+   */
+  async _execGitMutating(args, options = {}) {
+    await this._cleanupStaleLock();
+    return execGit(args, { cwd: this.rootPath, ...options });
+  }
+
   /** 操作完成后快速刷新一段时间 */
   _fastPoll() {
     if (this._fastPollTimer) clearTimeout(this._fastPollTimer);
@@ -197,7 +233,7 @@ class Repository {
   async stage(paths) {
     if (!paths || paths.length === 0) return { success: true };
     const args = ['add', '--', ...paths];
-    const { code, stderr } = await execGit(args, { cwd: this.rootPath });
+    const { code, stderr } = await this._execGitMutating(args);
     if (code !== 0) throw new GitError(`stage failed: ${stderr}`);
     await this.refresh();
     this._fastPoll();
@@ -207,7 +243,7 @@ class Repository {
   async unstage(paths) {
     if (!paths || paths.length === 0) return { success: true };
     const args = ['reset', 'HEAD', '--', ...paths];
-    const { code, stderr } = await execGit(args, { cwd: this.rootPath });
+    const { code, stderr } = await this._execGitMutating(args);
     if (code !== 0) throw new GitError(`unstage failed: ${stderr}`);
     await this.refresh();
     this._fastPoll();
@@ -215,7 +251,7 @@ class Repository {
   }
 
   async stageAll() {
-    const { code, stderr } = await execGit(['add', '-A'], { cwd: this.rootPath });
+    const { code, stderr } = await this._execGitMutating(['add', '-A']);
     if (code !== 0) throw new GitError(`stageAll failed: ${stderr}`);
     await this.refresh();
     this._fastPoll();
@@ -223,7 +259,7 @@ class Repository {
   }
 
   async unstageAll() {
-    const { code, stderr } = await execGit(['reset', 'HEAD'], { cwd: this.rootPath });
+    const { code, stderr } = await this._execGitMutating(['reset', 'HEAD']);
     if (code !== 0) throw new GitError(`unstageAll failed: ${stderr}`);
     await this.refresh();
     this._fastPoll();
@@ -235,7 +271,7 @@ class Repository {
     if (opts.amend) args.push('--amend');
     if (opts.noVerify) args.push('--no-verify');
     if (opts.allowEmpty) args.push('--allow-empty');
-    const { code, stdout, stderr } = await execGit(args, { cwd: this.rootPath });
+    const { code, stdout, stderr } = await this._execGitMutating(args);
     if (code !== 0) throw new GitError(`commit failed: ${stderr || stdout}`, { stdout, stderr, code });
     await this.refresh();
     this._fastPoll();
@@ -245,7 +281,7 @@ class Repository {
   async discard(paths) {
     if (!paths || paths.length === 0) return { success: true };
     const args = ['checkout', '--', ...paths];
-    const { code, stderr } = await execGit(args, { cwd: this.rootPath });
+    const { code, stderr } = await this._execGitMutating(args);
     if (code !== 0) throw new GitError(`discard failed: ${stderr}`);
     await this.refresh();
     this._fastPoll();
@@ -274,7 +310,7 @@ class Repository {
   }
 
   async checkoutBranch(name) {
-    const { code, stderr } = await execGit(['checkout', name], { cwd: this.rootPath });
+    const { code, stderr } = await this._execGitMutating(['checkout', name]);
     if (code !== 0) throw new GitError(`checkout failed: ${stderr}`);
     await this.refresh();
     this._fastPoll();
@@ -284,7 +320,7 @@ class Repository {
   async createBranch(name, startPoint) {
     const args = ['checkout', '-b', name];
     if (startPoint) args.push(startPoint);
-    const { code, stderr } = await execGit(args, { cwd: this.rootPath });
+    const { code, stderr } = await this._execGitMutating(args);
     if (code !== 0) throw new GitError(`createBranch failed: ${stderr}`);
     await this.refresh();
     this._fastPoll();
@@ -293,7 +329,7 @@ class Repository {
 
   async deleteBranch(name, force = false) {
     const args = ['branch', force ? '-D' : '-d', name];
-    const { code, stderr } = await execGit(args, { cwd: this.rootPath });
+    const { code, stderr } = await this._execGitMutating(args);
     if (code !== 0) throw new GitError(`deleteBranch failed: ${stderr}`);
     await this.refresh();
     return { success: true };
@@ -424,7 +460,7 @@ class Repository {
     const args = ['push'];
     if (remote) args.push(remote);
     if (branch) args.push(branch);
-    const { code, stdout, stderr } = await execGit(args, { cwd: this.rootPath, timeout: 120000 });
+    const { code, stdout, stderr } = await this._execGitMutating(args, { timeout: 120000 });
     if (code !== 0) throw new GitError(`push failed: ${stderr || stdout}`, { stdout, stderr, code });
     await this.refresh();
     return { success: true, output: stdout };
@@ -434,7 +470,7 @@ class Repository {
     const args = ['pull'];
     if (remote) args.push(remote);
     if (branch) args.push(branch);
-    const { code, stdout, stderr } = await execGit(args, { cwd: this.rootPath, timeout: 120000 });
+    const { code, stdout, stderr } = await this._execGitMutating(args, { timeout: 120000 });
     if (code !== 0) throw new GitError(`pull failed: ${stderr || stdout}`, { stdout, stderr, code });
     await this.refresh();
     return { success: true, output: stdout };
@@ -444,7 +480,7 @@ class Repository {
     const args = ['fetch'];
     if (remote) args.push(remote);
     else args.push('--all');
-    const { code, stdout, stderr } = await execGit(args, { cwd: this.rootPath, timeout: 120000 });
+    const { code, stdout, stderr } = await this._execGitMutating(args, { timeout: 120000 });
     if (code !== 0) throw new GitError(`fetch failed: ${stderr || stdout}`, { stdout, stderr, code });
     await this.refresh();
     return { success: true, output: stdout };

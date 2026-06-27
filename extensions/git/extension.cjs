@@ -221,7 +221,8 @@ var require_gitCLI = __commonJS({
         this.gitErrorCode = gitErrorCode;
       }
     };
-    function execGit(args, options = {}) {
+    var _gitQueues = /* @__PURE__ */ new Map();
+    function _spawnGit(args, options) {
       return new Promise((resolve) => {
         const { cwd, timeout = DEFAULT_TIMEOUT, input, env } = options;
         let stdout = "";
@@ -270,6 +271,24 @@ var require_gitCLI = __commonJS({
           child.stdin.end();
         }
       });
+    }
+    function execGit(args, options = {}) {
+      const cwd = options.cwd;
+      if (!cwd) {
+        return _spawnGit(args, options);
+      }
+      const run = () => _spawnGit(args, options);
+      let queue = _gitQueues.get(cwd);
+      if (!queue) {
+        queue = Promise.resolve();
+      }
+      const result = queue.then(run, run);
+      const nextTail = result.then(
+        () => void 0,
+        () => void 0
+      );
+      _gitQueues.set(cwd, nextTail);
+      return result;
     }
     async function git(args, options = {}) {
       const { stdout, stderr, code } = await execGit(args, options);
@@ -451,6 +470,7 @@ var require_repository = __commonJS({
     var FAST_POLL_INTERVAL = 500;
     var FAST_POLL_DURATION = 5e3;
     var WATCHER_DEBOUNCE_MS = 300;
+    var STALE_LOCK_THRESHOLD_MS = 3e4;
     var Repository2 = class {
       /**
        * @param {string} rootPath 仓库根目录的绝对路径
@@ -582,6 +602,38 @@ var require_repository = __commonJS({
       async _maybeRefresh(reason) {
         await this.refresh();
       }
+      /**
+       * 清理超时的 `.git/index.lock` 残留文件。
+       *
+       * 场景：历史遗留的崩溃 lock、外部 git 进程异常退出、或升级到串行队列前
+       * 产生的残留。execGit 已串行化，但首条命令仍可能命中残留 lock，故在
+       * 所有写操作前做一次兜底清理。
+       *
+       * 仅当 lock 文件存在且 mtime 距今超过 STALE_LOCK_THRESHOLD_MS 时才删除，
+       * 避免误删外部正在运行的合法 git 进程持有的锁。
+       */
+      async _cleanupStaleLock() {
+        const lockPath = path2.join(this.rootPath, ".git", "index.lock");
+        try {
+          const stat = await fsp.stat(lockPath);
+          const age = Date.now() - stat.mtimeMs;
+          if (age > STALE_LOCK_THRESHOLD_MS) {
+            await fsp.unlink(lockPath);
+            console.warn("[Repository] \u6E05\u7406\u8D85\u65F6\u7684 .git/index.lock (age=%dms)", age);
+          }
+        } catch {
+        }
+      }
+      /**
+       * 执行会修改 git index 的命令。
+       *
+       * 与只读命令的区别：执行前先清理 stale lock，避免残留锁导致
+       * `Unable to create '.git/index.lock': File exists`。
+       */
+      async _execGitMutating(args, options = {}) {
+        await this._cleanupStaleLock();
+        return execGit(args, { cwd: this.rootPath, ...options });
+      }
       /** 操作完成后快速刷新一段时间 */
       _fastPoll() {
         if (this._fastPollTimer) clearTimeout(this._fastPollTimer);
@@ -602,7 +654,7 @@ var require_repository = __commonJS({
       async stage(paths) {
         if (!paths || paths.length === 0) return { success: true };
         const args = ["add", "--", ...paths];
-        const { code, stderr } = await execGit(args, { cwd: this.rootPath });
+        const { code, stderr } = await this._execGitMutating(args);
         if (code !== 0) throw new GitError2(`stage failed: ${stderr}`);
         await this.refresh();
         this._fastPoll();
@@ -611,21 +663,21 @@ var require_repository = __commonJS({
       async unstage(paths) {
         if (!paths || paths.length === 0) return { success: true };
         const args = ["reset", "HEAD", "--", ...paths];
-        const { code, stderr } = await execGit(args, { cwd: this.rootPath });
+        const { code, stderr } = await this._execGitMutating(args);
         if (code !== 0) throw new GitError2(`unstage failed: ${stderr}`);
         await this.refresh();
         this._fastPoll();
         return { success: true };
       }
       async stageAll() {
-        const { code, stderr } = await execGit(["add", "-A"], { cwd: this.rootPath });
+        const { code, stderr } = await this._execGitMutating(["add", "-A"]);
         if (code !== 0) throw new GitError2(`stageAll failed: ${stderr}`);
         await this.refresh();
         this._fastPoll();
         return { success: true };
       }
       async unstageAll() {
-        const { code, stderr } = await execGit(["reset", "HEAD"], { cwd: this.rootPath });
+        const { code, stderr } = await this._execGitMutating(["reset", "HEAD"]);
         if (code !== 0) throw new GitError2(`unstageAll failed: ${stderr}`);
         await this.refresh();
         this._fastPoll();
@@ -636,7 +688,7 @@ var require_repository = __commonJS({
         if (opts.amend) args.push("--amend");
         if (opts.noVerify) args.push("--no-verify");
         if (opts.allowEmpty) args.push("--allow-empty");
-        const { code, stdout, stderr } = await execGit(args, { cwd: this.rootPath });
+        const { code, stdout, stderr } = await this._execGitMutating(args);
         if (code !== 0) throw new GitError2(`commit failed: ${stderr || stdout}`, { stdout, stderr, code });
         await this.refresh();
         this._fastPoll();
@@ -645,7 +697,7 @@ var require_repository = __commonJS({
       async discard(paths) {
         if (!paths || paths.length === 0) return { success: true };
         const args = ["checkout", "--", ...paths];
-        const { code, stderr } = await execGit(args, { cwd: this.rootPath });
+        const { code, stderr } = await this._execGitMutating(args);
         if (code !== 0) throw new GitError2(`discard failed: ${stderr}`);
         await this.refresh();
         this._fastPoll();
@@ -670,7 +722,7 @@ var require_repository = __commonJS({
         return { success: true };
       }
       async checkoutBranch(name) {
-        const { code, stderr } = await execGit(["checkout", name], { cwd: this.rootPath });
+        const { code, stderr } = await this._execGitMutating(["checkout", name]);
         if (code !== 0) throw new GitError2(`checkout failed: ${stderr}`);
         await this.refresh();
         this._fastPoll();
@@ -679,7 +731,7 @@ var require_repository = __commonJS({
       async createBranch(name, startPoint) {
         const args = ["checkout", "-b", name];
         if (startPoint) args.push(startPoint);
-        const { code, stderr } = await execGit(args, { cwd: this.rootPath });
+        const { code, stderr } = await this._execGitMutating(args);
         if (code !== 0) throw new GitError2(`createBranch failed: ${stderr}`);
         await this.refresh();
         this._fastPoll();
@@ -687,7 +739,7 @@ var require_repository = __commonJS({
       }
       async deleteBranch(name, force = false) {
         const args = ["branch", force ? "-D" : "-d", name];
-        const { code, stderr } = await execGit(args, { cwd: this.rootPath });
+        const { code, stderr } = await this._execGitMutating(args);
         if (code !== 0) throw new GitError2(`deleteBranch failed: ${stderr}`);
         await this.refresh();
         return { success: true };
@@ -811,7 +863,7 @@ var require_repository = __commonJS({
         const args = ["push"];
         if (remote) args.push(remote);
         if (branch) args.push(branch);
-        const { code, stdout, stderr } = await execGit(args, { cwd: this.rootPath, timeout: 12e4 });
+        const { code, stdout, stderr } = await this._execGitMutating(args, { timeout: 12e4 });
         if (code !== 0) throw new GitError2(`push failed: ${stderr || stdout}`, { stdout, stderr, code });
         await this.refresh();
         return { success: true, output: stdout };
@@ -820,7 +872,7 @@ var require_repository = __commonJS({
         const args = ["pull"];
         if (remote) args.push(remote);
         if (branch) args.push(branch);
-        const { code, stdout, stderr } = await execGit(args, { cwd: this.rootPath, timeout: 12e4 });
+        const { code, stdout, stderr } = await this._execGitMutating(args, { timeout: 12e4 });
         if (code !== 0) throw new GitError2(`pull failed: ${stderr || stdout}`, { stdout, stderr, code });
         await this.refresh();
         return { success: true, output: stdout };
@@ -829,7 +881,7 @@ var require_repository = __commonJS({
         const args = ["fetch"];
         if (remote) args.push(remote);
         else args.push("--all");
-        const { code, stdout, stderr } = await execGit(args, { cwd: this.rootPath, timeout: 12e4 });
+        const { code, stdout, stderr } = await this._execGitMutating(args, { timeout: 12e4 });
         if (code !== 0) throw new GitError2(`fetch failed: ${stderr || stdout}`, { stdout, stderr, code });
         await this.refresh();
         return { success: true, output: stdout };
@@ -1176,15 +1228,23 @@ async function handleWebviewMessage(message) {
         reply({ success: true, output: result.message });
         break;
       }
-      case "discard":
+      case "discard": {
         if (!currentRepo) return reply({ success: false, error: "\u6CA1\u6709\u6253\u5F00\u7684\u4ED3\u5E93" });
-        await currentRepo.discard(message.paths || []);
+        const discardPaths = message.paths || [];
+        await currentRepo.discard(discardPaths);
+        if (discardPaths.length > 0) {
+          send("git.filesChanged", { paths: discardPaths });
+        }
         reply({ success: true });
         break;
+      }
       case "discardAll": {
         if (!currentRepo) return reply({ success: false, error: "\u6CA1\u6709\u6253\u5F00\u7684\u4ED3\u5E93" });
         const paths = currentRepo.state.changes.map((c) => c.path);
         await currentRepo.discard(paths);
+        if (paths.length > 0) {
+          send("git.filesChanged", { paths });
+        }
         reply({ success: true });
         break;
       }

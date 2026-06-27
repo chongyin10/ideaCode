@@ -354,16 +354,26 @@ async function handleWebviewMessage(message) {
         break;
       }
 
-      case 'discard':
+      case 'discard': {
         if (!currentRepo) return reply({ success: false, error: '没有打开的仓库' });
-        await currentRepo.discard(message.paths || []);
+        const discardPaths = message.paths || [];
+        await currentRepo.discard(discardPaths);
+        // 通知前端文件被外部修改（discard 恢复了磁盘内容/恢复了被删文件），
+        // 触发资源管理器刷新受影响目录 + 重载已打开编辑器内容
+        if (discardPaths.length > 0) {
+          send('git.filesChanged', { paths: discardPaths });
+        }
         reply({ success: true });
         break;
+      }
 
       case 'discardAll': {
         if (!currentRepo) return reply({ success: false, error: '没有打开的仓库' });
         const paths = currentRepo.state.changes.map((c) => c.path);
         await currentRepo.discard(paths);
+        if (paths.length > 0) {
+          send('git.filesChanged', { paths });
+        }
         reply({ success: true });
         break;
       }
