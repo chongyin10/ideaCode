@@ -39,6 +39,7 @@
     "react-router-dom": "^6.30.4",
     "systeminformation": "^5.31.7",
     "typescript-language-server": "^4.4.1",
+    "v8-compile-cache": "^2.4.0",
     "vscode-jsonrpc": "^9.0.0"
   },
   "devDependencies": {

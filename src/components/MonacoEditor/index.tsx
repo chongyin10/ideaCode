@@ -795,7 +795,7 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
           // 预取：didChange 发出后立即请求 tokens，Monaco 调用 provider 时直接取结果
           semTokensPrefetchRef.current = tsService.semanticTokens(path).then((tokens) => {
             if (tokens && tokens.data && tokens.data.length > 0) {
-              const data = new Uint32Array(tokens.data);
+              const data = tokens.data instanceof Uint32Array ? tokens.data : new Uint32Array(tokens.data);
               decodedTokensRef.current = decodeSemTokens(data); // 缓存解码后的 tokens
               return { resultId: tokens.resultId, data };
             }
@@ -817,36 +817,46 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
         // ── 预加载 tsserver + 预取 semantic tokens（与后续逻辑并行，消除高亮延迟）──
         // 在 provider 注册前即发起请求，当 Monaco 首次调用 provideDocumentSemanticTokens 时缓存已就绪
         let semTokensPrefetch: Promise<{ resultId?: string; data: Uint32Array } | null> | null = null;
+        // 共享 legend：首次 fetch 即返回 legend，直接复用，避免后续单独 IPC 请求
+        let semTokensLegend: { tokenTypes: string[]; tokenModifiers: string[] } | null = null;
+        // 事件驱动重试触发器：tsserver 推送 diagnostics（标志 program 已构建）时立即重试，
+        // 替代原来的 600ms 盲等，让首次高亮在 tsserver 就绪后即时出现
+        let semTokensRetryTrigger: (() => void) | null = null;
         if (!isBrowser && path) {
           tsService.open(path, value).catch(() => {});
 
           // 预取语义 tokens。如果 tsserver 还在 handshake（用户极快地"开文件夹→点文件"
-          // 时可能出现），首次请求会立即返回 null；这里做一次短延迟重试兜底，
-          // 让高频场景下也能在几百毫秒内拿到正确结果，避免回退到 Monaco 内置 TS worker。
+          // 时可能出现），首次请求会立即返回 null；此时注册事件驱动重试，
+          // 等 tsserver 推送该文件的 diagnostics 后立即重试，同时保留 300ms 兜底超时。
           const fetchSemTokens = (): Promise<TsSemanticTokens | null> =>
             tsService.semanticTokens(path).then(
               (tokens) => (tokens && tokens.data && tokens.data.length > 0 ? tokens : null),
               () => null,
             );
+          const saveLegendAndDecode = (t: TsSemanticTokens) => {
+            if (t.legend) semTokensLegend = t.legend;
+            // 主进程已返回 Uint32Array 时直接复用，避免多余拷贝
+            const data = t.data instanceof Uint32Array ? t.data : new Uint32Array(t.data);
+            decodedTokensRef.current = decodeSemTokens(data);
+            return { resultId: t.resultId, data };
+          };
           semTokensPrefetch = fetchSemTokens().then((first) => {
-            if (first) {
-              const data = new Uint32Array(first.data);
-              decodedTokensRef.current = decodeSemTokens(data);
-              return { resultId: first.resultId, data };
-            }
-            // 首次为空 → 等一个 tsserver initialize 窗口（约 600ms）后重试一次
+            if (first) return saveLegendAndDecode(first);
+            // 首次为空 → 等待 tsserver 推送 diagnostics 后立即重试（事件驱动），
+            // 同时保留 300ms 兜底超时，避免 tsserver 异常时永久挂起
             return new Promise<{ resultId?: string; data: Uint32Array } | null>((resolve) => {
-              setTimeout(() => {
+              let done = false;
+              const runRetry = () => {
+                if (done) return;
+                done = true;
+                semTokensRetryTrigger = null;
                 fetchSemTokens().then((retry) => {
-                  if (retry) {
-                    const data = new Uint32Array(retry.data);
-                    decodedTokensRef.current = decodeSemTokens(data);
-                    resolve({ resultId: retry.resultId, data });
-                  } else {
-                    resolve(null);
-                  }
+                  if (retry) resolve(saveLegendAndDecode(retry));
+                  else resolve(null);
                 }).catch(() => resolve(null));
-              }, 600);
+              };
+              semTokensRetryTrigger = runRetry;
+              setTimeout(runRetry, 300); // 兜底：300ms 后强制重试（原 600ms）
             });
           }).catch(() => null);
         }
@@ -969,6 +979,8 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
             if ('error' in data) return;
             if (data.file === path && editorRef.current && monacoRef.current) {
               applyDiagnostics(editorRef.current, monacoRef.current, data.diagnostics);
+              // tsserver 已处理该文件 → 立即触发 semantic tokens 重试（消除盲等）
+              if (semTokensRetryTrigger) semTokensRetryTrigger();
             }
           });
 
@@ -1094,18 +1106,8 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
           // 注册语义高亮 provider（semantic tokens），让方法/变量/类型等按语义着色
           // 使用 onMount 开头预取的 semTokensPrefetch 结果，消除首次高亮延迟
           // 注意：不 await 预取结果，避免阻塞 onMount。provider 回调中自行 await。
-          let semanticTokensLegend: { tokenTypes: string[]; tokenModifiers: string[] } | null = null;
-          // 尝试从预取结果获取 legend（非阻塞）
-          semTokensPrefetch?.then((firstTokens) => {
-            if (firstTokens?.resultId) {
-              // legend 需要单独请求（预取时未保存），但用默认 legend 即可工作
-              tsService.semanticTokens(path).then((legendTokens) => {
-                if (legendTokens?.legend) {
-                  semanticTokensLegend = legendTokens.legend;
-                }
-              }).catch(() => {});
-            }
-          }).catch(() => {});
+          // semanticTokensLegend 已在预取阶段从首次响应中保存（见 onMount 开头），
+          // 无需单独发 IPC 请求获取 legend。
 
           // 与 electron/shared/semanticTokensLegend.cjs 保持同步的默认 legend
           const defaultSemanticTokensLegend = {
@@ -1117,7 +1119,7 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
           };
 
           lspDisposablesRef.current.push(monaco.languages.registerDocumentSemanticTokensProvider(language, {
-            getLegend: () => semanticTokensLegend ?? defaultSemanticTokensLegend,
+            getLegend: () => semTokensLegend ?? defaultSemanticTokensLegend,
             provideDocumentSemanticTokens: async (model: monaco.editor.ITextModel) => {
               // 只处理 file:// 模型；gitdiff-* 等虚拟模型交给 DiffEditorPanel 注册的 provider
               if (model && model.uri && model.uri.scheme !== 'file') {
@@ -1145,7 +1147,7 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
                 try {
                   const tokens = await tsService.semanticTokens(currentPath);
                   if (tokens && tokens.data && tokens.data.length > 0) {
-                    const data = new Uint32Array(tokens.data);
+                    const data = tokens.data instanceof Uint32Array ? tokens.data : new Uint32Array(tokens.data);
                     decodedTokensRef.current = decodeSemTokens(data);
                     return { resultId: tokens.resultId, data };
                   }

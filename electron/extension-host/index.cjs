@@ -1,3 +1,6 @@
+// v8-compile-cache：扩展宿主子进程也启用编译缓存，加速扩展模块二次加载
+require('v8-compile-cache');
+
 const { JsonRpcServer } = require('./rpc.cjs');
 const fs = require('fs').promises;
 const path = require('path');

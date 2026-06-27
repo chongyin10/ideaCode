@@ -22,7 +22,7 @@ export interface TsLocation {
 export interface TsSemanticTokens {
   legend?: { tokenTypes: string[]; tokenModifiers: string[] };
   resultId?: string;
-  data: number[];
+  data: number[] | Uint32Array;
 }
 
 export interface TsCompletionEntry {

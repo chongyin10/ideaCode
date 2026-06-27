@@ -300,7 +300,10 @@ function registerTsServerHandlers() {
       pendingRequests.set(id, (msg) => {
         const result = msg.result;
         if (!result || !result.data) return resolve(null);
-        resolve({ legend: semanticTokensLegend, resultId: result.resultId, data: result.data });
+        // 转为 Uint32Array：IPC 结构化克隆对 typed array 用 memcpy 整块拷贝，
+        // 远快于普通数组逐元素序列化。大文件 token 数组可达数万元素，收益显著。
+        const data = result.data instanceof Uint32Array ? result.data : new Uint32Array(result.data);
+        resolve({ legend: semanticTokensLegend, resultId: result.resultId, data });
       });
       setTimeout(() => { pendingRequests.delete(id); resolve(null); }, 3000);
     });

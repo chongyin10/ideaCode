@@ -342,6 +342,8 @@
   overflow-x: hidden;
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+  /* 隔离滚动容器：滚动/重排仅在本容器内部计算，不向父级冒泡触发全树重排 */
+  contain: layout style paint;
 }
 
 /* 项目结构区域占满中间剩余空间；折叠或空数据时不强制撑满 */
@@ -505,9 +507,13 @@
   gap: 6px;
   border-radius: 4px;
   margin: 1px 0;
-  transition: all 0.12s ease;
+  /* 收敛过渡范围：原 `transition: all` 会把 padding/margin/z-index 等都纳入合成，
+     滚动数百节点时触发 GPU 合成风暴。仅过渡实际变化的颜色属性。 */
+  transition: background-color 0.12s ease, color 0.12s ease;
   position: relative;
   z-index: 1;
+  /* 限定重排/绘制范围到本节点，滚动时不影响兄弟节点 */
+  contain: layout style paint;
 }
 
 .tree-item:hover {

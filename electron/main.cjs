@@ -1,3 +1,7 @@
+// v8-compile-cache：将 V8 编译结果缓存到磁盘，大幅加快大型项目二次启动的模块加载速度。
+// 必须在所有其他 require 之前调用，确保后续 require 的模块都走缓存。
+require('v8-compile-cache');
+
 const { app } = require('electron');
 const { fixPath } = require('./main/utils/env.cjs');
 

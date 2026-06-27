@@ -148,7 +148,6 @@ const ExplorerContent = () => {
   // Git 文件状态由 web/git 扩展通过 extension bridge 推送到 Redux
   const gitStatus = useAppSelector((state) => state.workspace.gitStatus);
   const expandPaths = useAppSelector((state) => state.workspace.expandPaths);
-  const expandedDirs = useAppSelector((state) => state.workspace.expandedDirs);
   const openedFiles = useAppSelector((state) => state.workspace.openedFiles);
   const editorGroups = useAppSelector((state) => state.workspace.editorGroups);
   const activeFileId = useAppSelector((state) => state.workspace.activeFileId);
@@ -238,6 +237,13 @@ const ExplorerContent = () => {
   const [lastOperation, setLastOperation] = useState<LastOperation | null>(null);
   const [clipboardState, setClipboardState] = useState<FileClipboardState | null>(null);
   const [selectedEntries, setSelectedEntries] = useState<{ entry: FileEntry; parentSource: FileSource }[]>([]);
+
+  // 提取为稳定引用：原 selectedEntries.map() 在每次渲染生成新数组，
+  // 直接传给 FileTree 会击穿 React.memo，导致点击文件时整树重渲染。
+  const selectedEntryList = useMemo(
+    () => selectedEntries.map((s) => s.entry),
+    [selectedEntries],
+  );
 
   const notifyChange = useCallback((...targets: FileSource[]) => {
     setLastOperation({ targets, timestamp: Date.now() });
@@ -903,11 +909,10 @@ const ExplorerContent = () => {
                           onMoveFile={handleMoveFile}
                           lastOperation={lastOperation}
                           clipboardItems={clipboardState?.items}
-                          selectedEntries={selectedEntries.map((s) => s.entry)}
+                          selectedEntries={selectedEntryList}
                           onItemSelect={handleItemSelect}
                           gitStatus={gitStatus}
                           expandPaths={expandPaths}
-                          expandedDirs={expandedDirs}
                           onToggleExpand={stableOnToggleExpand}
                         />
                       ))}
@@ -961,11 +966,10 @@ const ExplorerContent = () => {
                       onRenameCancel={handleRenameCancel}
                       lastOperation={lastOperation}
                       clipboardItems={clipboardState?.items}
-                      selectedEntries={selectedEntries.map((s) => s.entry)}
+                      selectedEntries={selectedEntryList}
                       onItemSelect={handleItemSelect}
                       gitStatus={gitStatus}
                       expandPaths={expandPaths}
-                      expandedDirs={expandedDirs}
                       onToggleExpand={stableOnToggleExpand}
                       onMoveFile={handleMoveFile}
                       relativePath={rootExpandPath}

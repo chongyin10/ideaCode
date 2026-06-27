@@ -4,6 +4,7 @@ import { ChevronRight } from 'lucide-react';
 import type { FileEntry, FileSource } from '../../services/fileService';
 import { isSameSource } from '../../services/fileService';
 import type { FileClipboardItem } from '../../services/fileClipboard';
+import { useAppSelector } from '../../store/hooks';
 import InlineInput from '../InlineInput';
 import { FileIcon, ClosedFolderIcon, DefaultFileIcon } from './FileTree.icons';
 
@@ -66,9 +67,7 @@ interface FileTreeProps {
   relativePath?: string;
   /** 需要自动展开的目录路径链 */
   expandPaths?: string[];
-  /** 用户手动展开的目录路径集合（持久化展开状态） */
-  expandedDirs?: string[];
-  /** 展开/折叠目录的回调 */
+  /** 展开/折叠目录的回调（实际派发由内部 useSelector 订阅 expandedDirs） */
   onToggleExpand?: (path: string, expand: boolean) => void;
   /** 拖拽移动文件/文件夹 */
   onMoveFile?: (
@@ -115,7 +114,6 @@ const FileTree = memo(({
   gitStatus,
   relativePath,
   expandPaths,
-  expandedDirs,
   onToggleExpand,
   onMoveFile,
   headerTools,
@@ -135,8 +133,12 @@ const FileTree = memo(({
   // 计算当前 entry 的相对路径（用于 Git 状态查询 + 自动展开匹配）
   const entryRelPath = relativePath ? `${relativePath}/${entry.name}` : entry.name;
 
-  // 展开状态由外部 expandedDirs 控制
-  const expanded = expandedDirs?.includes(entryRelPath) ?? false;
+  // 展开状态由 store 订阅：原 expandedDirs 数组每次 toggle 都产生新引用，
+  // 通过 prop 传递会击穿所有节点的 React.memo。改为各节点自行订阅本节点是否展开，
+  // useSelector 在返回值（boolean）未变时不会触发重渲染。
+  const expanded = useAppSelector(
+    (state) => state.workspace.expandedDirs.includes(entryRelPath),
+  );
 
   // 享元模式：缓存展开/折叠状态下的图标 JSX 对象
   // 避免每次渲染都创建新的 JSX 对象
@@ -461,7 +463,6 @@ const FileTree = memo(({
             gitStatus={gitStatus}
             relativePath={entryRelPath}
             expandPaths={expandPaths}
-            expandedDirs={expandedDirs}
             onToggleExpand={onToggleExpand}
             onMoveFile={onMoveFile}
           />
