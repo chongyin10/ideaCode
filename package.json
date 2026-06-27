@@ -13,7 +13,11 @@
     "preview": "vite preview",
     "postinstall": "node scripts/fix-node-pty.mjs",
     "electron:dev": "node scripts/electron-dev.mjs",
-    "electron:preview": "npm run build && electron electron/main.cjs"
+    "electron:preview": "npm run build && electron electron/main.cjs",
+    "electron:dist:mac": "npm run build && electron-builder --mac --universal",
+    "electron:dist:mac:arm64": "npm run build && electron-builder --mac --arm64",
+    "electron:dist:mac:x64": "npm run build && electron-builder --mac --x64",
+    "electron:dist:mac:split": "npm run build && electron-builder --mac --x64 --arm64"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
@@ -43,11 +47,13 @@
     "vscode-jsonrpc": "^9.0.0"
   },
   "devDependencies": {
+    "@electron/rebuild": "^3.6.0",
     "@eslint/js": "^9.8.0",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
     "electron": "^30.5.1",
+    "electron-builder": "^24.13.3",
     "eslint": "^9.8.0",
     "eslint-plugin-react-hooks": "^5.1.0-rc.0",
     "eslint-plugin-react-refresh": "^0.4.9",

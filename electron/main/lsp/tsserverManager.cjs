@@ -5,11 +5,45 @@
  * 通过标准 LSP JSON-RPC 协议通信，提供完整的 TypeScript 语言支持。
  */
 const { spawn } = require('child_process');
-const { ipcMain } = require('electron');
+const { ipcMain, app } = require('electron');
 const { Channels } = require('../../shared/channels.cjs');
 const { SEMANTIC_TOKEN_TYPES, SEMANTIC_TOKEN_MODIFIERS } = require('../../shared/semanticTokensLegend.cjs');
 const path = require('path');
 const { pathToFileURL, fileURLToPath } = require('url');
+
+/**
+ * 解析项目根目录路径。
+ *
+ * - dev 模式：app.getAppPath() 返回 main.cjs 所在目录（electron/），
+ *   不是项目根；process.cwd() 通常等于项目根（npm 启动目录），但
+ *   不保险。改为 __dirname 向上推 3 级（lsp → main → electron → 项目根）。
+ * - prod 模式：process.cwd() 是 `/`（macOS GUI 启动不继承 shell 工作目录），
+ *   用 app.getAppPath() 拿到 ASAR root。
+ */
+function resolveAppRoot() {
+  try {
+    if (app.isPackaged) return app.getAppPath();
+  } catch { /* 非 Electron 环境，忽略 */ }
+  // dev：tsserverManager.cjs 在 electron/main/lsp/，向上推 3 级到项目根
+  return path.resolve(__dirname, '..', '..', '..');
+}
+
+/**
+ * 解析 typescript-language-server cli.mjs 路径。
+ *
+ * ASAR 内的 .mjs 不能直接被 Node require（需解包），但 spawn(process.execPath, [cliPath]) 可以
+ * 让 Node 直接加载该文件。配合 electron-builder 的 asarUnpack 配置将
+ * typescript-language-server 解包到 app.asar.unpacked，cli.mjs 内部 require 的依赖也能正常解析。
+ */
+function resolveTsServerCliPath() {
+  const appRoot = resolveAppRoot();
+  let p = path.join(appRoot, 'node_modules', 'typescript-language-server', 'lib', 'cli.mjs');
+  // ASAR 内路径替换为 .unpacked：spawn 不能从 ASAR 内加载 .mjs 的依赖
+  if (p.includes('app.asar')) {
+    p = p.replace('app.asar', 'app.asar.unpacked');
+  }
+  return p;
+}
 
 /**
  * 将 LSP 返回的 URI（可能是 file:// 形式，也可能是裸路径）安全地转换为本地文件系统路径。
@@ -84,16 +118,13 @@ function startServer(projectRoot, sender) {
 
   // 直接用当前 Node 进程解释器加载 cli.mjs，避免走 shell 解析 shebang / symlink，
   // 把 tsserver 子进程冷启动从 ~150ms 进一步压缩到 ~60ms。
-  const cliPath = path.join(
-    process.cwd(),
-    'node_modules',
-    'typescript-language-server',
-    'lib',
-    'cli.mjs',
-  );
+  // cliPath 已在 resolveTsServerCliPath() 中处理 ASAR 解包路径，dev/prod 均可定位。
+  const cliPath = resolveTsServerCliPath();
   serverProcess = spawn(process.execPath, [cliPath, '--stdio'], {
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: { ...process.env },
+    // ELECTRON_RUN_AS_NODE=1：让 Electron 二进制以纯 Node 模式运行 cli.mjs，
+    // 否则 macOS 上会启动独立 Electron 应用实例 → Dock 显示多余图标。
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
   });
 
   serverProcess.stdout.on('data', (data) => {

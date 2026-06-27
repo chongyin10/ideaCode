@@ -1,5 +1,16 @@
 // v8-compile-cache：将 V8 编译结果缓存到磁盘，大幅加快大型项目二次启动的模块加载速度。
 // 必须在所有其他 require 之前调用，确保后续 require 的模块都走缓存。
+//
+// 缓存目录说明：默认 os.tmpdir() 在 macOS 上是 /var/folders/.../T/，会被系统周期性清理，
+// 导致二次启动缓存命中率低。改为 ~/.ideacode/v8-cache 持久化缓存，
+// 跨架构/版本通过 v8-compile-cache 内部的 arch/version 子目录隔离。
+// 注意：fs/os/path 是 Node 内置模块，本身已编译，不会被 v8-compile-cache 影响。
+const path = require('path');
+const os = require('os');
+const fs = require('fs');
+const v8CacheDir = path.join(os.homedir(), '.ideacode', 'v8-cache');
+try { fs.mkdirSync(v8CacheDir, { recursive: true }); } catch { /* ignore */ }
+process.env.V8_COMPILE_CACHE_CACHE_DIR = v8CacheDir;
 require('v8-compile-cache');
 
 const { app } = require('electron');
@@ -153,8 +164,9 @@ app.whenReady().then(() => {
   // 创建首个窗口
   windowManager.createWindow();
 
-  // 启动系统资源监控，定期向所有窗口广播 CPU/GPU/内存使用率
-  const systemMonitor = new SystemMonitor(windowManager, { intervalMs: 2000 });
+  // 启动系统资源监控，定期向所有窗口广播 CPU/内存使用率
+  // 默认 5s 一次；GPU 信息仅启动时采集一次（macOS system_profiler 同步阻塞 1~3s）
+  const systemMonitor = new SystemMonitor(windowManager);
   systemMonitor.start();
 
   // 启动扩展宿主进程（延迟启动，避免与应用启动竞争资源）

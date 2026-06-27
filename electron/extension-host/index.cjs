@@ -1,9 +1,29 @@
-// v8-compile-cache：扩展宿主子进程也启用编译缓存，加速扩展模块二次加载
+// v8-compile-cache：扩展宿主子进程也启用编译缓存，加速扩展模块二次加载。
+// 缓存目录显式指定到 ~/.ideacode/v8-cache（默认 os.tmpdir 会被系统周期清理，
+// 导致二次启动缓存命中率低；扩展宿主子进程不共享主进程缓存，按 arch/version 自动隔离）。
+const path = require('path');
+const os = require('os');
+const fs = require('fs');
+const v8CacheDir = path.join(os.homedir(), '.ideacode', 'v8-cache');
+try { fs.mkdirSync(v8CacheDir, { recursive: true }); } catch { /* ignore */ }
+process.env.V8_COMPILE_CACHE_CACHE_DIR = v8CacheDir;
 require('v8-compile-cache');
 
 const { JsonRpcServer } = require('./rpc.cjs');
-const fs = require('fs').promises;
-const path = require('path');
+const fsp = fs.promises;
+
+// macOS 上隐藏扩展宿主子进程的 Dock 图标。
+// 即使设置了 ELECTRON_RUN_AS_NODE=1，某些 Electron 版本仍会初始化 Cocoa NSApplication，
+// 导致 Dock 上出现多余的 Electron 图标。这里主动调用 app.dock.hide() 兜底。
+// ELECTRON_RUN_AS_NODE 模式下 require('electron') 仍返回内部 app 对象。
+if (process.platform === 'darwin') {
+  try {
+    const electronApp = require('electron').app;
+    if (electronApp && typeof electronApp.dock?.hide === 'function') {
+      electronApp.dock.hide();
+    }
+  } catch { /* 非 Electron 环境，忽略 */ }
+}
 
 /**
  * 扩展宿主进程入口
@@ -49,14 +69,14 @@ class ExtensionManager {
     // 清理已不存在的扩展（例如被卸载）
     for (const [id, ext] of this.extensions) {
       try {
-        await fs.access(ext.path);
+        await fsp.access(ext.path);
       } catch {
         console.log('[ExtensionHost] 扩展目录已不存在，移除:', id);
         this.extensions.delete(id);
       }
     }
     try {
-      const entries = await fs.readdir(this.extensionsDir, { withFileTypes: true });
+      const entries = await fsp.readdir(this.extensionsDir, { withFileTypes: true });
       console.log('[ExtensionHost] 目录条目数:', entries.length);
       for (const entry of entries) {
         if (!entry.isDirectory()) continue;
@@ -64,7 +84,7 @@ class ExtensionManager {
         const manifestPath = path.join(extPath, 'package.json');
         console.log('[ExtensionHost] 检查扩展:', entry.name, manifestPath);
         try {
-          const raw = await fs.readFile(manifestPath, 'utf-8');
+          const raw = await fsp.readFile(manifestPath, 'utf-8');
           const manifest = JSON.parse(raw);
           console.log('[ExtensionHost] 找到扩展:', manifest.name, 'main:', manifest.main);
           if (manifest.name && manifest.main) {
@@ -477,7 +497,9 @@ try {
   // 环境 API
   env: {
     appName: 'IDEACODE',
-    appRoot: process.cwd(),
+    // 打包后 process.cwd() 为 /，无法定位项目根。优先用主进程注入的 IDEACODE_APP_ROOT，
+    // 兜底用 extension-host 目录向上两级（dev = 项目根，prod = ASAR root）。
+    appRoot: process.env.IDEACODE_APP_ROOT || path.resolve(__dirname, '..', '..'),
     language: 'zh-CN',
     machineId: 'unknown',
     sessionId: 'unknown',
@@ -627,7 +649,7 @@ rpc.on('fs.search', async (params) => {
   ]);
 
   async function searchDir(dir) {
-    const entries = await fs.readdir(dir, { withFileTypes: true });
+    const entries = await fsp.readdir(dir, { withFileTypes: true });
     for (const entry of entries) {
       if (count >= maxResults) return;
       const fullPath = path.join(dir, entry.name);
@@ -638,7 +660,7 @@ rpc.on('fs.search', async (params) => {
         continue;
       }
       try {
-        const content = await fs.readFile(fullPath, 'utf-8');
+        const content = await fsp.readFile(fullPath, 'utf-8');
         const lines = content.split('\n');
         for (let i = 0; i < lines.length; i++) {
           if (lines[i].includes(query)) {
@@ -660,8 +682,8 @@ rpc.on('fs.search', async (params) => {
 // 文件内容分析
 rpc.on('fs.analyze', async (params) => {
   const { filePath } = params;
-  const stat = await fs.stat(filePath);
-  const content = await fs.readFile(filePath, 'utf-8');
+  const stat = await fsp.stat(filePath);
+  const content = await fsp.readFile(filePath, 'utf-8');
   const lines = content.split('\n');
 
   return {

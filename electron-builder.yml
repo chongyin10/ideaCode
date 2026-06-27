@@ -1,0 +1,75 @@
+# electron-builder 配置
+# 文档: https://www.electron.build/
+#
+# 构建命令（在 package.json scripts 中已配置）：
+#   npm run electron:dist:mac            # 推荐：universal dmg（同时支持 Intel + Apple Silicon）
+#   npm run electron:dist:mac:arm64     # 仅 Apple Silicon (M1/M2/M3...)
+#   npm run electron:dist:mac:x64       # 仅 Intel Mac
+
+appId: com.ideacode.app
+productName: IDEACODE
+copyright: Copyright © 2026 IDEACODE
+
+# 构建产物输出目录
+directories:
+  output: release
+  buildResources: build
+
+# 需要打包进 ASAR 的文件白名单（其余文件如 src/、scripts/ 不进包）
+files:
+  - electron/**/*
+  - dist/**/*
+  - extensions/**/*
+  - packages/**/*
+  - package.json
+  - "!**/.git/**"
+  - "!**/*.map"
+  - "!**/node_modules/*/{README,readme,CHANGELOG,changelog}*"
+  - "!**/node_modules/*/{test,tests,__tests__,docs,doc,examples}/**"
+
+# ASAR 打包：渲染进程资源 + 主进程代码全部装入 app.asar
+asar: true
+
+# native 模块必须解包到 app.asar.unpacked，否则：
+#   - .node 二进制无法被 dlopen
+#   - spawn 子进程的 .mjs/.js 无法正确 require 依赖（typescript-language-server）
+asarUnpack:
+  - node_modules/node-pty/**
+  - node_modules/typescript-language-server/**
+  # systeminformation 在 macOS 上调用 system_profiler/top，本身纯 JS，但部分平台需要 native binding
+  - node_modules/systeminformation/**
+
+# ─── macOS 配置 ───
+mac:
+  category: public.app-category.developer-tools
+  # hardenedRuntime: 公证所需，关闭可避免签名相关问题（开发期可注释掉）
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  # 启用签名需要苹果开发者证书；如未配置将输出未签名 app，运行时需用户手动允许
+  # identity: null  # 显式不签名（注释掉以启用自动签名）
+  # 扩展宿主子进程 + node-pty spawn-helper 需要的权限
+  extendInfo:
+    NSAppleEventsUsageDescription: IDEACODE 需要发送 Apple 事件以执行部分系统集成。
+  # 目标产物：dmg 安装包
+  target:
+    - target: dmg
+      arch:
+        - universal
+  # 单文件 universal binary：用一份二进制覆盖 x64 + arm64
+  # 如需分别为两种架构各打一个 dmg，将上面的 arch 改为 [x64, arm64]
+
+# DMG 安装包布局（拖拽安装）
+dmg:
+  title: ${productName}-${version}
+  contents:
+    - { x: 130, y: 220 }
+    - { x: 410, y: 220, type: link, path: /Applications }
+
+# ─── native 模块重编译 ───
+# 打包前自动按 Electron 版本/架构 rebuild node-pty 等 native 模块
+# 默认开启，确保 universal 包内同时包含 x64 + arm64 native 二进制
+npmRebuild: true
+
+# 注意：前端资源（dist/）+ 扩展（extensions/）的构建由 npm script 链式调用：
+#   npm run electron:dist:mac → npm run build && electron-builder ...
+# 这里不配置 afterPack/beforeBuild 钩子，避免循环依赖。

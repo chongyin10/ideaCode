@@ -1,7 +1,24 @@
 const { fork } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const { app } = require('electron');
 const { Channels } = require('../shared/channels.cjs');
+
+/**
+ * 解析 app 根目录，注入给扩展宿主子进程作为 IDEACODE_APP_ROOT 环境变量。
+ *
+ * - dev 模式：app.getAppPath() 返回 main.cjs 所在目录（electron/），
+ *   不是项目根。改为 __dirname 向上推 2 级（main → electron → 项目根）。
+ * - prod 模式：process.cwd() 是 `/`（macOS GUI 启动不继承 shell 工作目录），
+ *   用 app.getAppPath() 拿到 ASAR root。
+ */
+function resolveAppRoot() {
+  try {
+    if (app.isPackaged) return app.getAppPath();
+  } catch { /* 非 Electron 环境，忽略 */ }
+  // dev：extensionHost.cjs 在 electron/main/，向上推 2 级到项目根
+  return path.resolve(__dirname, '..', '..');
+}
 
 /**
  * 扩展宿主进程管理器 (Extension Host Process)
@@ -49,7 +66,12 @@ class ExtensionHostManager {
     this.hostProcess = fork(hostPath, [], {
       stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
       // 插件在独立进程中运行，无窗口环境
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: '1',
+        // 注入 app root，避免子进程内 process.cwd() 为 / 导致路径解析失败
+        IDEACODE_APP_ROOT: resolveAppRoot(),
+      },
     });
 
     // 将扩展宿主日志转发到主进程控制台，方便调试
