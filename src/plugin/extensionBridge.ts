@@ -17,8 +17,8 @@
 
 import path from 'path';
 import type { Store } from '@reduxjs/toolkit';
-import type { RootState } from '../store';
-import { openFile, openVirtualFile, addWorkspaceFolder, removeWorkspaceFolder, setFileContent, markFileSaved, toggleAiEditMode, setGitStatus, setGitBranch, setExternalFileChange, reloadFilesFromDisk, refreshDirectory } from '../store/slices/workspaceSlice';
+import type { RootState, AppDispatch } from '../store';
+import { openFile, openVirtualFile, addWorkspaceFolder, removeWorkspaceFolder, setFileContent, markFileSaved, toggleAiEditMode, setGitStatus, setGitBranch, setExternalFileChange, reloadFilesFromDisk } from '../store/slices/workspaceSlice';
 import { addPanelToOrder, removePanelFromOrder, registerDockableItem, unregisterDockableItem, switchRightItem, setDockableItemBadge } from '../store/slices/layoutSlice';
 import { readFile as fsReadFile, writeFile as fsWriteFile, isPath } from '../services/fileService';
 import { getMonacoEditorActions } from '../services/monacoEditorBridge';
@@ -901,7 +901,9 @@ export class ExtensionBridge {
       if (rootPath) {
         const normalizedRoot = rootPath.replace(/[/\\]+$/, '');
         const absolutePaths = fileList.map((p) => `${normalizedRoot}/${p.replace(/^[/\\]+/, '')}`);
-        this.store.dispatch(reloadFilesFromDisk(absolutePaths));
+        // reloadFilesFromDisk 是 thunk，Store<RootState>.dispatch 不接受 thunk action，
+        // 需 cast 为 AppDispatch（包含 thunk 中间件类型）
+        (this.store.dispatch as AppDispatch)(reloadFilesFromDisk(absolutePaths));
       }
 
       return { updated: true };

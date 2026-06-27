@@ -51,11 +51,15 @@ mac:
   # 扩展宿主子进程 + node-pty spawn-helper 需要的权限
   extendInfo:
     NSAppleEventsUsageDescription: IDEACODE 需要发送 Apple 事件以执行部分系统集成。
-  # 目标产物：dmg 安装包
+  # 目标产物：
+  #   - dir: 只输出 .app 文件夹，不创建 DMG 镜像（避开 Trae sandbox 对 hdiutil 访问 /dev/rdisk* 的限制）
+  #   - dmg: 创建 DMG 安装包（需要在非 Trae sandbox 环境运行：macOS Terminal.app 或配置 sandbox 放行 /dev/rdisk*）
   # arch 不在配置文件指定，由命令行 --arm64/--x64/--universal 控制，
   # 避免「命令行打 arm64 但配置文件强制 universal」导致重复下载 x64 二进制。
   target:
-    - target: dmg
+    - target: dir
+    # 如需 DMG 分发，注释上一行并启用下一行：
+    # - target: dmg
 
 # DMG 安装包布局（拖拽安装）
 dmg:
