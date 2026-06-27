@@ -6,8 +6,9 @@
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
-    "build": "npm run build:extensions && tsc -b && vite build",
-    "build:extensions": "cd web/ssh && npm install && npm run build && cd ../git && npm install && npm run build",
+    "build": "npm run build:extensions && tsc -b && NODE_OPTIONS=--max-old-space-size=4096 vite build",
+    "build:extensions": "npm run build:ssh-extension & npm run build:git-extension & wait",
+    "build:ssh-extension": "cd web/ssh && npm install && npm run build",
     "build:git-extension": "cd web/git && npm install && npm run build",
     "lint": "eslint .",
     "preview": "vite preview",

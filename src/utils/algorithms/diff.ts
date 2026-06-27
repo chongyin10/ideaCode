@@ -601,17 +601,6 @@ function escapeHtml(text: string): string {
 /* ─── 语法感知差异比较 ─── */
 
 /**
- * 计算行级 Hash（用于 Myers 快速匹配）
- */
-function lineHash(line: string): number {
-  let hash = 0;
-  for (let i = 0; i < line.length; i++) {
-    hash = ((hash << 5) - hash + line.charCodeAt(i)) | 0;
-  }
-  return hash;
-}
-
-/**
  * Walsh-Hadamard 加速版 Diff (大文本优化)
  *
  * 当文本行数 ≥ 200 行时自动启用：

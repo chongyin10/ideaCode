@@ -8,7 +8,7 @@
  */
 
 import { useMemo } from 'react';
-import { shannonEntropy, classifyBlock } from './terminalMath';
+import { shannonEntropy } from './terminalMath';
 import { IntervalTree } from './terminalIndexes';
 import { SlidingWindowEntropy } from '../utils/algorithms';
 

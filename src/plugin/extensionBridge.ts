@@ -19,7 +19,7 @@ import path from 'path';
 import type { Store } from '@reduxjs/toolkit';
 import type { RootState } from '../store';
 import { openFile, openVirtualFile, addWorkspaceFolder, removeWorkspaceFolder, setFileContent, markFileSaved, toggleAiEditMode, setGitStatus, setGitBranch } from '../store/slices/workspaceSlice';
-import { addPanelToOrder, removePanelFromOrder, registerDockableItem, unregisterDockableItem, switchPanel, switchRightItem, setDockableItemBadge } from '../store/slices/layoutSlice';
+import { addPanelToOrder, removePanelFromOrder, registerDockableItem, unregisterDockableItem, switchRightItem, setDockableItemBadge } from '../store/slices/layoutSlice';
 import { readFile as fsReadFile, writeFile as fsWriteFile, isPath } from '../services/fileService';
 import { getMonacoEditorActions } from '../services/monacoEditorBridge';
 import { getPluginManager } from './core';

@@ -593,7 +593,9 @@ async function activate(context) {
     }
   }, 300);
 
-  // 轮询工作区变更（每 1 秒检查一次，简单可靠）
+  // 轮询工作区变更：检测用户切换项目根目录。
+  // 间隔从 1s 放宽到 5s：切换项目是低频操作，1s 轮询浪费 IPC 带宽 + CPU。
+  // fs.watch 已在主进程监听工作区变化，这里仅作兜底检测 root 切换。
   let lastKnownRoot = null;
   const pollTimer = setInterval(async () => {
     try {
@@ -609,7 +611,7 @@ async function activate(context) {
     } catch {
       // ignore
     }
-  }, 1000);
+  }, 5000);
 
   context.subscriptions.push({
     dispose: () => clearInterval(pollTimer),

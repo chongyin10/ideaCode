@@ -42,28 +42,38 @@ asarUnpack:
 # ─── macOS 配置 ───
 mac:
   category: public.app-category.developer-tools
-  # hardenedRuntime: 公证所需，关闭可避免签名相关问题（开发期可注释掉）
-  hardenedRuntime: true
+  # 开发期关闭 hardenedRuntime，跳过签名步骤，避免无证书时的卡顿/报错。
+  # 正式分发时改回 true 并配置苹果开发者证书。
+  hardenedRuntime: false
   gatekeeperAssess: false
-  # 启用签名需要苹果开发者证书；如未配置将输出未签名 app，运行时需用户手动允许
-  # identity: null  # 显式不签名（注释掉以启用自动签名）
+  # 未配置证书时显式不签名，避免 electron-builder 尝试签名失败
+  identity: null
   # 扩展宿主子进程 + node-pty spawn-helper 需要的权限
   extendInfo:
     NSAppleEventsUsageDescription: IDEACODE 需要发送 Apple 事件以执行部分系统集成。
   # 目标产物：dmg 安装包
+  # arch 不在配置文件指定，由命令行 --arm64/--x64/--universal 控制，
+  # 避免「命令行打 arm64 但配置文件强制 universal」导致重复下载 x64 二进制。
   target:
     - target: dmg
-      arch:
-        - universal
-  # 单文件 universal binary：用一份二进制覆盖 x64 + arm64
-  # 如需分别为两种架构各打一个 dmg，将上面的 arch 改为 [x64, arm64]
 
 # DMG 安装包布局（拖拽安装）
 dmg:
   title: ${productName}-${version}
+  # format 控制 DMG 文件系统压缩：
+  #   UDRO = 只读不压缩（最快，包体最大）
+  #   UDZO = zlib 压缩（默认，速度与体积均衡）
+  #   UDBZ = bzip2 压缩（慢，体积更小）
+  # 开发期用 UDRO 加速打包，正式分发改回 UDZO
+  format: UDRO
   contents:
     - { x: 130, y: 220 }
     - { x: 410, y: 220, type: link, path: /Applications }
+
+# ─── 打包压缩级别（根级别，控制 ASAR/app 压缩）───
+# store=不压缩（最快，包体大 30%）、normal=默认、maximum=最慢
+# 开发期用 store 加速打包，正式分发改回 normal
+compression: store
 
 # ─── native 模块重编译 ───
 # 打包前自动按 Electron 版本/架构 rebuild node-pty 等 native 模块

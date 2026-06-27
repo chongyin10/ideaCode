@@ -129,7 +129,7 @@ export class SimHashFilter {
   /** 获取字符串的 SimHash (带缓存) */
   getSimHash(text: string): bigint {
     const cached = this.simhashCache.get(text);
-    if (cached !== undefined) return cached;
+    if (cached !== null) return cached;
     const hash = computeSimHash(text);
     this.simhashCache.set(text, hash);
     return hash;

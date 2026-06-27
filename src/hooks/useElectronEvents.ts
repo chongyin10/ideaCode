@@ -52,15 +52,13 @@ export function useElectronEvents() {
     cleanups.push(unsubMenuNewWindow);
 
     /* ── 窗口焦点变化 ── */
-    const unsubFocus = api.window.onFocus((data) => {
+    const unsubFocus = api.window.onFocus(() => {
       eventBus.emit('app:focus', undefined);
-      // console.log('[Electron] 窗口激活', data);
     });
     cleanups.push(unsubFocus);
 
-    const unsubBlur = api.window.onBlur((data) => {
+    const unsubBlur = api.window.onBlur(() => {
       eventBus.emit('app:blur', undefined);
-      // console.log('[Electron] 窗口失焦（后台模式）', data);
     });
     cleanups.push(unsubBlur);
 
@@ -88,8 +86,8 @@ export function useElectronEvents() {
     cleanups.push(unsubQuit);
 
     /* ── 扩展消息 ── */
-    const unsubExtension = api.extension.onMessage((msg) => {
-      // console.log('[Electron] 扩展消息', msg);
+    const unsubExtension = api.extension.onMessage(() => {
+      // 扩展消息（暂不处理）
     });
     cleanups.push(unsubExtension);
 

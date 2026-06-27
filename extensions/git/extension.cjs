@@ -447,7 +447,7 @@ var require_repository = __commonJS({
     var path2 = require("path");
     var { execGit, git, GitError: GitError2 } = require_gitCLI();
     var { parseStatus } = require_statusParser();
-    var STATUS_POLL_INTERVAL = 2e3;
+    var STATUS_POLL_INTERVAL = 3e4;
     var FAST_POLL_INTERVAL = 500;
     var FAST_POLL_DURATION = 5e3;
     var WATCHER_DEBOUNCE_MS = 300;
@@ -1392,7 +1392,7 @@ async function activate(context) {
       }
     } catch {
     }
-  }, 1e3);
+  }, 5e3);
   context.subscriptions.push({
     dispose: () => clearInterval(pollTimer)
   });

@@ -131,8 +131,6 @@ export class LyapunovScheduler {
   private P: number[][];
   private A: number[][];
   private B: number[][];
-  private prevX: number[];
-  private prevV: number | null = null;
   private running = false;
   private rafId: number | null = null;
   private idleId: number | null = null;
@@ -167,7 +165,6 @@ export class LyapunovScheduler {
     }
 
     this.P = solveDARE(this.A, this.B, Q, R);
-    this.prevX = Array(maxN).fill(0);
     this.lastFrameTime = performance.now();
   }
 
@@ -219,7 +216,6 @@ export class LyapunovScheduler {
     taskCount: number;
     stats: { stable: number; critical: number; divergent: number };
   } {
-    const n = Math.min(this.tasks.size, 7);
     const x = Array(8).fill(0);
     let idx = 0;
     for (const [, task] of this.tasks) {
@@ -276,7 +272,6 @@ export class LyapunovScheduler {
 
   /** 获取当前帧的 Lyapunov 值 */
   currentLyapunovValue(): number {
-    const n = Math.min(this.tasks.size, 7);
     const x = Array(8).fill(0);
     let idx = 0;
     for (const [, task] of this.tasks) {
@@ -300,7 +295,6 @@ export class LyapunovScheduler {
 
     this.rafId = requestAnimationFrame(() => {
       const now = performance.now();
-      const elapsed = now - this.lastFrameTime;
       this.lastFrameTime = now;
 
       // 计算 Lyapunov 值并做决策

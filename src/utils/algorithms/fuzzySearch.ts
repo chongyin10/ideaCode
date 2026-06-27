@@ -418,13 +418,13 @@ export class FuzzySearchEngine {
 function fuzzySearchWithBanditPruning(
   query: string,
   targets: string[],
-  originalIndices: number[],
+  _originalIndices: number[],
   tfidf: TFIDFCalculator,
   avgDocLen: number,
   banditState: Map<string, { count: number; reward: number }>,
 ): FuzzyResult[] {
   if (!query || targets.length === 0) {
-    return targets.map((t, i) => ({
+    return targets.map((t) => ({
       target: t,
       score: 0,
       matches: new Array(t.length).fill(false),
@@ -488,7 +488,7 @@ function fuzzySearchWithBanditPruning(
 
     // 剪枝: 去除下置信界最低的 30% 候选
     if (round < totalRounds - 1 && scored.size > 10) {
-      const lcbScores = Array.from(scored.entries()).map(([idx, res]) => {
+      const lcbScores = Array.from(scored.entries()).map(([idx]) => {
         const state = banditState.get(targets[idx]);
         const ni = state?.count ?? 0;
         const mu = state?.reward ?? 0;
@@ -533,40 +533,6 @@ function fuzzySearchWithBM25Subset(
       results.push(result);
     }
   }
-  return results.sort((a, b) => b.score - a.score);
-}
-
-/**
- * TF-IDF + BM25 加权的模糊搜索
- *
- * 在原有 DP 评分基础上:
- * - 每个匹配字符乘以其 IDF 权重 (稀有字符更值钱)
- * - 最终分数通过 BM25 饱和函数归一化
- */
-function fuzzySearchWithBM25(
-  query: string,
-  targets: string[],
-  tfidf: TFIDFCalculator,
-  avgDocLen: number,
-): FuzzyResult[] {
-  if (!query) {
-    return targets.map((t) => ({
-      target: t,
-      score: 0,
-      matches: new Array(t.length).fill(false),
-      isExact: false,
-    }));
-  }
-
-  const results: FuzzyResult[] = [];
-
-  for (const target of targets) {
-    const result = fuzzyScoreWithIDF(query, target, tfidf, avgDocLen);
-    if (result) {
-      results.push(result);
-    }
-  }
-
   return results.sort((a, b) => b.score - a.score);
 }
 

@@ -13,7 +13,6 @@ import {
   searchInText,
   multiPatternSearch,
   FileSearchPreFilter,
-  CountMinSketch,
   type MatchResult,
   type SearchOptions,
 } from '../utils/algorithms';
