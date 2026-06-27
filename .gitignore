@@ -7,6 +7,7 @@ dsroot
 */dll
 /login_test
 /logins
+.release
 
 #IDE
 .vscode
