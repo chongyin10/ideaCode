@@ -154,7 +154,10 @@ class Repository {
   async _doRefresh() {
     try {
       const output = await execGit(
-        ['status', '--porcelain=v2', '--branch', '--untracked-files=all', '--ignored=no'],
+        // --untracked-files=normal：未跟踪目录只报目录级（如 node_modules/），不递归展开其下每个文件。
+        // 用 all 会让 node_modules 这类目录刷出几万个 ? 条目，git 子进程慢、状态数据巨大、UI 卡死。
+        // 第三方依赖/构建产物目录的进一步过滤见 statusParser.DEFAULT_IGNORE_DIRS。
+        ['status', '--porcelain=v2', '--branch', '--untracked-files=normal', '--ignored=no'],
         { cwd: this.rootPath, timeout: 10000 }
       );
       if (output.code !== 0) {

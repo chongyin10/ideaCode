@@ -328,6 +328,49 @@ var require_statusParser = __commonJS({
       U: "unmerged",
       T: "type-changed"
     };
+    var DEFAULT_IGNORE_DIRS = /* @__PURE__ */ new Set([
+      // JS/TS 生态
+      "node_modules",
+      ".parcel-cache",
+      ".turbo",
+      ".next",
+      ".nuxt",
+      ".svelte-kit",
+      ".astro",
+      // 通用构建产物
+      "dist",
+      "build",
+      "out",
+      "bin",
+      "obj",
+      "target",
+      "release",
+      // 缓存/覆盖率
+      ".cache",
+      "coverage",
+      ".nyc_output",
+      // 编辑器/IDE
+      ".vscode",
+      ".idea",
+      // Python
+      "__pycache__",
+      ".venv",
+      "venv",
+      ".mypy_cache",
+      ".pytest_cache",
+      // JVM
+      ".gradle",
+      ".mvn",
+      ".classpath",
+      // Go/Rust/其他
+      "vendor",
+      "pkg"
+    ]);
+    function isDefaultIgnored(p) {
+      if (!p) return false;
+      const top = p.split("/")[0];
+      return DEFAULT_IGNORE_DIRS.has(top);
+    }
     function parseStatus(output) {
       const status = {
         staged: [],
@@ -364,6 +407,7 @@ var require_statusParser = __commonJS({
         if (!line || line.startsWith("#")) continue;
         if (line.startsWith("? ")) {
           const untrackedPath = line.slice(2);
+          if (isDefaultIgnored(untrackedPath)) continue;
           if (untrackedPath.endsWith("/")) continue;
           status.untracked.push({
             path: untrackedPath,
@@ -585,7 +629,10 @@ var require_repository = __commonJS({
       async _doRefresh() {
         try {
           const output = await execGit(
-            ["status", "--porcelain=v2", "--branch", "--untracked-files=all", "--ignored=no"],
+            // --untracked-files=normal：未跟踪目录只报目录级（如 node_modules/），不递归展开其下每个文件。
+            // 用 all 会让 node_modules 这类目录刷出几万个 ? 条目，git 子进程慢、状态数据巨大、UI 卡死。
+            // 第三方依赖/构建产物目录的进一步过滤见 statusParser.DEFAULT_IGNORE_DIRS。
+            ["status", "--porcelain=v2", "--branch", "--untracked-files=normal", "--ignored=no"],
             { cwd: this.rootPath, timeout: 1e4 }
           );
           if (output.code !== 0) {

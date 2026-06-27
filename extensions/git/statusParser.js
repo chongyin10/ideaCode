@@ -39,6 +39,41 @@ const WORKING_STATUS = {
 };
 
 /**
+ * 默认忽略的目录（第三方依赖、构建产物、缓存等）。
+ *
+ * 即使项目缺少 .gitignore（或 .gitignore 不完整），这些目录也不会作为未跟踪文件
+ * 加载到源代码管理面板——避免 node_modules 这类目录刷出几万条 ? 条目卡死 IDE。
+ * 仅判断路径的顶层目录，不误伤 src/node_modules 这类罕见路径。
+ */
+const DEFAULT_IGNORE_DIRS = new Set([
+  // JS/TS 生态
+  'node_modules', '.parcel-cache', '.turbo', '.next', '.nuxt', '.svelte-kit', '.astro',
+  // 通用构建产物
+  'dist', 'build', 'out', 'bin', 'obj', 'target', 'release',
+  // 缓存/覆盖率
+  '.cache', 'coverage', '.nyc_output',
+  // 编辑器/IDE
+  '.vscode', '.idea',
+  // Python
+  '__pycache__', '.venv', 'venv', '.mypy_cache', '.pytest_cache',
+  // JVM
+  '.gradle', '.mvn', '.classpath',
+  // Go/Rust/其他
+  'vendor', 'pkg',
+]);
+
+/**
+ * 判断路径是否位于默认忽略目录下。
+ * @param {string} p 相对仓库根的路径，如 "node_modules/foo" 或 "node_modules/"
+ * @returns {boolean}
+ */
+function isDefaultIgnored(p) {
+  if (!p) return false;
+  const top = p.split('/')[0];
+  return DEFAULT_IGNORE_DIRS.has(top);
+}
+
+/**
  * @typedef {Object} GitStatusChange
  * @property {string} path        工作区路径（相对仓库根）
  * @property {string} originalPath 重命名/复制前的原始路径（如果有）
@@ -105,6 +140,9 @@ function parseStatus(output) {
 
     if (line.startsWith('? ')) {
       const untrackedPath = line.slice(2);
+      // 排除第三方依赖与构建产物目录（node_modules 等），避免几万文件刷爆 UI / 卡死 IDE。
+      // 即使项目缺少 .gitignore，也默认不跟踪这些目录。
+      if (isDefaultIgnored(untrackedPath)) continue;
       // 未跟踪的目录（以 / 结尾）不加入列表，因为点击后无法在编辑器中打开
       if (untrackedPath.endsWith('/')) continue;
       status.untracked.push({
