@@ -46,18 +46,18 @@ export const SEMANTIC_LANGUAGES = new Set([
  * 行为：
  * - 仅处理 scheme 为 gitdiff-original / gitdiff-modified 的模型；
  *   其它模型返回 null，让 MonacoEditor 注册的 file:// provider 接管。
- * - 解析 model.uri.path（去掉 groupId 前缀），得到真实磁盘文件路径，
- *   通过 tsService.semanticTokens() 拿到 LSP tokens。
- * - 与现有语义高亮同步支持 'semanticHighlighting.enabled' 开关（由调用方写入 options）。
+ * - 优先使用调用方预取的 tokens（避免 tsserver 冷启动延迟），
+ *   预取失败时实时请求 tsService.semanticTokens()。
  *
+ * @param prefetchedTokens 调用方预取的 semantic tokens（可选）
  * @returns disposable（monaco.languages.registerDocumentSemanticTokensProvider 返回值）
  */
 export function registerDiffSemanticTokensProvider(
   monaco: typeof Monaco,
   language: string,
+  prefetchedTokens?: TsSemanticTokens | null,
   groupId?: string,
 ): Monaco.IDisposable {
-  const prefix = groupId ? `${groupId}-` : '';
   return monaco.languages.registerDocumentSemanticTokensProvider(language, {
     getLegend: () => DEFAULT_SEMANTIC_TOKENS_LEGEND,
     provideDocumentSemanticTokens: async (model) => {
@@ -66,21 +66,25 @@ export function registerDiffSemanticTokensProvider(
         // 不是我负责的模型，让别的 provider 处理
         return null;
       }
-      // model.uri.path 形如 "/{prefix}/abs/path/to/file.ts"
-      let p = model.uri.path || '';
-      if (p.startsWith('/')) p = p.slice(1);
-      if (prefix && p.startsWith(prefix)) p = p.slice(prefix.length);
+      // model.uri.path 是绝对磁盘路径（如 /Users/foo/bar.ts）。
+      const p = model.uri.path || '';
       if (!p) return null;
 
+      // 1. 优先使用预取的 tokens（DiffEditorPanel 在渲染前已等待 tsserver 加载完成）
+      if (prefetchedTokens && prefetchedTokens.data && prefetchedTokens.data.length > 0) {
+        return { resultId: prefetchedTokens.resultId, data: new Uint32Array(prefetchedTokens.data) };
+      }
+
+      // 2. 预取不可用时实时请求（兜底）
       try {
         const tokens: TsSemanticTokens | null = await tsService.semanticTokens(p);
         if (tokens && tokens.data && tokens.data.length > 0) {
           return { resultId: tokens.resultId, data: new Uint32Array(tokens.data) };
         }
       } catch {
-        // tsserver 未就绪或不可达，返回 null 让 Monaco 退化为基础语法高亮
+        // tsserver 未就绪或不可达
       }
-      return null;
+      return { data: new Uint32Array(0) };
     },
     releaseDocumentSemanticTokens: () => {},
   });

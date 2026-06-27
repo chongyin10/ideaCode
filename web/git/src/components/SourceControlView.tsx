@@ -24,6 +24,7 @@ export default function SourceControlView() {
   const status = useGitStore((s) => s.status);
   const lastError = useGitStore((s) => s.lastError);
   const activeFile = useGitStore((s) => s.activeFile);
+  const loading = useGitStore((s) => s.loading);
 
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -228,6 +229,16 @@ export default function SourceControlView() {
 
   if (!gitAvailable) {
     return <GitUnavailableState />;
+  }
+
+  // 仓库正在加载（用户刚打开文件夹，git 扩展正在初始化仓库）
+  if (loading) {
+    return (
+      <div className="git-sc__loading">
+        <RefreshCw size={20} className="git-spin" />
+        <span>正在加载源代码管理…</span>
+      </div>
+    );
   }
 
   if (!rootPath) {

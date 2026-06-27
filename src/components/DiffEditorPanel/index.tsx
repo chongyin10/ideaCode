@@ -16,7 +16,7 @@ import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { updateDiffView } from '../../store/slices/workspaceSlice';
 import type { DiffView } from '../../store/slices/workspaceSlice';
 import {
-  ArrowLeftRight, ArrowUp, ArrowDown, ArrowRightLeft,
+  ArrowLeftRight, ArrowUp, ArrowDown, ArrowRightLeft, RefreshCw,
 } from 'lucide-react';
 import type * as Monaco from 'monaco-editor';
 import { DiffEditor } from '@monaco-editor/react';
@@ -27,6 +27,7 @@ import {
   registerDiffSemanticTokensProvider,
   SEMANTIC_LANGUAGES,
 } from '../../services/monacoSemanticTokens';
+import { tsService, type TsSemanticTokens } from '../../services/tsLanguageService';
 import './DiffEditorPanel.css';
 
 /* ─── Props ─── */
@@ -47,8 +48,65 @@ const DiffEditorPanel = ({ diffData, groupId }: DiffEditorPanelProps) => {
   const diffEditorRef = useRef<Monaco.editor.IStandaloneDiffEditor | null>(null);
   const monacoRef = useRef<typeof Monaco | null>(null);
   const semTokensDisposableRef = useRef<Monaco.IDisposable | null>(null);
+  const diagUnsubRef = useRef<(() => void) | null>(null);
+  const retryTriggerRef = useRef<(() => void) | null>(null);
+  const prefetchedTokensRef = useRef<TsSemanticTokens | null>(null);
   const [currentDiffIndex, setCurrentDiffIndex] = useState(-1);
   const [lineChanges, setLineChanges] = useState<Monaco.editor.ILineChange[]>([]);
+
+  // 高亮准备状态：TS/JS 文件需要等 tsserver 加载并预取 semantic tokens 完成后再渲染 DiffEditor，
+  // 否则 DiffEditor 首次渲染时 provider 返回空 → Monaco 标记 model 为"无 semantic tokens" → 高亮永不出现。
+  // 非 TS/JS 文件不需要等待，直接渲染。
+  const isTsJs = !!(diffData.language && SEMANTIC_LANGUAGES.has(diffData.language));
+  const [tokensReady, setTokensReady] = useState(!isTsJs);
+
+  // 预取 semantic tokens：在渲染 DiffEditor 之前，把文件推送给 tsserver 并等待 tokens 返回。
+  // 这样 DiffEditor 首次渲染时 provider 就能用预取的 tokens，高亮立即生效。
+  useEffect(() => {
+    if (!isTsJs || !diffData.filePath) {
+      setTokensReady(true);
+      return;
+    }
+
+    let cancelled = false;
+    const filePath = diffData.filePath;
+    const content = diffData.modified;
+
+    const prepare = async () => {
+      try {
+        // 1. 把文件内容推送给 tsserver
+        await tsService.open(filePath, content);
+
+        // 2. 轮询等待 tsserver 返回有效 tokens（最多 5 秒 = 10 次 × 500ms）
+        for (let i = 0; i < 10; i++) {
+          if (cancelled) return;
+          try {
+            const tokens = await tsService.semanticTokens(filePath);
+            if (tokens && tokens.data && tokens.data.length > 0) {
+              if (!cancelled) {
+                prefetchedTokensRef.current = tokens;
+                setTokensReady(true);
+              }
+              return;
+            }
+          } catch { /* tsserver 未就绪，继续重试 */ }
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+        // 超时仍未获取到 tokens：放弃等待，降级为基础语法高亮
+        if (!cancelled) setTokensReady(true);
+      } catch {
+        // open 或 semanticTokens 出错：降级为基础语法高亮
+        if (!cancelled) setTokensReady(true);
+      }
+    };
+
+    setTokensReady(false);
+    prepare();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [diffData.filePath, diffData.modified, isTsJs]);
 
   // 使用 groupId 生成唯一的 model path，避免分屏时 model 冲突
   const modelPathPrefix = groupId ? `${groupId}-` : '';
@@ -77,37 +135,80 @@ const DiffEditorPanel = ({ diffData, groupId }: DiffEditorPanelProps) => {
         ensureLanguage(language).catch(() => {});
       }
 
+      // 关键：把 modified（工作区当前内容）推送给 tsserver，让 semantic tokens 可用。
+      // 主编辑器 MonacoEditor 在 onMount 也会 open，但用户可能直接从 git 面板点开 diff，
+      // 从未在主编辑器打开过该文件 → tsserver 未加载该文件 → semanticTokens 返回 null。
+      // 这里用 modified 内容 open（original 是 git HEAD，tsserver 无法获取其专属 tokens）。
+      const filePath = diffData.filePath;
+      const hasTsserver = typeof window !== 'undefined' && !!window.electronAPI?.tsserver;
+
+      // 强制触发 semantic tokens 重新请求：切换 semanticHighlighting.enabled 选项。
+      // 仅 resetTokenization 不会触发 SemanticTokensFeature 重新调用 provider，
+      // 必须切换选项让 Monaco 内部的 SemanticTokensFeature 重新调度请求。
+      // provider 返回空数组（不是 null）确保 Monaco 认为该 model 支持 semantic tokens。
+      const triggerSemTokensRefresh = () => {
+        try {
+          const origEditor = editor.getOriginalEditor();
+          const modEditor = editor.getModifiedEditor();
+          origEditor.updateOptions({ 'semanticHighlighting.enabled': false });
+          modEditor.updateOptions({ 'semanticHighlighting.enabled': false });
+          // 微任务后重新启用，触发 provider 重新调用
+          requestAnimationFrame(() => {
+            try {
+              origEditor.updateOptions({ 'semanticHighlighting.enabled': semanticHighlightingEnabled });
+              modEditor.updateOptions({ 'semanticHighlighting.enabled': semanticHighlightingEnabled });
+            } catch { /* editor 可能已销毁 */ }
+          });
+        } catch { /* editor 可能已销毁 */ }
+      };
+
+      if (hasTsserver && isTsJs && filePath) {
+        // open 是幂等的：如果主编辑器已 open 该文件，再次 open 会更新内容（无害）
+        tsService.open(filePath, diffData.modified).catch(() => {});
+
+        // 事件驱动重试：tsserver 首次 handshake 期间 semanticTokens 可能返回 null，
+        // 等 tsserver 推送该文件 diagnostics（标志 program 已构建）后立即重试。
+        diagUnsubRef.current = tsService.onDiagnostics((data) => {
+          if ('error' in data) return;
+          if (data.file === filePath) {
+            // tsserver 已处理该文件 → 强制重新请求 semantic tokens
+            triggerSemTokensRefresh();
+          }
+        });
+      }
+
       // 注册语义高亮 provider，让方法/属性/变量/参数在 Diff 视图中也能按语义着色
       // 仅 TS/JS 系语言走 tsserver；其它语言仅靠 Monaco 内置 tokenizer
-      if (language && SEMANTIC_LANGUAGES.has(language)) {
+      if (isTsJs) {
         // 防止 groupId 切换或重渲染时重复注册
         semTokensDisposableRef.current?.dispose();
-        semTokensDisposableRef.current = registerDiffSemanticTokensProvider(monaco, language, groupId);
+        semTokensDisposableRef.current = registerDiffSemanticTokensProvider(monaco, language, prefetchedTokensRef.current, groupId);
       }
 
       // 为内部编辑器启用语义高亮
-      // 先设置选项，再延迟触发一次 tokenization 刷新（给 Monaco 时间准备 provider）
       const originalEditor = editor.getOriginalEditor();
       const modifiedEditor = editor.getModifiedEditor();
       originalEditor.updateOptions({ 'semanticHighlighting.enabled': semanticHighlightingEnabled });
       modifiedEditor.updateOptions({ 'semanticHighlighting.enabled': semanticHighlightingEnabled });
 
-      // 延迟刷新：避免多次 resetTokenization 导致的闪动，只执行一次
+      // 确保 model language 正确（@monaco-editor/react 有时未正确设置 diff model 语言）
+      const origModel = originalEditor.getModel();
+      const modModel = modifiedEditor.getModel();
+      if (origModel && language && origModel.getLanguageId() !== language) {
+        monaco.editor.setModelLanguage(origModel, language);
+      }
+      if (modModel && language && modModel.getLanguageId() !== language) {
+        monaco.editor.setModelLanguage(modModel, language);
+      }
+
+      // 延迟触发 semantic tokens 重新请求：给 provider 注册 + tsserver open 一点时间
       if (semanticHighlightingEnabled) {
-        setTimeout(() => {
-          const origModel = originalEditor.getModel();
-          const modModel = modifiedEditor.getModel();
-          if (origModel) {
-            try {
-              (origModel as unknown as { tokenization: { resetTokenization(): void } }).tokenization.resetTokenization();
-            } catch { /* 忽略 */ }
-          }
-          if (modModel) {
-            try {
-              (modModel as unknown as { tokenization: { resetTokenization(): void } }).tokenization.resetTokenization();
-            } catch { /* 忽略 */ }
-          }
-        }, 100);
+        // 首次尝试：100ms 后（provider 已注册，tsserver 可能已加载该文件）
+        setTimeout(() => triggerSemTokensRefresh(), 100);
+        // 二次重试：1s 后（tsserver 冷启动时首次可能返回空，1s 后通常已就绪）
+        setTimeout(() => triggerSemTokensRefresh(), 1000);
+        // 兜底重试：3s 后（大型项目 tsserver 首次 program 构建可能较慢）
+        setTimeout(() => triggerSemTokensRefresh(), 3000);
       }
 
       // 监听 diff 计算完成事件，更新导航索引
@@ -123,7 +224,7 @@ const DiffEditorPanel = ({ diffData, groupId }: DiffEditorPanelProps) => {
         }
       });
     },
-    [diffData.language, semanticHighlightingEnabled, groupId],
+    [diffData.language, diffData.filePath, diffData.modified, semanticHighlightingEnabled, groupId],
   );
 
   /* ── 语义高亮开关变化时同步更新内部编辑器 ── */
@@ -160,6 +261,9 @@ const DiffEditorPanel = ({ diffData, groupId }: DiffEditorPanelProps) => {
       monacoRef.current = null;
       semTokensDisposableRef.current?.dispose();
       semTokensDisposableRef.current = null;
+      diagUnsubRef.current?.();
+      diagUnsubRef.current = null;
+      retryTriggerRef.current = null;
     };
   }, []);
 
@@ -226,6 +330,12 @@ const DiffEditorPanel = ({ diffData, groupId }: DiffEditorPanelProps) => {
       </div>
 
       <div className="diff-panel__editor">
+        {!tokensReady ? (
+          <div className="diff-panel__loading">
+            <RefreshCw size={20} className="diff-panel__spin" />
+            <span>正在读取文件内容</span>
+          </div>
+        ) : (
         <DiffEditor
           key={diffEditorKey}
           original={diffData.original}
@@ -259,6 +369,7 @@ const DiffEditorPanel = ({ diffData, groupId }: DiffEditorPanelProps) => {
             'semanticHighlighting.enabled': semanticHighlightingEnabled,
           }}
         />
+        )}
       </div>
     </div>
   );

@@ -101,7 +101,7 @@ export default function RepositoryHeader({ status, rootPath, onCheckout, onCreat
     <div className="git-repo-header" ref={ref}>
       <div className="git-repo-header__row">
         <span className="git-repo-header__name" title={rootPath}>
-          {rootPath.split(/[\\/]/).filter(Boolean).pop() || rootPath}
+          源代码管理
         </span>
         <button className="git-branch-btn" onClick={() => setOpen((v) => !v)} title="切换分支">
           <GitBranch size={12} />

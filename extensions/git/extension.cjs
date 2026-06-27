@@ -1059,7 +1059,9 @@ function pushState() {
     isRepo: !!currentRepo,
     gitAvailable,
     state,
-    lastError: currentRepo?._lastError || null
+    lastError: currentRepo?._lastError || null,
+    loading: false
+    // 仓库加载完成，关闭 loading
   };
   try {
     webviewPanel.webview.postMessage(message);
@@ -1107,6 +1109,22 @@ function pushStashes() {
   }).catch(() => {
   });
 }
+function pushLoading(rootPath) {
+  if (!webviewPanel) return;
+  try {
+    webviewPanel.webview.postMessage({
+      type: "state",
+      rootPath: rootPath || null,
+      repoRoot: null,
+      isRepo: false,
+      gitAvailable,
+      state: null,
+      lastError: null,
+      loading: true
+    });
+  } catch {
+  }
+}
 async function openRepository(rootPath) {
   if (!rootPath) {
     closeRepository();
@@ -1115,6 +1133,7 @@ async function openRepository(rootPath) {
   if (currentRootPath === rootPath && currentRepo) {
     return;
   }
+  pushLoading(rootPath);
   closeRepository();
   if (typeof rootPath === "string" && /^[a-z][a-z0-9+.-]*:\/\//i.test(rootPath)) {
     currentRootPath = rootPath;
@@ -1490,5 +1509,17 @@ module.exports = {
     await currentRepo.createBranch(name, startPoint);
     pushBranches();
     return { success: true };
+  },
+  // 主应用打开文件夹后主动通知 git 扩展，消除 5 秒轮询延迟
+  async openWorkspace({ path: rootPath }) {
+    if (!rootPath) {
+      closeRepository();
+      return;
+    }
+    if (workspaceChangeTimer) {
+      clearTimeout(workspaceChangeTimer);
+      workspaceChangeTimer = null;
+    }
+    await openRepository(rootPath);
   }
 };

@@ -17,6 +17,7 @@ export default function App() {
             gitAvailable: msg.gitAvailable,
             state: msg.state,
             lastError: msg.lastError,
+            loading: msg.loading,
           });
           break;
         case 'branches':

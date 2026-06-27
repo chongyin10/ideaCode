@@ -104,6 +104,28 @@ export class ExtensionBridge {
     this._setupRpcHandlers();
     this._setupIpcListeners();
     this._subscribeActiveFile();
+    this._subscribeWorkspaceRoot();
+  }
+
+  /**
+   * 订阅工作区根目录变化，主动通知 Git 扩展加载仓库。
+   * 消除 git 扩展 5 秒轮询延迟——用户打开文件夹后立即开始加载 git 状态。
+   */
+  private _subscribeWorkspaceRoot(): void {
+    let lastRoot: string | null = null;
+    this.store.subscribe(() => {
+      const root = this.store.getState().workspace.rootSource;
+      const rootPath = typeof root === 'string' ? root : null;
+      if (rootPath !== lastRoot) {
+        lastRoot = rootPath;
+        if (!window.electronAPI?.extension?.rpc) return;
+        window.electronAPI.extension.rpc('ext.invoke', {
+          extId: 'ideacode-git',
+          method: 'openWorkspace',
+          args: [{ path: rootPath }],
+        }).catch(() => { /* git 扩展可能尚未激活，忽略 */ });
+      }
+    });
   }
 
   /**

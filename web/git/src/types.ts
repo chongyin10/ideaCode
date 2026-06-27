@@ -65,6 +65,7 @@ export interface StateMessage {
   gitAvailable: boolean;
   state: GitStatus | null;
   lastError: string | null;
+  loading?: boolean;
 }
 
 export interface BranchesMessage {

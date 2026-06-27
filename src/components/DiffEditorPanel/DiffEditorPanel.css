@@ -90,6 +90,29 @@
   width: 100% !important;
 }
 
+/* 高亮准备中的 loading 占位（等 tsserver 预取 semantic tokens 完成再渲染 DiffEditor） */
+.diff-panel__loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: rgba(255, 255, 255, 0.65);
+  font-size: 13px;
+  background: #1e1e1e;
+  z-index: 5;
+}
+
+.diff-panel__spin {
+  animation: diff-panel-spin 0.9s linear infinite;
+}
+
+@keyframes diff-panel-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 /* ── 差异行装饰（仅当使用自定义 deltaDecorations 时生效） ── */
 
 .diff-line-delete {

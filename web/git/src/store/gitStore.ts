@@ -67,6 +67,7 @@ export const gitStore = {
     gitAvailable: boolean;
     state: GitStatus | null;
     lastError: string | null;
+    loading?: boolean;
   }) {
     setState({
       rootPath: payload.rootPath,
@@ -75,6 +76,7 @@ export const gitStore = {
       gitAvailable: payload.gitAvailable,
       status: payload.state,
       lastError: payload.lastError,
+      loading: payload.loading ?? false,
     });
   },
 

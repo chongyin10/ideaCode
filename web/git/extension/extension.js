@@ -147,6 +147,7 @@ function pushState() {
     gitAvailable,
     state,
     lastError: currentRepo?._lastError || null,
+    loading: false, // 仓库加载完成，关闭 loading
   };
   try {
     webviewPanel.webview.postMessage(message);
@@ -203,6 +204,26 @@ function pushStashes() {
 
 /* ─── 仓库管理 ─── */
 
+/**
+ * 推送 loading 状态：仓库正在加载时让 webview 显示 loading icon + 文案。
+ * 在 openRepository 开始时调用，pushState 完成后会用 loading: false 覆盖。
+ */
+function pushLoading(rootPath) {
+  if (!webviewPanel) return;
+  try {
+    webviewPanel.webview.postMessage({
+      type: 'state',
+      rootPath: rootPath || null,
+      repoRoot: null,
+      isRepo: false,
+      gitAvailable,
+      state: null,
+      lastError: null,
+      loading: true,
+    });
+  } catch { /* ignore */ }
+}
+
 async function openRepository(rootPath) {
   if (!rootPath) {
     closeRepository();
@@ -211,6 +232,9 @@ async function openRepository(rootPath) {
   if (currentRootPath === rootPath && currentRepo) {
     return; // 已打开
   }
+
+  // 推送 loading 状态，让 webview 立即显示加载中（消除用户感知延迟）
+  pushLoading(rootPath);
 
   closeRepository();
 
@@ -659,5 +683,18 @@ module.exports = {
     await currentRepo.createBranch(name, startPoint);
     pushBranches();
     return { success: true };
+  },
+  // 主应用打开文件夹后主动通知 git 扩展，消除 5 秒轮询延迟
+  async openWorkspace({ path: rootPath }) {
+    if (!rootPath) {
+      closeRepository();
+      return;
+    }
+    // 取消等待中的防抖定时器，立即加载
+    if (workspaceChangeTimer) {
+      clearTimeout(workspaceChangeTimer);
+      workspaceChangeTimer = null;
+    }
+    await openRepository(rootPath);
   },
 };
