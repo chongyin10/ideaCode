@@ -35,6 +35,8 @@ export interface TerminalInstanceHandle {
   selectAll: () => void;
   /** 粘贴剪贴板内容到终端 */
   paste: () => void;
+  /** 序列化当前屏幕内容（用于 Modal/编辑器切换迁移时主动生成快照） */
+  serializeSnapshot: () => string;
 }
 
 interface TerminalInstanceProps {
@@ -104,6 +106,9 @@ export const TerminalInstance = forwardRef<TerminalInstanceHandle, TerminalInsta
           }
         }).catch(() => {});
       },
+      serializeSnapshot: () => {
+        return serializeAddonRef.current?.serialize() ?? '';
+      },
     }));
 
     async function ensureSearchAddon(): Promise<SearchAddonType | null> {
@@ -165,11 +170,18 @@ export const TerminalInstance = forwardRef<TerminalInstanceHandle, TerminalInsta
       const snapshot = getTerminalSnapshot(terminalId);
       if (snapshot) {
         try {
-          terminal.write(snapshot);
+          // write 是异步的：数据先进入 write buffer，下一帧才写入终端 buffer。
+          // 不能立即 clearTerminalSnapshot——否则 StrictMode 双调时
+          // cleanup 在 write 完成前 serialize 会得到空 buffer，导致快照丢失、
+          // 第二次 setup 读不到快照，迁移后屏幕内容被清空。
+          // 在 write 回调（数据真正落入 buffer）里再清除快照。
+          terminal.write(snapshot, () => {
+            clearTerminalSnapshot(terminalId);
+          });
         } catch {
           // 恢复失败则丢弃快照，避免损坏新实例
+          clearTerminalSnapshot(terminalId);
         }
-        clearTerminalSnapshot(terminalId);
       }
 
       // 可选：WebGL / Unicode11

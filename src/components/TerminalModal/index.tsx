@@ -5,6 +5,7 @@ import { closeTerminalModal } from '../../store/slices/modalSlice';
 import { moveToEditor } from '../../store/slices/terminalSlice';
 import { openVirtualFile } from '../../store/slices/workspaceSlice';
 import { terminalSDK } from '../../services/terminalSDK';
+import { setTerminalSnapshot } from '../../services/terminalSnapshot';
 import { TerminalInstance, type TerminalInstanceHandle } from '../Terminal/TerminalInstance';
 import './TerminalModal.css';
 
@@ -38,22 +39,27 @@ export default function TerminalModal() {
   const handleExpandToTab = () => {
     if (!modal) return;
     const { tabId, title } = modal;
-    // 先关闭 Modal，触发 TerminalInstance cleanup 序列化屏幕快照，
-    // 下一帧再迁移到编辑器区域并打开虚拟文件，新实例挂载时通过快照恢复历史输出
+    // 主动序列化当前屏幕内容写入快照，避免依赖卸载 cleanup 的被动执行时序。
+    // 此前用 requestAnimationFrame 把迁移推迟到下一帧，会使卸载(cleanup serialize)
+    // 与挂载(setup getSnapshot)分属两次 commit，React 不保证两者 passive effects
+    // 的执行顺序，导致首次迁移时 setup 读不到快照而清屏。
+    const snapshot = terminalRef.current?.serializeSnapshot();
+    if (snapshot) {
+      setTerminalSnapshot(tabId, snapshot);
+    }
+    // 同步 dispatch：卸载与挂载在同一次 commit，且快照已先行写入，新实例 setup 必能读到
     dispatch(closeTerminalModal());
-    requestAnimationFrame(() => {
-      dispatch(moveToEditor(tabId));
-      dispatch(
-        openVirtualFile({
-          id: tabId,
-          name: title || '终端',
-          source: `terminal://${tabId}`,
-          content: '',
-          language: 'terminal',
-          isDirty: false,
-        })
-      );
-    });
+    dispatch(moveToEditor(tabId));
+    dispatch(
+      openVirtualFile({
+        id: tabId,
+        name: title || '终端',
+        source: `terminal://${tabId}`,
+        content: '',
+        language: 'terminal',
+        isDirty: false,
+      })
+    );
   };
 
   // Header 拖拽：mousedown 记录起点，mousemove 更新位置，mouseup 结束
