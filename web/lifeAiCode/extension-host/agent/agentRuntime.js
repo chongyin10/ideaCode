@@ -110,6 +110,10 @@ class AgentRuntime {
       }
 
       let finalResponse = '';
+      // 跟踪任务是否自然收敛（LLM 不再发 tool_call）。
+      // 若循环跑满 MAX_ROUNDS 仍未收敛，需要给用户明确提示，
+      // 否则用户会以为任务正常完成，而实际上 LLM 还想继续调工具但被截断了。
+      let converged = false;
 
       for (let round = 0; round < MAX_ROUNDS; round++) {
         if (this.cancelled) {
@@ -156,6 +160,7 @@ class AgentRuntime {
         const toolCall = this.adapter.extractToolCall(responseObject || responseContent);
         if (!toolCall) {
           // 没有 tool_call，任务完成
+          converged = true;
           break;
         }
 
@@ -167,8 +172,12 @@ class AgentRuntime {
         // 生成 tool_call_id，用于 native tool calling 的消息关联
         const callId = `call-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
+        // S4: 把本轮 LLM 回复的 reasoning_content 一起带入 messages，
+        // 否则 DeepSeek 等 Provider 的思维链在 Agent 多轮中断裂，
+        // 后续轮次 LLM 看不到自己上一步的推理内容，可能导致重复思考或上下文不一致
+        const reasoningContent = (responseObject && responseObject.reasoningContent) || '';
         // 将 assistant 的 tool_call 追加到 messages
-        messages.push(this.adapter.buildToolCallMessage(toolCall.name, toolCall.arguments, callId));
+        messages.push(this.adapter.buildToolCallMessage(toolCall.name, toolCall.arguments, callId, reasoningContent));
 
         // 执行 tool（也支持中止）
         const result = await this.executor.execute(toolCall.name, toolCall.arguments);
@@ -182,6 +191,12 @@ class AgentRuntime {
 
         // 更新上下文（如 workspaceRoot 在执行过程中可能变化）
         this.context.workspaceRoot = this.context.workspaceRoot || '';
+      }
+
+      // 达到最大轮次仍未收敛：补充提示，避免用户误以为任务正常完成
+      if (!converged && !this.cancelled && !signal.aborted && finalResponse !== '任务执行超时') {
+        finalResponse = (finalResponse || '') + `\n\n[已达到最大轮次 ${MAX_ROUNDS}，任务自动停止。如需继续，请重新发起。]`;
+        this._notifyStep('done', `达到最大轮次 ${MAX_ROUNDS}，任务停止`);
       }
 
       if (typeof onDone === 'function') {

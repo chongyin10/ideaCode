@@ -155,7 +155,9 @@ export function SuggestionCard({ suggestion, onAccept, onReject, onPreviewDiff, 
         onClick={() => setExpanded(!expanded)}
         style={{ cursor: 'pointer' }}
       >
-        <span className={`suggestion-card__dot suggestion-card__dot--${getTypeMeta(suggestion.type) === getTypeMeta(suggestion.type) ? suggestion.type : 'refactor'} ${loading ? 'suggestion-card__dot--loading' : ''}`} />
+        {/* §4.8: 原 getTypeMeta(x) === getTypeMeta(x) 是永真条件，等价于 suggestion.type，
+            未知 type 时会渲染一个不存在的 CSS class（无样式）。改为与下方一致的已知 type 判断。 */}
+        <span className={`suggestion-card__dot suggestion-card__dot--${TYPE_META[suggestion.type] ? suggestion.type : 'refactor'} ${loading ? 'suggestion-card__dot--loading' : ''}`} />
         <span className={`suggestion-card__type suggestion-card__type--${TYPE_META[suggestion.type] ? suggestion.type : 'refactor'}`}>
           <span className="suggestion-card__type-icon">
             {getTypeMeta(suggestion.type).icon}

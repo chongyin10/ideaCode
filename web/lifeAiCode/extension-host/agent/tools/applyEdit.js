@@ -7,7 +7,7 @@
  * - 真正写入需要用户确认，仅注册到 pendingAgentEdits
  */
 
-const fs = require('fs');
+const fs = require('fs').promises;
 const path = require('path');
 
 /**
@@ -60,13 +60,6 @@ function findOriginalMatches(content, original) {
   return { indices, normalizedUnique: indices.length === 1 };
 }
 
-/**
- * 在 content 中按 start index 取一段非空内容
- */
-function sliceByIndex(content, start, end) {
-  return content.slice(start, end);
-}
-
 async function applyEdit(args, context) {
   const { path: filePathInput, original, modified } = args || {};
   if (!filePathInput || typeof filePathInput !== 'string') {
@@ -74,6 +67,11 @@ async function applyEdit(args, context) {
   }
   if (typeof original !== 'string' || typeof modified !== 'string') {
     return { success: false, error: 'original 和 modified 必须是字符串' };
+  }
+  // Bug 5: original 为空字符串时 indexOf('', from) 永远返回 from（非 -1），
+  // 且 from = idx + 0 = idx 永不前进 → 无限循环直到 OOM 崩溃
+  if (!original.trim()) {
+    return { success: false, error: 'original 不能为空或仅含空白' };
   }
   if (normalizeWhitespace(original) === normalizeWhitespace(modified)) {
     return { success: false, error: 'original 和 modified 规范化后相同，无需修改' };
@@ -94,7 +92,7 @@ async function applyEdit(args, context) {
   // 读取当前文件内容以验证 original 是否存在
   let currentContent = '';
   try {
-    currentContent = fs.readFileSync(targetPath, 'utf-8');
+    currentContent = await fs.readFile(targetPath, 'utf-8');
   } catch (err) {
     return { success: false, error: `无法读取文件: ${err.message}` };
   }

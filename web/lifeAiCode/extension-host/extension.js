@@ -192,12 +192,16 @@ async function executeShellCommand(id, shellCommand, cwd) {
     console.log('[LifeAiCode][executeShellCommand] spawned pid:', proc.pid);
   } catch (err) {
     console.error('[LifeAiCode][executeShellCommand] spawn failed:', err);
+    const errorMsg = `执行失败: ${err.message}`;
     postToWebView({
       type: 'shellUpdate',
       id, shellCommand,
-      output: `执行失败: ${err.message}`,
+      output: errorMsg,
       status: 'error',
     });
+    // Bug 11: 注册 finished entry + result，让 waitShellCompletion 能拿到真实错误
+    // 而非通用的 "shell 进程未运行或不存在"
+    activeProcs.set(id, { proc: null, finished: true, cwd: workingDir, buffers: { stdout: '', stderr: '' }, fullOutput: errorMsg, result: { success: false, error: errorMsg, output: errorMsg } });
     return;
   }
 
@@ -211,16 +215,13 @@ async function executeShellCommand(id, shellCommand, cwd) {
   });
   console.log('[LifeAiCode][executeShellCommand] initial event posted');
 
-  const entry = { proc, finished: false, cwd: workingDir, buffers: { stdout: '', stderr: '' } };
+  // Bug 1: 新增 fullOutput 字段，累积完整输出（flush 不会清空它），
+  // waiter resolve 时使用 fullOutput 而非会被 flush 清空的 buffers
+  const entry = { proc, finished: false, cwd: workingDir, buffers: { stdout: '', stderr: '' }, fullOutput: '', result: null };
   activeProcs.set(id, entry);
 
-  // 推一条 "running" 启动事件（带 cwd + 命令）
-  postToWebView({
-    type: 'shellUpdate',
-    id, shellCommand,
-    output: `$ ${shellCommand}\n[工作目录] ${workingDir}\n\n`,
-    status: 'running',
-  });
+  // 注：原代码在此处又推送了一次完全相同的 running 事件，导致 webview 收到两条
+  // 重复的初始输出（$ 命令 + [工作目录] 出现两次）。已删除重复推送。
 
   // 累积行缓冲 + 节流 flush
   const flush = (status) => {
@@ -244,17 +245,23 @@ async function executeShellCommand(id, shellCommand, cwd) {
   }, FLUSH_INTERVAL_MS);
 
   proc.stdout.on('data', (chunk) => {
-    entry.buffers.stdout += chunk.toString('utf8');
+    const text = chunk.toString('utf8');
+    entry.buffers.stdout += text;
+    entry.fullOutput += text;
     if (entry.buffers.stdout.length > MAX_LINE_BUFFER) flush('running');
   });
 
   proc.stderr.on('data', (chunk) => {
-    entry.buffers.stderr += chunk.toString('utf8');
+    const text = chunk.toString('utf8');
+    entry.buffers.stderr += text;
+    entry.fullOutput += text;
     if (entry.buffers.stderr.length > MAX_LINE_BUFFER) flush('running');
   });
 
   proc.on('error', (err) => {
-    entry.buffers.stdout += `\n[进程错误] ${err.message}\n`;
+    const text = `\n[进程错误] ${err.message}\n`;
+    entry.buffers.stdout += text;
+    entry.fullOutput += text;
   });
 
   proc.on('close', (code, signal) => {
@@ -273,15 +280,18 @@ async function executeShellCommand(id, shellCommand, cwd) {
       signal: signal ?? undefined,
     });
     // 唤醒在等结果的人（Agent tool）
+    // Bug 1: 使用 fullOutput（完整累积），不用会被 flush 清空的 buffers
+    const result = {
+      success: code === 0,
+      exitCode: code ?? undefined,
+      signal: signal ?? undefined,
+      output: entry.fullOutput.trim(),
+    };
+    entry.result = result;
     const waiter = pendingShellWaits.get(id);
     if (waiter) {
       pendingShellWaits.delete(id);
-      waiter.resolve({
-        success: code === 0,
-        exitCode: code ?? undefined,
-        signal: signal ?? undefined,
-        output: (entry.buffers.stdout + (entry.buffers.stderr ? `\n${entry.buffers.stderr}` : '')).trim(),
-      });
+      waiter.resolve(result);
     }
     activeProcs.delete(id);
   });
@@ -325,6 +335,12 @@ async function executeShellCommand(id, shellCommand, cwd) {
  * @returns {Promise<{success, exitCode, output, error?}>}
  */
 function waitShellCompletion(id, timeoutMs = 60_000) {
+  // Bug 11: 进程已结束（含 spawn 失败）且存有 result → 直接返回
+  const entry = activeProcs.get(id);
+  if (entry && entry.finished && entry.result) {
+    activeProcs.delete(id);
+    return Promise.resolve(entry.result);
+  }
   // 进程已结束 → 没有 waiter 注册，构造一个同步的 resolved
   if (!activeProcs.has(id) && !pendingShellWaits.has(id)) {
     return Promise.resolve({ success: false, error: 'shell 进程未运行或不存在' });
@@ -381,8 +397,14 @@ function initLlmClient(config) {
 /**
  * 发送消息到 LLM 并获取建议
  */
-/** 维护最近一次请求的上下文，用于 continue 继续生成 */
+/** 维护每次请求的上下文，用于 continue 继续生成 */
 let lastRequestContext = null;
+/**
+ * Bug 14: 按 messageId 存储请求上下文，避免被后续消息覆盖。
+ * 原来用单个 lastRequestContext，用户发消息 B 后对消息 A 点"继续"
+ * 会用到 B 的 text/context，导致语义错乱。
+ */
+const requestContextMap = new Map();
 
 async function processMessage(text, context, options = {}) {
   if (isProcessing) return;
@@ -394,6 +416,13 @@ async function processMessage(text, context, options = {}) {
 
   // 记录上下文以便 continue 使用
   lastRequestContext = { text, context, thinkingEnabled };
+  // Bug 14: 按 msgId 存储上下文，避免被后续消息覆盖
+  requestContextMap.set(msgId, { text, context, thinkingEnabled });
+  // 清理过旧条目（保留最近 50 条），避免内存无限增长
+  if (requestContextMap.size > 50) {
+    const oldestKey = requestContextMap.keys().next().value;
+    requestContextMap.delete(oldestKey);
+  }
 
   try {
     // 1. 检查 LLM 客户端
@@ -458,10 +487,13 @@ async function processMessage(text, context, options = {}) {
       if (processMessage._lastTokenListener) {
         try { llmClient.off('token', processMessage._lastTokenListener); } catch { /* ignore */ }
       }
+      // Bug 2: 使用单独变量累积续写 delta，避免每个 token 覆盖之前的内容
+      // 原代码 fullResponse = continueFromContent + token 会丢失之前所有 delta
+      let continuedContent = '';
       tokenListener = (token) => {
-        // continue 模式下，token 是续写部分，需要追加到原 content 上
         if (continueFromContent) {
-          fullResponse = continueFromContent + token;
+          continuedContent += token;
+          fullResponse = continueFromContent + continuedContent;
         } else {
           fullResponse += token;
         }
@@ -475,7 +507,10 @@ async function processMessage(text, context, options = {}) {
       // 挂载并保存引用，便于下次请求时清理
       llmClient.on('token', tokenListener);
       processMessage._lastTokenListener = tokenListener;
-      fullResponse = await llmClient.chatStream(messages);
+      // Bug 2: chatStream 返回的是本次新生成的完整内容（fullContent），
+      // 不含 continueFromContent 前缀，需手动拼接，否则续写后原内容丢失
+      const streamResult = await llmClient.chatStream(messages);
+      fullResponse = continueFromContent ? continueFromContent + streamResult : streamResult;
     } catch (streamErr) {
       if (streamErr.isAbort) {
         aborted = true;
@@ -576,12 +611,17 @@ async function runAgentTask(text, context, options = {}) {
       message: 'Agent 开始执行任务...',
     });
 
+    const cleanToolCallTags = (text) => text
+      .replace(new RegExp("`tool_call`[\\s\\S]*?<\/tool_call>", "g"), "")
+      .replace(new RegExp("`tool_call`[\\s\\S]*$", "g"), "")
+      .trim();
+
     let streamedContent = '';
     const finalResponse = await agentRuntime.run(text, context, {
       onToken: (token) => {
         // 实时推送内容到 WebView，过滤 prompt-based 模式下可能混入的 <tool_call> 标签
         streamedContent += token;
-        const displayContent = streamedContent.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim();
+        const displayContent = cleanToolCallTags(streamedContent);
         if (displayContent) {
           postToWebView({
             type: 'chatResponse',
@@ -616,7 +656,7 @@ async function runAgentTask(text, context, options = {}) {
       },
     });
 
-    const displayContent = (streamedContent || finalResponse || '').replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim();
+    const displayContent = cleanToolCallTags(streamedContent || finalResponse || '');
     postToWebView({
       type: 'chatResponse',
       id: msgId,
@@ -717,12 +757,17 @@ async function acceptAndApplySuggestion(suggestionId) {
         }
 
         let newContent = currentContent;
+        // Bug 6: 跟踪实际应用的变更，只把这些发给主进程。
+        // 原代码把所有 changes（含被跳过的）都发给主进程，导致主进程尝试替换不存在的片段。
+        const appliedChanges = [];
         for (const change of changes) {
           if (!newContent.includes(change.original)) {
             console.warn('[LifeAiCode] 原始代码未找到，跳过:', filePath);
             continue;
           }
-          newContent = newContent.replace(change.original, change.modified);
+          // Bug 7: 用 replaceAll 替换所有匹配项，避免 String.replace 只替换首个。
+          newContent = newContent.replaceAll(change.original, change.modified);
+          appliedChanges.push(change);
         }
 
         if (newContent === currentContent) {
@@ -738,10 +783,14 @@ async function acceptAndApplySuggestion(suggestionId) {
             method: 'lifeAiCode.applyChanges',
             params: {
               filePath,
-              original: changes.map((c) => c.original),
-              modified: changes.map((c) => c.modified),
+              original: appliedChanges.map((c) => c.original),
+              modified: appliedChanges.map((c) => c.modified),
             },
           });
+        } else {
+          // B3: process.send 不可用时抛错，让外层 catch 捕获，
+          // 避免继续执行 markApplied 误报"已应用"
+          throw new Error('Extension Host 未连接到主进程，无法应用变更');
         }
       }
       suggestionGenerator.markApplied(suggestionId);
@@ -1066,7 +1115,9 @@ async function activate(context) {
         }
         case 'continueMessage': {
           // 继续被截断的回答
-          if (!lastRequestContext) {
+          // Bug 14: 按 messageId 从 Map 中查找原始上下文，不再依赖可能被覆盖的 lastRequestContext
+          const originalCtx = requestContextMap.get(message.messageId) || lastRequestContext;
+          if (!originalCtx) {
             postToWebView({ type: 'error', message: '无法继续：缺少原始上下文' });
             break;
           }
@@ -1074,13 +1125,13 @@ async function activate(context) {
           // 这里依赖 webview 传过来的 continueFromContent（被截断的最终内容）
           const continueFromContent = message.continueFromContent || '';
           await processMessage(
-            lastRequestContext.text,
-            lastRequestContext.context,
+            originalCtx.text,
+            originalCtx.context,
             {
-              thinkingEnabled: lastRequestContext.thinkingEnabled,
+              thinkingEnabled: originalCtx.thinkingEnabled,
               continueFromMessageId: message.messageId,
               continueFromContent,
-              continueFromText: lastRequestContext.text,
+              continueFromText: originalCtx.text,
             }
           );
           break;
@@ -1221,10 +1272,13 @@ async function activate(context) {
             postToWebView({ type: 'error', message: '未找到待确认的编辑' });
             break;
           }
+          const params = edit.mode === 'write'
+            ? { filePath: edit.filePath, content: edit.modified }
+            : { filePath: edit.filePath, original: [edit.original], modified: [edit.modified] };
+          // B3: 原 if (process.send) 条件不成立时静默跳过，导致 pendingAgentEdit 永远挂起、
+          // 前端 DiffConfirmDialog 永远收不到 agentEditStatus 反馈（用户点"接受"无反应）。
+          // 改为：process.send 不可用时也清理 pending 并回 error，让前端能关闭弹窗。
           if (typeof process !== 'undefined' && process.send) {
-            const params = edit.mode === 'write'
-              ? { filePath: edit.filePath, content: edit.modified }
-              : { filePath: edit.filePath, original: [edit.original], modified: [edit.modified] };
             process.send({
               jsonrpc: '2.0',
               method: 'lifeAiCode.applyChanges',
@@ -1232,6 +1286,10 @@ async function activate(context) {
             });
             pendingAgentEdits.delete(message.editId);
             postToWebView({ type: 'agentEditStatus', editId: message.editId, status: 'applied' });
+          } else {
+            pendingAgentEdits.delete(message.editId);
+            postToWebView({ type: 'error', message: '应用编辑失败：Extension Host 未连接到主进程' });
+            postToWebView({ type: 'agentEditStatus', editId: message.editId, status: 'error' });
           }
           break;
         }

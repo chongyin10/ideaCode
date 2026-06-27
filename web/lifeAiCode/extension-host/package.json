@@ -27,7 +27,7 @@
             { "command": "lifeAiCode.newChat", "icon": "➕", "tooltip": "新建会话" },
             { "command": "lifeAiCode.showHistory", "icon": "🕐", "tooltip": "历史记录" },
             { "command": "lifeAiCode.openConfig", "icon": "⚙️", "tooltip": "配置" },
-            { "command": "lifeAiCode.toggleReadonly", "type": "switch", "tooltip": "只读模式" }
+            { "command": "lifeAiCode.toggleEditMode", "type": "switch", "tooltip": "切换编辑/只读模式" }
           ]
         }
       ]
@@ -68,6 +68,30 @@
         "title": "LifeAiCode: 预览差异",
         "category": "LifeAiCode",
         "icon": "$(diff)"
+      },
+      {
+        "command": "lifeAiCode.toggleEditMode",
+        "title": "LifeAiCode: 切换编辑模式",
+        "category": "LifeAiCode",
+        "icon": "$(pencil)"
+      },
+      {
+        "command": "lifeAiCode.newChat",
+        "title": "LifeAiCode: 新建会话",
+        "category": "LifeAiCode",
+        "icon": "$(add)"
+      },
+      {
+        "command": "lifeAiCode.showHistory",
+        "title": "LifeAiCode: 历史记录",
+        "category": "LifeAiCode",
+        "icon": "$(history)"
+      },
+      {
+        "command": "lifeAiCode.openConfig",
+        "title": "LifeAiCode: 打开配置",
+        "category": "LifeAiCode",
+        "icon": "$(gear)"
       }
     ],
     "configuration": {

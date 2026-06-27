@@ -165,9 +165,9 @@ export const lifeAiCodePlugin: Plugin = {
     const unsubToggleEdit = context.commands.registerCommand('lifeAiCode.toggleEditMode', doToggleEditMode);
     context.subscriptions.push(unsubToggleEdit);
 
-    // 命令: 切换只读模式开关
-    const unsubToggleReadonly = context.commands.registerCommand('lifeAiCode.toggleReadonly', doToggleEditMode);
-    context.subscriptions.push(unsubToggleReadonly);
+    // 注：原 lifeAiCode.toggleReadonly 命令已删除 — 它复用 doToggleEditMode 导致语义错乱
+    // （readonly 与 editMode 是同一开关的两个名字，重复注册只会让命令面板出现两个等效入口）。
+    // 统一使用 lifeAiCode.toggleEditMode，package.json 的 view action 也已同步切换。
 
     // 命令: 显示/隐藏历史对话
     const unsubShowHistory = context.commands.registerCommand('lifeAiCode.showHistory', () => {

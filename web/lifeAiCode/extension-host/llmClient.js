@@ -280,37 +280,33 @@ class LlmClient extends EventEmitter {
    * 最终返回值仅在所有 chunks 处理完后由 Promise resolve。
    */
   async chatStream(messages, options = {}) {
+    // B1: chatStream 缺少 resetAbort()，全局共享单例下上一次 abort() 的残留标志会导致本次请求立即被判定为已中止
+    this.resetAbort();
     const provider = PROVIDERS[this.provider];
     if (!provider) throw new Error(`不支持的 Provider: ${this.provider}`);
 
     const body = this._buildRequestBody(provider, messages, true, options);
     const url = this._getRequestUrl(provider);
 
-    let lastError = null;
-    for (let attempt = 0; attempt < this.maxRetries; attempt++) {
+    // B2: 流式请求不重试 — 已 emit 给 UI 的 token 无法回收，重试会导致输出重复
+    // 若需重试，应由上层（agentRuntime）丢弃本次部分输出后整体重发
+    if (this._isAborted(options.signal)) throw this._createAbortError();
+    try {
+      const result = await this._httpStreamRequest(url.toString(), {
+        method: 'POST',
+        headers: provider.headers(this.apiKey),
+        body: JSON.stringify(body),
+        timeout: this.timeout,
+      }, options);
       if (this._isAborted(options.signal)) throw this._createAbortError();
-      try {
-        const result = await this._httpStreamRequest(url.toString(), {
-          method: 'POST',
-          headers: provider.headers(this.apiKey),
-          body: JSON.stringify(body),
-          timeout: this.timeout,
-        }, options);
-        if (this._isAborted(options.signal)) throw this._createAbortError();
-        if (options.returnRaw) return result;
-        // 非 raw 模式返回 content 字符串
-        return typeof result === 'string' ? result : (result.content || '');
-      } catch (err) {
-        lastError = err;
-        console.warn(`[LifeAiCode] 流式请求失败 (${attempt + 1}/${this.maxRetries}):`, err.message);
-        if (this._isAborted(options.signal)) throw this._createAbortError();
-        if (err.isAbort) throw err;
-        if (attempt < this.maxRetries - 1) {
-          await this._sleep(500 * (attempt + 1));
-        }
-      }
+      if (options.returnRaw) return result;
+      // 非 raw 模式返回 content 字符串
+      return typeof result === 'string' ? result : (result.content || '');
+    } catch (err) {
+      if (this._isAborted(options.signal)) throw this._createAbortError();
+      if (err && err.isAbort) throw err;
+      throw err;
     }
-    throw lastError;
   }
 
   _getRequestUrl(provider) {
@@ -457,6 +453,10 @@ class LlmClient extends EventEmitter {
         let fullContent = '';
         let fullReasoningContent = '';
         let buffer = '';
+        // reasoning → content 切换跟踪：把 DeepSeek 的 reasoning_content
+        // 包装成 <think>...</think> 标签 emit 给前端，让 llmTags 能实时解析展示思维链。
+        // fullContent / fullReasoningContent 仍只累加纯内容（不含标签），不影响返回值。
+        let inReasoning = false;
         // 流式 tool_calls 累加：index -> { id, type, function: { name, arguments } }
         const toolCallDeltas = new Map();
 
@@ -515,12 +515,25 @@ class LlmClient extends EventEmitter {
                     break;
                 }
 
+                // reasoning_content（DeepSeek）单独字段，不在 content 流中。
+                // 把 reasoningDelta 包装成 🧠...</thinking> 标签 emit 给前端，
+                // 让 llmTags.ts 能实时解析并展示思维链。
+                // fullContent / fullReasoningContent 仍只累加纯内容（不含标签），不影响返回值。
+                if (reasoningDelta) {
+                  if (!inReasoning) {
+                    inReasoning = true;
+                    this.emit('token', '🧠');
+                  }
+                  fullReasoningContent += reasoningDelta;
+                  this.emit('token', reasoningDelta);
+                }
                 if (delta) {
+                  if (inReasoning) {
+                    inReasoning = false;
+                    this.emit('token', '</thinking>');
+                  }
                   fullContent += delta;
                   this.emit('token', delta);
-                }
-                if (reasoningDelta) {
-                  fullReasoningContent += reasoningDelta;
                 }
               } catch {
                 // 忽略解析错误
@@ -530,6 +543,12 @@ class LlmClient extends EventEmitter {
         });
 
         res.on('end', () => {
+          // 流结束时若仍处于 reasoning（DeepSeek 只输出 reasoning 未输出 content），
+          // 补闭合标签，避免前端 <think> 标签未闭合导致解析异常
+          if (inReasoning) {
+            inReasoning = false;
+            this.emit('token', '</think>');
+          }
           this.emit('end');
           // 组装完整的 tool_calls
           const toolCalls = [];

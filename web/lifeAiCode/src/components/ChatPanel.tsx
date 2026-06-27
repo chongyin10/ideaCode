@@ -7,7 +7,7 @@ import { AgentModeToggle } from './agent/AgentModeToggle';
 import { AgentStatusBar } from './agent/AgentStatusBar';
 import { ToolCallLog } from './agent/ToolCallLog';
 import { DiffConfirmDialog } from './agent/DiffConfirmDialog';
-import { ShieldCheck, Brain, ArrowDown, User, Sparkles, Paperclip, Send, MessageSquare, Loader2, Check, Square, ChevronDown, X, GripVertical } from 'lucide-react';
+import { ShieldCheck, Brain, ArrowDown, User, Sparkles, Paperclip, Send, MessageSquare, Loader2, Check, Square, ChevronDown, X, GripVertical, Pencil } from 'lucide-react';
 
 /** 预处理：检测并补齐未闭合的 markdown 结构（供 chatResponse 处理时使用） */
 function groupConfigsByProviderOrder(configs: LlmConfig[]) {
@@ -76,6 +76,18 @@ function finalizeSteps(content: string): string {
     .replace(/<step\b(?![^>]*\bstatus=["'])([^>]*?)(\/?)>/gi, '<step$1 status="done"$2>');
 }
 
+/**
+ * 稳定序列化：先按 key 排序再 stringify。
+ * Bug 17: toolCall 去重原用 JSON.stringify，对相同内容但键顺序不同的对象
+ * （如 {a:1,b:2} vs {b:2,a:1}）会判为不同，导致重复 toolCall 无法去重。
+ */
+function stableStringify(obj: unknown): string {
+  if (obj === null || typeof obj !== 'object') return JSON.stringify(obj);
+  if (Array.isArray(obj)) return '[' + obj.map(stableStringify).join(',') + ']';
+  const keys = Object.keys(obj).sort();
+  return '{' + keys.map((k) => JSON.stringify(k) + ':' + stableStringify((obj as Record<string, unknown>)[k])).join(',') + '}';
+}
+
 /* ─── 聊天历史管理 ─── */
 
 interface ChatHistoryItem {
@@ -118,7 +130,9 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
-  const [context] = useState<CodeContext | null>(initialContext || null);
+  // §4.6: 直接使用 prop，让父组件切换文件/上下文时 ChatPanel 能拿到最新值。
+  // 之前用 useState 初次化后再不更新，导致切换文件后 AI 仍拿到旧 context。
+  const context = initialContext || null;
   const [error, setError] = useState<string | null>(null);
   const [aiEditMode, setAiEditMode] = useState(true);
   const [autoAccept, setAutoAccept] = useState(false);
@@ -133,7 +147,9 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
   const [agentMode, setAgentMode] = useState(false);
   const [agentStatus, setAgentStatus] = useState<{ status: string; message: string } | null>(null);
   const [toolCalls, setToolCalls] = useState<ToolCallInfo[]>([]);
-  const [pendingAgentEdit, setPendingAgentEdit] = useState<{ editId: string; filePath: string; original: string; modified: string } | null>(null);
+  // Bug 4: 改为数组队列，支持多个 pending 编辑同时存在
+  // 原来单个 state 会被后续 edit 覆盖，用户丢失前一个确认弹窗
+  const [pendingAgentEdits, setPendingAgentEdits] = useState<Array<{ editId: string; filePath: string; original: string; modified: string }>>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -143,6 +159,15 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
   const vscode = getVsCodeApi();
 
   const activeMeta = activeConfig ? PROVIDER_META[activeConfig.provider] : null;
+
+  // §4.5: 把易变 state/props 存到 ref，message listener useEffect 只依赖稳定的 vscode，
+  // 避免每次 autoAccept/pendingAgentEdit 变化时重订阅（重订阅期间到达的消息可能丢失）。
+  const autoAcceptRef = useRef(autoAccept);
+  autoAcceptRef.current = autoAccept;
+  const pendingAgentEditsRef = useRef(pendingAgentEdits);
+  pendingAgentEditsRef.current = pendingAgentEdits;
+  const onOpenConfigRef = useRef(onOpenConfig);
+  onOpenConfigRef.current = onOpenConfig;
 
   // 点击外部关闭下拉面板
   useEffect(() => {
@@ -248,14 +273,13 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
             }
             return noPlaceholder;
           });
-          if (msg.suggestions.length > 0) {
+          // §4.1: autoAccept=false 时不要自动 reject（否则建议功能在默认配置下完全失效，
+          // 用户根本看不到建议就被拒绝了）。仅 autoAccept=true 时自动接受；
+          // autoAccept=false 时让用户通过 SuggestionList 的接受/拒绝按钮手动决策。
+          if (msg.suggestions.length > 0 && autoAcceptRef.current) {
             setTimeout(() => {
               msg.suggestions.forEach((s) => {
-                if (autoAccept) {
-                  vscode?.postMessage({ command: 'acceptSuggestion', suggestionId: s.id } as WebViewRequest);
-                } else {
-                  vscode?.postMessage({ command: 'rejectSuggestion', suggestionId: s.id } as WebViewRequest);
-                }
+                vscode?.postMessage({ command: 'acceptSuggestion', suggestionId: s.id } as WebViewRequest);
               });
             }, 0);
           }
@@ -325,7 +349,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
           break;
         }
         case 'openConfig': {
-          onOpenConfig();
+          onOpenConfigRef.current?.();
           break;
         }
         case 'showHistory': {
@@ -338,6 +362,35 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
             ...prev,
             [msg.id]: { output: msg.output, status: msg.status },
           }));
+          // Bug 16: shell 结束后延迟清理对应条目，避免 shellOutputs 无限累积导致内存增长。
+          // 保留 30 秒让用户能查看最终输出，之后自动移除。
+          if (msg.status === 'success' || msg.status === 'error') {
+            const shellId = msg.id;
+            setTimeout(() => {
+              setShellOutputs((prev) => {
+                if (!prev[shellId]) return prev;
+                const next = { ...prev };
+                delete next[shellId];
+                return next;
+              });
+            }, 30_000);
+          }
+          break;
+        }
+        case 'step': {
+          // Bug 21: 处理 step 进度消息，更新 agentStatus 显示当前步骤。
+          // 原代码未处理该消息类型，extension.js/agentRuntime.js 发送的 step 进度被静默丢弃。
+          if (msg.status === 'running') {
+            const STEP_LABELS: Record<string, string> = {
+              think: '思考中',
+              read: '读取文件',
+              agent: '执行工具',
+              edit: '应用编辑',
+              run: '执行命令',
+            };
+            const label = msg.label || msg.target || STEP_LABELS[msg.stepType] || msg.stepType;
+            setAgentStatus({ status: 'running', message: String(label) });
+          }
           break;
         }
         case 'notice': {
@@ -358,7 +411,9 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
         }
         case 'toolCall': {
           setToolCalls((prev) => {
-            const existingIndex = prev.findIndex((t) => t.tool === msg.tool && JSON.stringify(t.args) === JSON.stringify(msg.args));
+            // Bug 17: 用 stableStringify 代替 JSON.stringify 做参数去重，
+            // 避免相同内容但键顺序不同的对象被判为不同导致重复 toolCall 无法合并。
+            const existingIndex = prev.findIndex((t) => t.tool === msg.tool && stableStringify(t.args) === stableStringify(msg.args));
             if (existingIndex >= 0) {
               const updated = [...prev];
               updated[existingIndex] = msg;
@@ -369,17 +424,20 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
           break;
         }
         case 'agentEditPending': {
-          setPendingAgentEdit({
+          // Bug 4: 追加到队列而非覆盖
+          setPendingAgentEdits((prev) => [...prev, {
             editId: msg.editId,
             filePath: msg.filePath,
             original: msg.original,
             modified: msg.modified,
-          });
+          }]);
           break;
         }
         case 'agentEditStatus': {
-          if (pendingAgentEdit && pendingAgentEdit.editId === msg.editId) {
-            setPendingAgentEdit(null);
+          // §4.5: 通过 ref 读取最新 pendingAgentEdits
+          // Bug 4: 从队列中移除匹配的 editId
+          if (pendingAgentEditsRef.current.some((e) => e.editId === msg.editId)) {
+            setPendingAgentEdits((prev) => prev.filter((e) => e.editId !== msg.editId));
           }
           break;
         }
@@ -389,7 +447,9 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
     window.addEventListener('message', handler);
     console.log('[LifeAiCode WebView] message listener attached');
     return () => window.removeEventListener('message', handler);
-  }, [onOpenConfig, autoAccept, pendingAgentEdit, vscode]);
+    // §4.5: deps 仅保留稳定的 vscode；autoAccept/pendingAgentEdit/onOpenConfig 通过 ref 读取
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vscode]);
 
   // 从历史恢复对话
   const restoreHistory = useCallback((item: ChatHistoryItem) => {
@@ -483,15 +543,18 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
     if (vscode) vscode.postMessage({ command: 'previewDiff', suggestionId } as WebViewRequest);
   };
 
+  // Bug 4: 队列模式，当前显示的是第一个
+  const currentPendingEdit = pendingAgentEdits[0] || null;
+
   const handleConfirmAgentEdit = () => {
-    if (vscode && pendingAgentEdit) {
-      vscode.postMessage({ command: 'confirmAgentEdit', editId: pendingAgentEdit.editId } as WebViewRequest);
+    if (vscode && currentPendingEdit) {
+      vscode.postMessage({ command: 'confirmAgentEdit', editId: currentPendingEdit.editId } as WebViewRequest);
     }
   };
 
   const handleRejectAgentEdit = () => {
-    if (vscode && pendingAgentEdit) {
-      vscode.postMessage({ command: 'rejectAgentEdit', editId: pendingAgentEdit.editId } as WebViewRequest);
+    if (vscode && currentPendingEdit) {
+      vscode.postMessage({ command: 'rejectAgentEdit', editId: currentPendingEdit.editId } as WebViewRequest);
     }
   };
 
@@ -514,12 +577,38 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
   };
 
   const handleRegenerate = () => {
-    if (vscode && messages.length >= 2) {
-      const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
-      if (lastUserMsg) {
-        vscode.postMessage({ command: 'sendMessage', text: lastUserMsg.content, context, thinkingEnabled, agentMode } as WebViewRequest);
+    // §4.9: 之前直接重发 sendMessage 既不清旧 assistant 消息也不设 isProcessing，
+    // 导致 UI 上旧的 AI 回答仍然保留、且用户在生成期间能继续输入。
+    if (!vscode || isProcessing || messages.length === 0) return;
+    const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
+    if (!lastUserMsg) return;
+
+    // 删除最后一条 assistant 消息（如果有），并补上占位提示
+    setMessages((prev) => {
+      const arr = [...prev];
+      for (let i = arr.length - 1; i >= 0; i--) {
+        if (arr[i].role === 'assistant') {
+          arr.splice(i, 1);
+          break;
+        }
       }
+      arr.push({
+        id: `placeholder-${Date.now()}`,
+        role: 'assistant',
+        content: '',
+        timestamp: Date.now(),
+        placeholder: true,
+        streaming: true,
+      });
+      return arr;
+    });
+    setIsProcessing(true);
+    // 新 Agent 任务开始时清空上一次的执行记录
+    if (agentMode) {
+      setAgentStatus(null);
+      setToolCalls([]);
     }
+    vscode.postMessage({ command: 'sendMessage', text: lastUserMsg.content, context, thinkingEnabled, agentMode } as WebViewRequest);
   };
 
   /** 让 LLM 继续完成被截断的回答 */
@@ -807,14 +896,20 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
       )}
 
       {/* Agent 编辑确认弹窗 */}
-      {pendingAgentEdit && (
+      {currentPendingEdit && (
         <DiffConfirmDialog
-          filePath={pendingAgentEdit.filePath}
-          original={pendingAgentEdit.original}
-          modified={pendingAgentEdit.modified}
+          filePath={currentPendingEdit.filePath}
+          original={currentPendingEdit.original}
+          modified={currentPendingEdit.modified}
           onConfirm={handleConfirmAgentEdit}
           onReject={handleRejectAgentEdit}
         />
+      )}
+      {/* Bug 4: 多个 pending 编辑时的队列计数器 */}
+      {pendingAgentEdits.length > 1 && (
+        <div style={{ position: 'fixed', bottom: '220px', right: '24px', background: 'var(--vscode-statusBarItem-warningBackground, #fffce0)', color: 'var(--vscode-statusBarItem-warningForeground, #333)', padding: '4px 12px', borderRadius: '4px', fontSize: '12px', zIndex: 1000, boxShadow: '0 2px 8px rgba(0,0,0,0.15)' }}>
+          还有 {pendingAgentEdits.length - 1} 个编辑待确认
+        </div>
       )}
 
       {/* Input bar */}
@@ -910,6 +1005,18 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
                 onClick={() => setThinkingEnabled(!thinkingEnabled)}
               >
                 <Brain size={15} strokeWidth={1.8} />
+              </button>
+              {/* §4.4: toggleEditMode 之前在前端无触发入口（死代码），AI 编辑模式只能由后端推送设置。
+                  这里补一个按钮，让用户能主动切换 编辑模式 ↔ 只读模式。
+                  仅发命令到 Extension Host，由后端走完整链路后回推 aiEditMode 消息同步回前端 state。 */}
+              <button
+                className={`input-icon-btn ${aiEditMode ? 'input-icon-btn--active' : ''}`}
+                title={aiEditMode ? '编辑模式已开启（AI 可直接修改代码）' : '只读模式已开启（AI 仅提供建议，不修改代码）'}
+                onClick={() => {
+                  vscode?.postMessage({ command: 'toggleEditMode' } as WebViewRequest);
+                }}
+              >
+                <Pencil size={15} strokeWidth={1.8} />
               </button>
               <button
                 className={`input-icon-btn ${autoAccept ? 'input-icon-btn--active' : ''}`}

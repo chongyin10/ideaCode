@@ -158,13 +158,14 @@ ${toolSchemas}
         return await this.llmClient.chatStream(messages, requestOptions);
       }
       return await this.llmClient.chat(messages, requestOptions);
-    } catch (err) {
-      // 清理 listener（避免内存泄漏）
+    } finally {
+      // 无论成功/失败都清理 listener。原代码只在 catch 中清理，
+      // 正常完成后 listener 仍挂在 llmClient 上，若 llmClient 被复用
+      // 触发 emit('token')，旧 listener 会被错误调用。
       if (stream && this._boundTokenListener === onToken) {
         try { this.llmClient.off('token', this._boundTokenListener); } catch { /* ignore */ }
         this._boundTokenListener = null;
       }
-      throw err;
     }
   }
 
@@ -211,11 +212,21 @@ ${toolSchemas}
    * 将 tool 结果格式化为 message 追加到对话
    */
   buildToolResultMessage(toolName, result, callId = `call-${Date.now()}`) {
+    // B6: prompt-based 模式（anthropic/ollama）不支持 role: 'tool'，
+    // _buildRequestBody 会把 tool 消息当作未知角色处理，导致 API 报错或被丢弃。
+    // 改用 user 角色 + <tool_result> 文本协议，让 LLM 在文本流中读取工具结果。
+    if (this.supportsNativeToolCalling()) {
+      return {
+        role: 'tool',
+        content: JSON.stringify(result),
+        tool_call_id: callId,
+        name: toolName,
+      };
+    }
+    // prompt-based：用 user 角色 + tool_result 标签
     return {
-      role: 'tool',
-      content: JSON.stringify(result),
-      tool_call_id: callId,
-      name: toolName,
+      role: 'user',
+      content: `<tool_result>\n${JSON.stringify(result)}\n</tool_result>`,
     };
   }
 
@@ -223,22 +234,34 @@ ${toolSchemas}
    * 将 tool_call 格式化为 assistant message 追加到对话（native 格式）
    */
   buildToolCallMessage(toolName, args, callId = `call-${Date.now()}`, reasoningContent = '') {
-    const msg = {
-      role: 'assistant',
-      content: '',
-      tool_calls: [{
-        id: callId,
-        type: 'function',
-        function: {
-          name: toolName,
-          arguments: JSON.stringify(args),
-        },
-      }],
-    };
-    if (reasoningContent) {
-      msg.reasoning_content = reasoningContent;
+    // B5: prompt-based 模式（anthropic/ollama）不支持 tool_calls 数组，
+    // _buildRequestBody 仅取 { role, content }，tool_calls 会被丢弃，
+    // 导致 LLM 多轮对话看不到自己上一步的 tool_call，无法正确续接。
+    // 改为把 tool_call 渲染为文本协议放入 content。
+    if (this.supportsNativeToolCalling()) {
+      const msg = {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{
+          id: callId,
+          type: 'function',
+          function: {
+            name: toolName,
+            arguments: JSON.stringify(args),
+          },
+        }],
+      };
+      if (reasoningContent) {
+        msg.reasoning_content = reasoningContent;
+      }
+      return msg;
     }
-    return msg;
+    // prompt-based：把 tool_call 渲染为 system prompt 约定的文本协议
+    const toolCallText = `${JSON.stringify({ name: toolName, arguments: args }, null, 2)}`;
+    const content = reasoningContent
+      ? `${reasoningContent}\n\n${toolCallText}`
+      : toolCallText;
+    return { role: 'assistant', content };
   }
 }
 

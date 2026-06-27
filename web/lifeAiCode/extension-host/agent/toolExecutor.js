@@ -94,8 +94,24 @@ class ToolExecutor {
 
     for (const [key, value] of Object.entries(args)) {
       const prop = properties[key];
-      if (!prop) continue;
-      if (prop.type && typeof value !== prop.type && !(prop.type === 'number' && typeof value === 'number')) {
+      if (!prop || !prop.type) continue;
+      // 补充 array / object 类型的校验：
+      // typeof [] === 'object'，原逻辑 `typeof value !== prop.type` 会把数组误判为类型错误。
+      if (prop.type === 'array') {
+        if (!Array.isArray(value)) {
+          return { valid: false, error: `参数 ${key} 类型错误，期望 array` };
+        }
+      } else if (prop.type === 'object') {
+        if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+          return { valid: false, error: `参数 ${key} 类型错误，期望 object` };
+        }
+      } else if (prop.type === 'number') {
+        // Bug 20: typeof NaN === 'number' 为 true，原校验会让 NaN / Infinity 通过，
+        // 导致后续工具（如分页 limit: NaN）产生异常。用 Number.isFinite 严格拦截。
+        if (typeof value !== 'number' || !Number.isFinite(value)) {
+          return { valid: false, error: `参数 ${key} 类型错误，期望有限数值（number）` };
+        }
+      } else if (typeof value !== prop.type) {
         return { valid: false, error: `参数 ${key} 类型错误，期望 ${prop.type}` };
       }
     }
@@ -137,10 +153,14 @@ class ToolExecutor {
   _sanitizeResult(result) {
     if (!result || typeof result !== 'object') return result;
     const clone = { ...result };
-    // content / output / tree 等大字段保留但限制长度
-    for (const key of ['content', 'output', 'tree']) {
-      if (typeof clone[key] === 'string' && clone[key].length > 1000) {
-        clone[key] = clone[key].slice(0, 1000) + '\n...（已截断）...';
+    // 大字段保留但限制长度/数量，避免推给 WebView 的消息过大导致渲染卡顿
+    // matches（searchFiles 返回）可能包含大量匹配项，单独处理数组截断
+    for (const key of ['content', 'output', 'tree', 'matches']) {
+      const v = clone[key];
+      if (typeof v === 'string' && v.length > 1000) {
+        clone[key] = v.slice(0, 1000) + '\n...（已截断）...';
+      } else if (Array.isArray(v) && v.length > 20) {
+        clone[key] = v.slice(0, 20).concat([`...（共 ${v.length} 项，已截断）...`]);
       }
     }
     return clone;

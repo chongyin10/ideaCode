@@ -9,7 +9,7 @@
  * - 路径必须在工作区内
  */
 
-const fs = require('fs');
+const fs = require('fs').promises;
 const path = require('path');
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 
@@ -41,8 +41,18 @@ async function writeFile(args, context) {
     return { success: false, error: `拒绝写入工作区外的文件: ${filePathInput}` };
   }
 
-  const fileExists = fs.existsSync(targetPath);
-  const original = fileExists ? fs.readFileSync(targetPath, 'utf-8') : '';
+  // Bug 15: 使用异步 fs 操作避免阻塞 Extension Host 事件循环
+  let fileExists = false;
+  let original = '';
+  try {
+    original = await fs.readFile(targetPath, 'utf-8');
+    fileExists = true;
+  } catch (err) {
+    if (err.code !== 'ENOENT') {
+      return { success: false, error: `无法读取文件: ${err.message}` };
+    }
+    // ENOENT → 文件不存在，fileExists = false
+  }
 
   const editId = `agent-write-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 

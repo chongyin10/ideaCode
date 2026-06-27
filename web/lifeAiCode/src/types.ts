@@ -288,6 +288,9 @@ export type ExtensionMessage =
   | { type: 'agentStatus'; status: 'running' | 'done' | 'error' | 'cancelled'; message: string }
   | { type: 'agentEditPending'; editId: string; filePath: string; original: string; modified: string }
   | { type: 'agentEditStatus'; editId: string; status: 'applied' | 'rejected' }
+  // Bug 21: extension.js / agentRuntime.js 会发送 step 进度消息，但原 ExtensionMessage
+  // 联合类型未声明该类型，导致 ChatPanel 无法类型安全地处理。补充声明。
+  | { type: 'step'; stepType: StepType; target?: string; params?: string; label?: string; status: StepStatus }
   | { type: 'error'; message: string };
 
 /* ─── VSCode API 类型 ─── */

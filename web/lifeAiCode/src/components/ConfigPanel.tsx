@@ -58,26 +58,14 @@ export function ConfigPanel({
             ? { ...prev, verified: msg.success, connectionStatus: status }
             : prev
         );
-      } else if (msg?.type === 'hostStopped' && testingId) {
-        // Extension Host 重启/退出时，重置当前测试状态
-        setTestingId(null);
-        const status: LlmConfig['connectionStatus'] = 'error';
-        const message = 'Extension Host 已重启，请重新测试连接';
-        setTestResult({ success: false, message, configId: testingId });
-        const next = configsRef.current.map((c) =>
-          c.id === testingId ? { ...c, verified: false, connectionStatus: status } : c
-        );
-        onConfigsChangeRef.current(next);
-        setEditing((prev) =>
-          prev && prev.id === testingId
-            ? { ...prev, verified: false, connectionStatus: status }
-            : prev
-        );
       }
+      // §4.2: 原 hostStopped 分支已删除 — Extension Host 重启时 WebView 会随之销毁重建，
+      // ConfigPanel 重新挂载后 testingId 自然重置为 null，该处理器永远不会被触发（死代码）。
     };
     window.addEventListener('message', handler);
     return () => window.removeEventListener('message', handler);
-  }, [testingId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const startNew = () => {
     setEditing(defaultLlmConfig());
