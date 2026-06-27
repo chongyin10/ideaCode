@@ -673,7 +673,10 @@ const ExplorerContent = () => {
             for (const ps of parentSources) {
               notifyChange(ps);
             }
-      dispatch(refreshAllFilePaths());
+            dispatch(refreshAllFilePaths());
+            if (rootSource) {
+              dispatch(refreshDirectory(rootSource));
+            }
           }),
         }
       );

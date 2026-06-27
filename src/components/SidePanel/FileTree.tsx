@@ -196,7 +196,7 @@ const FileTree = memo(({
 
     if (lastOperation.targets.some((t) => isSameSource(entry.source, t))) {
       if (expanded) {
-        refreshChildren();
+        refreshChildren().catch(() => {});
       } else {
         setChildren([]); // 折叠状态：清空缓存，展开时重新加载
       }
