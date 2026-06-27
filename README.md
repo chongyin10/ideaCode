@@ -486,10 +486,12 @@ ideacode/
 4. 将截图放入 `docs/images/` 目录
 5. 提交 PR
 
-📜 版权声明 / License
-本项目代码仅供个人学习、研究或非商业用途使用。
-✅ 允许：查看源码、个人学习研究、非商业性质的交流。
-❌ 禁止：未经书面授权，严禁将本项目用于任何商业用途（包括但不限于作为商业产品的一部分、出售、出租、或用于企业内部盈利性项目）。
-如需商业授权或合作，请联系：
-📧 mailto:chongyin_good@163.com | mailto:mimicy710@gmail.com
+### 版权声明 / License
+1. 本项目代码仅供个人学习、研究或非商业用途使用
+- ✅ 允许：查看源码、个人学习研究、非商业性质的交流
+- ❌ 禁止：未经书面授权，严禁将本项目用于任何商业用途（包括但不限于作为商业产品的一部分、出售、出租、或用于企业内部盈利性项目
+- 如需商业授权或合作，请联系：📧 mailto:chongyin_good@163.com | mailto:mimicy710@gmail.com
+
+```
 ⚠️ Legal Notice: All Rights Reserved. Unauthorized commercial use is strictly prohibited and will be subject to legal action.
+```
