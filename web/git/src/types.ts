@@ -7,6 +7,15 @@ export interface GitChange {
   originalPath: string | null;
   indexStatus: StatusKind;
   workingStatus: StatusKind;
+  /**
+   * 聚合条目标记：当 staged/changes 中存在大量位于默认忽略目录
+   * （node_modules/dist/build 等）下的第三方文件时，会聚合成单条
+   * 「目录/ (N 个文件)」条目，避免 UI 列出几万行。
+   * 聚合条目不可执行单文件操作（打开/diff/暂存/取消暂存）。
+   */
+  aggregated?: boolean;
+  /** 聚合条目包含的文件个数（仅当 aggregated=true 时有效） */
+  count?: number;
 }
 
 export interface GitStatus {

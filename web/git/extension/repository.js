@@ -13,7 +13,7 @@ const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
 const { execGit, git, GitError } = require('./gitCLI');
-const { parseStatus } = require('./statusParser');
+const { parseStatus, DEFAULT_IGNORE_DIRS } = require('./statusParser');
 
 // 兜底轮询间隔：fs.watch 已覆盖 99% 实时场景，这里仅作 fs.watch 漏报兜底。
 // 从 2s 放宽到 30s，避免与 fs.watch 重复触发导致 git status 子进程执行 2~3 次/保存。
@@ -254,7 +254,14 @@ class Repository {
   }
 
   async stageAll() {
-    const { code, stderr } = await this._execGitMutating(['add', '-A']);
+    // 用 pathspec 显式排除默认忽略目录（node_modules/dist/build 等），
+    // 避免 git add -A 把第三方依赖几万个文件全部 stage 进暂存区。
+    // 与 statusParser.DEFAULT_IGNORE_DIRS 保持一致，确保 stageAll 行为与
+    // 源代码管理面板的未跟踪文件过滤口径一致。
+    // pathspec `:!./dir` 语法在 git 1.9+ 支持，排除仓库根下的顶层目录。
+    const excludeArgs = [...DEFAULT_IGNORE_DIRS].map((d) => `:!./${d}`);
+    const args = ['add', '-A', '--', '.', ...excludeArgs];
+    const { code, stderr } = await this._execGitMutating(args);
     if (code !== 0) throw new GitError(`stageAll failed: ${stderr}`);
     await this.refresh();
     this._fastPoll();
@@ -536,26 +543,27 @@ class Repository {
 /* ─── 仓库根检测 ─── */
 
 /**
- * 向上查找 git 仓库根
+ * 检测给定目录自身是否为 git 仓库根。
+ *
+ * 不再向上级目录遍历查找 .git，避免用户打开一个非 git 项目时，
+ * 错误地关联到其父目录（如桌面、文档或某个大工作区）的 git 仓库，
+ * 从而显示上一个/其他项目的 git 变更记录。
+ *
  * @param {string} startPath
  * @returns {string|null}
  */
 function findRepoRoot(startPath) {
-  let dir = path.resolve(startPath);
-  while (true) {
-    const gitPath = path.join(dir, '.git');
-    try {
-      const stat = fs.statSync(gitPath);
-      if (stat.isDirectory() || stat.isFile()) {
-        return dir;
-      }
-    } catch {
-      // 不存在，继续向上
+  const dir = path.resolve(startPath);
+  const gitPath = path.join(dir, '.git');
+  try {
+    const stat = fs.statSync(gitPath);
+    if (stat.isDirectory() || stat.isFile()) {
+      return dir;
     }
-    const parent = path.dirname(dir);
-    if (parent === dir) return null;
-    dir = parent;
+  } catch {
+    // 当前目录不是 git 仓库根
   }
+  return null;
 }
 
 module.exports = { Repository, findRepoRoot, GitError };

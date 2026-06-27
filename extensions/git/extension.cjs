@@ -371,6 +371,35 @@ var require_statusParser = __commonJS({
       const top = p.split("/")[0];
       return DEFAULT_IGNORE_DIRS.has(top);
     }
+    function aggregateIgnored(changes) {
+      if (!changes || changes.length === 0) return changes;
+      const result = [];
+      const aggregatedMap = /* @__PURE__ */ new Map();
+      for (const c of changes) {
+        const top = (c.path || "").split("/")[0];
+        if (DEFAULT_IGNORE_DIRS.has(top)) {
+          const entry = aggregatedMap.get(top);
+          if (entry) {
+            entry.count += 1;
+          } else {
+            aggregatedMap.set(top, { count: 1, sample: c });
+          }
+        } else {
+          result.push(c);
+        }
+      }
+      for (const [top, { count, sample }] of aggregatedMap) {
+        result.push({
+          path: `${top}/`,
+          originalPath: null,
+          indexStatus: sample.indexStatus,
+          workingStatus: sample.workingStatus,
+          aggregated: true,
+          count
+        });
+      }
+      return result;
+    }
     function parseStatus(output) {
       const status = {
         staged: [],
@@ -474,6 +503,8 @@ var require_statusParser = __commonJS({
           }
         }
       }
+      status.staged = aggregateIgnored(status.staged);
+      status.changes = aggregateIgnored(status.changes);
       return status;
     }
     function toLegacyShape(status) {
@@ -498,7 +529,7 @@ var require_statusParser = __commonJS({
     function statusToCode2(s) {
       return s[0]?.toUpperCase() || "M";
     }
-    module2.exports = { parseStatus, toLegacyShape };
+    module2.exports = { parseStatus, toLegacyShape, DEFAULT_IGNORE_DIRS, isDefaultIgnored, aggregateIgnored };
   }
 });
 
@@ -509,7 +540,7 @@ var require_repository = __commonJS({
     var fsp = fs2.promises;
     var path2 = require("path");
     var { execGit, git, GitError: GitError2 } = require_gitCLI();
-    var { parseStatus } = require_statusParser();
+    var { parseStatus, DEFAULT_IGNORE_DIRS } = require_statusParser();
     var STATUS_POLL_INTERVAL = 3e4;
     var FAST_POLL_INTERVAL = 500;
     var FAST_POLL_DURATION = 5e3;
@@ -717,7 +748,9 @@ var require_repository = __commonJS({
         return { success: true };
       }
       async stageAll() {
-        const { code, stderr } = await this._execGitMutating(["add", "-A"]);
+        const excludeArgs = [...DEFAULT_IGNORE_DIRS].map((d) => `:!./${d}`);
+        const args = ["add", "-A", "--", ".", ...excludeArgs];
+        const { code, stderr } = await this._execGitMutating(args);
         if (code !== 0) throw new GitError2(`stageAll failed: ${stderr}`);
         await this.refresh();
         this._fastPoll();
@@ -979,20 +1012,16 @@ var require_repository = __commonJS({
       }
     };
     function findRepoRoot2(startPath) {
-      let dir = path2.resolve(startPath);
-      while (true) {
-        const gitPath = path2.join(dir, ".git");
-        try {
-          const stat = fs2.statSync(gitPath);
-          if (stat.isDirectory() || stat.isFile()) {
-            return dir;
-          }
-        } catch {
+      const dir = path2.resolve(startPath);
+      const gitPath = path2.join(dir, ".git");
+      try {
+        const stat = fs2.statSync(gitPath);
+        if (stat.isDirectory() || stat.isFile()) {
+          return dir;
         }
-        const parent = path2.dirname(dir);
-        if (parent === dir) return null;
-        dir = parent;
+      } catch {
       }
+      return null;
     }
     module2.exports = { Repository: Repository2, findRepoRoot: findRepoRoot2, GitError: GitError2 };
   }
@@ -1172,6 +1201,22 @@ function pushLoading(rootPath) {
   } catch {
   }
 }
+function pushClear() {
+  if (!webviewPanel) return;
+  try {
+    webviewPanel.webview.postMessage({
+      type: "state",
+      rootPath: null,
+      repoRoot: null,
+      isRepo: false,
+      gitAvailable,
+      state: null,
+      lastError: null,
+      loading: true
+    });
+  } catch {
+  }
+}
 async function openRepository(rootPath) {
   if (!rootPath) {
     closeRepository();
@@ -1221,6 +1266,24 @@ function closeRepository() {
   currentRootPath = null;
   pushState();
 }
+async function syncWorkspace() {
+  try {
+    const rootPath = await getCurrentRootPath();
+    if (rootPath && rootPath !== currentRootPath) {
+      await openRepository(rootPath);
+    } else if (!rootPath && currentRepo) {
+      closeRepository();
+    } else {
+      pushState();
+      pushBranches();
+      pushLog();
+      pushStashes();
+    }
+  } catch (e) {
+    console.error("[Git Extension] sync workspace on ready failed:", e.message);
+    pushState();
+  }
+}
 function scheduleOpenForRoot(rootPath) {
   if (workspaceChangeTimer) clearTimeout(workspaceChangeTimer);
   workspaceChangeTimer = setTimeout(() => {
@@ -1249,11 +1312,14 @@ async function handleWebviewMessage(message) {
   try {
     switch (message.command) {
       case "ready":
-        pushState();
-        pushBranches();
-        pushLog();
-        pushStashes();
         reply({ success: true });
+        if (currentRepo) {
+          currentRepo.dispose();
+          currentRepo = null;
+          currentRootPath = null;
+        }
+        pushClear();
+        syncWorkspace();
         break;
       case "refresh":
         if (currentRepo) {
@@ -1452,6 +1518,32 @@ async function handleWebviewMessage(message) {
         try {
           await sendRpc("git.clone", { url, targetPath });
           await openRepository(targetPath);
+          reply({ success: true });
+        } catch (e) {
+          reply({ success: false, error: e.message });
+        }
+        break;
+      }
+      case "associateRemote": {
+        const { url } = message;
+        if (!url) return reply({ success: false, error: "\u7F3A\u5C11\u8FDC\u7A0B\u4ED3\u5E93\u5730\u5740" });
+        if (!currentRootPath) return reply({ success: false, error: "\u6CA1\u6709\u5DE5\u4F5C\u533A" });
+        try {
+          const { execGit } = require_gitCLI();
+          if (!currentRepo) {
+            await execInit(currentRootPath);
+          }
+          try {
+            await execGit(["remote", "remove", "origin"], { cwd: currentRootPath });
+          } catch {
+          }
+          const addRes = await execGit(["remote", "add", "origin", url], { cwd: currentRootPath });
+          if (addRes.code !== 0) throw new Error(addRes.stderr || "git remote add \u5931\u8D25");
+          try {
+            await execGit(["fetch", "origin"], { cwd: currentRootPath, timeout: 6e4 });
+          } catch {
+          }
+          await openRepository(currentRootPath);
           reply({ success: true });
         } catch (e) {
           reply({ success: false, error: e.message });

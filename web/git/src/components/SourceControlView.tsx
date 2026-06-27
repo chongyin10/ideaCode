@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   GitBranch,
   GitPullRequest,
@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import { useGitStore } from '../store/gitStore';
 import { sendRpc } from '../api';
-import type { GitChange } from '../types';
+import type { GitChange, GitRemote } from '../types';
 import RepositoryHeader from './RepositoryHeader';
 import CommitBox from './CommitBox';
 import ChangesSection from './ChangesSection';
@@ -37,6 +37,43 @@ export default function SourceControlView() {
       return () => clearTimeout(t);
     }
   }, [actionError]);
+
+  /* ─── 远程仓库检测：无 remote 时屏蔽批量操作（避免未关联远程就 stage 产生暂存） ─── */
+  const [remotes, setRemotes] = useState<GitRemote[]>([]);
+  const prevBusyRef = useRef(false);
+
+  const loadRemotes = async () => {
+    try {
+      const res = (await sendRpc('getRemotes')) as { success?: boolean; remotes?: GitRemote[] } | undefined;
+      if (res && Array.isArray(res.remotes)) {
+        setRemotes(res.remotes);
+      }
+    } catch {
+      // 忽略：remotes 检测失败不影响主流程
+    }
+  };
+
+  // isRepo 变化（初始化仓库/关联远程后）及挂载时获取 remotes
+  useEffect(() => {
+    if (isRepo) {
+      loadRemotes();
+    } else {
+      setRemotes([]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isRepo]);
+
+  // busy 结束（操作完成，尤其 associateRemote 后）刷新 remotes
+  useEffect(() => {
+    if (prevBusyRef.current && !busy) {
+      loadRemotes();
+    }
+    prevBusyRef.current = busy;
+  }, [busy]);
+
+  const hasRemote = remotes.length > 0;
+  // 未关联远程时屏蔽所有批量/单文件改动操作，避免产生暂存或数据变更
+  const actionsDisabled = !hasRemote;
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -219,6 +256,17 @@ export default function SourceControlView() {
     }
   };
 
+  const handleAssociateRemote = async (url: string) => {
+    setBusy(true);
+    try {
+      await sendRpc('associateRemote', { url });
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleOpenFile = (path: string, staged = false) => {
     sendRpc('openFile', { path, staged }).catch((e) =>
       setActionError(e instanceof Error ? e.message : String(e))
@@ -253,7 +301,7 @@ export default function SourceControlView() {
   }
 
   if (!isRepo) {
-    return <InitState rootPath={rootPath} onInit={handleInit} onOpenRepo={handleOpenRepo} busy={busy} />;
+    return <InitState rootPath={rootPath} onInit={handleInit} onOpenRepo={handleOpenRepo} onAssociateRemote={handleAssociateRemote} busy={busy} />;
   }
 
   if (!status) {
@@ -267,7 +315,7 @@ export default function SourceControlView() {
 
   return (
     <div className="git-sc">
-      <RepositoryHeader status={status} rootPath={rootPath} onCheckout={handleCheckout} onCreateBranch={handleCreateBranch} />
+      <RepositoryHeader status={status} rootPath={rootPath} onCheckout={handleCheckout} onCreateBranch={handleCreateBranch} onAssociateRemote={handleAssociateRemote} remotes={remotes} busy={busy} />
 
       {(actionError || lastError) && (
         <div className="git-sc__error" onClick={() => { setActionError(null); }}>
@@ -297,6 +345,7 @@ export default function SourceControlView() {
         badge={status.staged.length}
         items={status.staged}
         kind="staged"
+        actionsDisabled={actionsDisabled}
         collapsible
         defaultOpen
         emptyText="没有已暂存的更改"
@@ -314,6 +363,7 @@ export default function SourceControlView() {
         badge={status.changes.length}
         items={status.changes}
         kind="changes"
+        actionsDisabled={actionsDisabled}
         collapsible
         defaultOpen
         emptyText="工作区干净"
@@ -347,6 +397,7 @@ export default function SourceControlView() {
           badge={status.untracked.length}
           items={status.untracked}
           kind="untracked"
+          actionsDisabled={actionsDisabled}
           collapsible
           defaultOpen
           emptyText="没有未跟踪的文件"

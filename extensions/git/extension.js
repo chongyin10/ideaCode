@@ -224,6 +224,30 @@ function pushLoading(rootPath) {
   } catch { /* ignore */ }
 }
 
+/**
+ * 推送清空状态：WebView（重新）挂载时立即清空旧数据。
+ *
+ * 场景：IDE 重启 / 窗口重开后 webview 重建，此时 gitStore 已重置（无持久化），
+ * 但 syncWorkspace 是异步的（含 getCurrentRootPath RPC + openRepository），
+ * 在其完成前若 Extension Host 残留的定时器/事件推送了旧项目的 state，
+ * webview 会短暂显示旧数据。先推送清空状态可避免这一窗口期。
+ */
+function pushClear() {
+  if (!webviewPanel) return;
+  try {
+    webviewPanel.webview.postMessage({
+      type: 'state',
+      rootPath: null,
+      repoRoot: null,
+      isRepo: false,
+      gitAvailable,
+      state: null,
+      lastError: null,
+      loading: true,
+    });
+  } catch { /* ignore */ }
+}
+
 async function openRepository(rootPath) {
   if (!rootPath) {
     closeRepository();
@@ -289,6 +313,39 @@ function closeRepository() {
   pushState();
 }
 
+/**
+ * 重新同步当前工作区并推送状态。
+ *
+ * 用于 WebView（重新）挂载（ready）时，避免推送过时的 currentRepo 缓存。
+ *
+ * 场景：IDE 重启 / 窗口重开后 webview 重建，此时 currentRepo 可能是上次会话
+ * 残留（例如 macOS 关闭窗口不退出应用、Extension Host 持续运行），直接 pushState
+ * 会让源代码管理面板显示旧项目的 git 数据。必须以当前实际工作区为准重新加载。
+ *
+ * 逻辑：
+ *   - 工作区路径已变更 → openRepository 重新加载（内部会先 closeRepository 清理旧状态）
+ *   - 工作区已清空但 currentRepo 仍残留 → closeRepository 清理
+ *   - 工作区未变 → 推送当前状态
+ */
+async function syncWorkspace() {
+  try {
+    const rootPath = await getCurrentRootPath();
+    if (rootPath && rootPath !== currentRootPath) {
+      await openRepository(rootPath);
+    } else if (!rootPath && currentRepo) {
+      closeRepository();
+    } else {
+      pushState();
+      pushBranches();
+      pushLog();
+      pushStashes();
+    }
+  } catch (e) {
+    console.error('[Git Extension] sync workspace on ready failed:', e.message);
+    pushState();
+  }
+}
+
 /* ─── 工作区变更监听 ─── */
 
 function scheduleOpenForRoot(rootPath) {
@@ -325,12 +382,24 @@ async function handleWebviewMessage(message) {
   try {
     switch (message.command) {
       case 'ready':
-        // WebView 已挂载，推送当前状态
-        pushState();
-        pushBranches();
-        pushLog();
-        pushStashes();
+        // WebView（重新）挂载：先同步清理残留 Repository，再以当前实际工作区为准重新加载。
+        //
+        // 根因：macOS 关闭窗口不退出应用、Extension Host 持续运行时，currentRepo 可能是
+        // 上次会话的残留（A 项目）。syncWorkspace 是异步的（含 getCurrentRootPath RPC +
+        // openRepository），在其 await 期间，残留 Repository 的 fs.watch / 兜底轮询定时器
+        // 可能触发 onDidChange → pushState，把 A 项目的 git 数据推送给 webview，
+        // 覆盖掉 pushClear 的清空状态——这就是「git 工作区记录与当前加载项目不一致」的源头。
+        //
+        // 修复：先同步 dispose 残留 Repository（停止其所有定时器/watcher），
+        // 再 pushClear 推送清空状态，最后 syncWorkspace 以当前 rootSource 为准重新加载。
         reply({ success: true });
+        if (currentRepo) {
+          currentRepo.dispose();
+          currentRepo = null;
+          currentRootPath = null;
+        }
+        pushClear();
+        syncWorkspace();
         break;
 
       case 'refresh':
@@ -564,6 +633,37 @@ async function handleWebviewMessage(message) {
         try {
           await sendRpc('git.clone', { url, targetPath });
           await openRepository(targetPath);
+          reply({ success: true });
+        } catch (e) {
+          reply({ success: false, error: e.message });
+        }
+        break;
+      }
+
+      case 'associateRemote': {
+        // 关联远程仓库：本地项目（可能未 init）→ git init → git remote add origin <url> → fetch
+        // 适用于"本地已有项目，想推送到已存在的远程仓库"场景。
+        const { url } = message;
+        if (!url) return reply({ success: false, error: '缺少远程仓库地址' });
+        if (!currentRootPath) return reply({ success: false, error: '没有工作区' });
+        try {
+          const { execGit } = require('./gitCLI');
+          // 1. 若还不是 git 仓库，先初始化
+          if (!currentRepo) {
+            await execInit(currentRootPath);
+          }
+          // 2. 添加远程地址：若 origin 已存在先移除，避免 "remote origin already exists" 错误
+          try {
+            await execGit(['remote', 'remove', 'origin'], { cwd: currentRootPath });
+          } catch { /* origin 可能不存在，忽略 */ }
+          const addRes = await execGit(['remote', 'add', 'origin', url], { cwd: currentRootPath });
+          if (addRes.code !== 0) throw new Error(addRes.stderr || 'git remote add 失败');
+          // 3. 拉取远程信息（让远程分支可见）；失败不阻塞关联（私有仓库可能需要认证）
+          try {
+            await execGit(['fetch', 'origin'], { cwd: currentRootPath, timeout: 60000 });
+          } catch { /* fetch 失败：关联已成功，用户可稍后手动 fetch */ }
+          // 4. 重新加载仓库，刷新 UI 状态
+          await openRepository(currentRootPath);
           reply({ success: true });
         } catch (e) {
           reply({ success: false, error: e.message });

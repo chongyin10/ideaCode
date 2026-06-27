@@ -160,6 +160,41 @@ input:focus, textarea:focus {
   min-width: 0;
 }
 
+/* ─── 关联远程仓库入口（仓库已 init 但无 remote 时显示） ─── */
+
+.git-repo-header__associate-btn {
+  flex: 0 0 auto;
+  font-size: 11px;
+  padding: 2px 8px;
+  border: 1px solid var(--vscode-input-border, transparent);
+  background: var(--vscode-button-background, #0e639c);
+  color: var(--vscode-button-foreground, #ffffff);
+}
+
+.git-repo-header__associate-btn:hover:not(:disabled) {
+  background: var(--vscode-button-hoverBackground, #1177bb);
+}
+
+.git-repo-header__associate {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px 8px;
+  border-top: 1px solid var(--vscode-sideBarSectionHeader-background, #252526);
+}
+
+.git-repo-header__input {
+  flex: 1;
+  min-width: 0;
+}
+
+.git-repo-header__associate-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
 .git-branch-btn {
   display: inline-flex;
   align-items: center;
@@ -600,6 +635,38 @@ input:focus, textarea:focus {
   text-decoration: line-through;
 }
 
+/* ─── 聚合条目（node_modules/ 等第三方目录下大量文件聚合显示） ─── */
+
+/*
+ * 聚合条目表示「某忽略目录下有 N 个文件已被 stage/修改」，
+ * 不可单文件操作（打开/diff/暂存），仅作信息展示。
+ * 视觉上用文件夹图标 + 灰色文字 + 计数标签，与普通文件行区分。
+ */
+.git-item--aggregated {
+  cursor: default;
+  opacity: 0.85;
+}
+
+.git-item--aggregated .git-item__status {
+  color: var(--vscode-descriptionForeground, #969696);
+}
+
+.git-item--aggregated .git-item__name {
+  color: var(--vscode-descriptionForeground, #969696);
+  font-style: italic;
+}
+
+.git-item__aggregate-count {
+  margin-left: 6px;
+  padding: 0 6px;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--vscode-descriptionForeground, #969696);
+  background: var(--vscode-sideBarSectionHeader-background, #2d2d2d);
+  border-radius: 8px;
+  white-space: nowrap;
+}
+
 /* ─── 空状态 ─── */
 
 .git-empty {
@@ -644,6 +711,38 @@ input:focus, textarea:focus {
   margin-top: 16px;
   flex-wrap: wrap;
   justify-content: center;
+}
+
+/* 关联远程仓库：url 输入区 */
+.git-empty__associate {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  margin-top: 16px;
+  width: 100%;
+  max-width: 360px;
+}
+
+.git-empty__input {
+  width: 100%;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--vscode-input-foreground, #cccccc);
+  background: var(--vscode-input-background, #3c3c3c);
+  border: 1px solid var(--vscode-input-border, #3c3c3c);
+  border-radius: 2px;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.git-empty__input:focus {
+  border-color: var(--vscode-focusBorder, #007fd4);
+}
+
+.git-empty__input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 /* ─── 工具类 ─── */

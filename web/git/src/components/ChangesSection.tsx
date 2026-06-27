@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ChevronRight, Plus, Minus, Undo2, FileText, Trash2, Inbox } from 'lucide-react';
+import { ChevronRight, Plus, Minus, Undo2, FileText, Trash2, Inbox, Folder } from 'lucide-react';
 import type { GitChange } from '../types';
 
 interface SectionAction {
@@ -23,6 +23,8 @@ interface Props {
   onDiscard?: (paths: string[]) => void;
   onDelete?: (paths: string[]) => void;
   onOpen?: (path: string) => void;
+  /** 未关联远程仓库时屏蔽所有改动操作（批量+单文件 stage/unstage/discard/delete），保留打开 */
+  actionsDisabled?: boolean;
 }
 
 function statusBadge(code: string) {
@@ -70,6 +72,7 @@ export default function ChangesSection({
   onDiscard,
   onDelete,
   onOpen,
+  actionsDisabled = false,
 }: Props) {
   const isEmpty = items.length === 0;
   const [open, setOpen] = useState(isEmpty ? false : defaultOpen);
@@ -94,7 +97,7 @@ export default function ChangesSection({
                 key={idx}
                 className="git-icon-btn"
                 title={a.label}
-                disabled={a.disabled}
+                disabled={a.disabled || actionsDisabled}
                 onClick={a.handler}
               >
                 {a.label === '全部暂存' && <Plus size={12} />}
@@ -111,6 +114,26 @@ export default function ChangesSection({
       {open && !isEmpty && (
         <div className="git-section__content">
           {items.map((item) => {
+            // 聚合条目：第三方目录（node_modules/ 等）下大量文件已 stage/修改时，
+            // 聚合成单条「目录/ (N 个文件)」，不可单文件操作（打开/diff/暂存/取消暂存）。
+            if (item.aggregated) {
+              const dirName = item.path.replace(/\/$/, '');
+              return (
+                <div
+                  key={item.path}
+                  className="git-item git-item--aggregated"
+                  title={`${item.path}（${item.count} 个文件，位于默认忽略目录，已聚合显示）`}
+                >
+                  <span className="git-item__status">
+                    <Folder size={12} />
+                  </span>
+                  <span className="git-item__name-row">
+                    <span className="git-item__name">{dirName}</span>
+                    <span className="git-item__aggregate-count">{item.count} 个文件</span>
+                  </span>
+                </div>
+              );
+            }
             const fileName = item.path.replace(/\/$/, '').split('/').pop() || item.path;
             const showPath = item.path !== fileName;
             return (
@@ -139,12 +162,12 @@ export default function ChangesSection({
                 {kind === 'changes' && (
                   <>
                     {onStage && (
-                      <button className="git-icon-btn" title="暂存" onClick={() => onStage([item.path])}>
+                      <button className="git-icon-btn" title="暂存" disabled={actionsDisabled} onClick={() => onStage([item.path])}>
                         <Plus size={12} />
                       </button>
                     )}
                     {onDiscard && (
-                      <button className="git-icon-btn" title="放弃" onClick={() => onDiscard([item.path])}>
+                      <button className="git-icon-btn" title="放弃" disabled={actionsDisabled} onClick={() => onDiscard([item.path])}>
                         <Undo2 size={12} />
                       </button>
                     )}
@@ -153,7 +176,7 @@ export default function ChangesSection({
                 {kind === 'staged' && (
                   <>
                     {onUnstage && (
-                      <button className="git-icon-btn" title="取消暂存" onClick={() => onUnstage([item.path])}>
+                      <button className="git-icon-btn" title="取消暂存" disabled={actionsDisabled} onClick={() => onUnstage([item.path])}>
                         <Minus size={12} />
                       </button>
                     )}
@@ -162,12 +185,12 @@ export default function ChangesSection({
                 {kind === 'untracked' && (
                   <>
                     {onStage && (
-                      <button className="git-icon-btn" title="暂存" onClick={() => onStage([item.path])}>
+                      <button className="git-icon-btn" title="暂存" disabled={actionsDisabled} onClick={() => onStage([item.path])}>
                         <Plus size={12} />
                       </button>
                     )}
                     {onDelete && (
-                      <button className="git-icon-btn" title="删除" onClick={() => onDelete([item.path])}>
+                      <button className="git-icon-btn" title="删除" disabled={actionsDisabled} onClick={() => onDelete([item.path])}>
                         <Trash2 size={12} />
                       </button>
                     )}

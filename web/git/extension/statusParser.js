@@ -74,6 +74,51 @@ function isDefaultIgnored(p) {
 }
 
 /**
+ * 把 staged/changes 列表中位于默认忽略目录（node_modules 等）下的多个文件
+ * 聚合成单条「目录/ (N 个文件)」条目。
+ *
+ * 为什么对 staged/changes 聚合而不直接过滤：
+ *   staged/changes 是已经执行过 git 命令的真实状态，直接过滤会让数据不准确
+ *   （用户看不出 node_modules 里有 N 个文件已被 stage）。
+ *   聚合成单条既保留了「有 N 个文件被 stage」的事实，又避免 UI 列出几万行。
+ *
+ * 聚合条目会标记 aggregated=true 并附带 count，UI 据此特殊渲染（不可单文件操作）。
+ *
+ * @param {Array} changes staged 或 changes 数组
+ * @returns {Array} 聚合后的数组
+ */
+function aggregateIgnored(changes) {
+  if (!changes || changes.length === 0) return changes;
+  const result = [];
+  /** @type {Map<string, { count: number, sample: any }>} */
+  const aggregatedMap = new Map();
+  for (const c of changes) {
+    const top = (c.path || '').split('/')[0];
+    if (DEFAULT_IGNORE_DIRS.has(top)) {
+      const entry = aggregatedMap.get(top);
+      if (entry) {
+        entry.count += 1;
+      } else {
+        aggregatedMap.set(top, { count: 1, sample: c });
+      }
+    } else {
+      result.push(c);
+    }
+  }
+  for (const [top, { count, sample }] of aggregatedMap) {
+    result.push({
+      path: `${top}/`,
+      originalPath: null,
+      indexStatus: sample.indexStatus,
+      workingStatus: sample.workingStatus,
+      aggregated: true,
+      count,
+    });
+  }
+  return result;
+}
+
+/**
  * @typedef {Object} GitStatusChange
  * @property {string} path        工作区路径（相对仓库根）
  * @property {string} originalPath 重命名/复制前的原始路径（如果有）
@@ -233,6 +278,13 @@ function parseStatus(output) {
     }
   }
 
+  // 对 staged/changes 中位于默认忽略目录（node_modules 等）下的文件做聚合，
+  // 避免几万个第三方文件刷爆 UI。聚合条目标记 aggregated=true 并附带 count。
+  // 注意：不在解析阶段过滤，因为 staged/changes 是已执行 git 命令的真实状态，
+  // 直接过滤会丢失「N 个文件已被 stage」的事实，导致数据不准确。
+  status.staged = aggregateIgnored(status.staged);
+  status.changes = aggregateIgnored(status.changes);
+
   return status;
 }
 
@@ -267,4 +319,4 @@ function statusToCode(s) {
   return s[0]?.toUpperCase() || 'M';
 }
 
-module.exports = { parseStatus, toLegacyShape };
+module.exports = { parseStatus, toLegacyShape, DEFAULT_IGNORE_DIRS, isDefaultIgnored, aggregateIgnored };

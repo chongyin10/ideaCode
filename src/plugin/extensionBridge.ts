@@ -110,6 +110,11 @@ export class ExtensionBridge {
   /**
    * 订阅工作区根目录变化，主动通知 Git 扩展加载仓库。
    * 消除 git 扩展 5 秒轮询延迟——用户打开文件夹后立即开始加载 git 状态。
+   *
+   * 注意：rpc 未就绪时【不】更新 lastRoot——否则 host 启动期间若 root 已变更，
+   * 会被记录成 lastRoot，后续 host 就绪后 root 不再变化，openWorkspace 不会再被
+   * 触发，导致 git 面板与当前项目结构脱节（显示上一个项目的 git 数据）。
+   * 兜底由 _flushWorkspaceRoot() 在 initialize 完成后重放一次。
    */
   private _subscribeWorkspaceRoot(): void {
     let lastRoot: string | null = null;
@@ -117,8 +122,8 @@ export class ExtensionBridge {
       const root = this.store.getState().workspace.rootSource;
       const rootPath = typeof root === 'string' ? root : null;
       if (rootPath !== lastRoot) {
-        lastRoot = rootPath;
         if (!window.electronAPI?.extension?.rpc) return;
+        lastRoot = rootPath;
         window.electronAPI.extension.rpc('ext.invoke', {
           extId: 'ideacode-git',
           method: 'openWorkspace',
@@ -126,6 +131,22 @@ export class ExtensionBridge {
         }).catch(() => { /* git 扩展可能尚未激活，忽略 */ });
       }
     });
+  }
+
+  /**
+   * host 就绪兜底：若 store 当前已有 root，但 _subscribeWorkspaceRoot 因 rpc 未就绪被跳过，
+   * 在此主动通知一次 openWorkspace，确保 git 面板与当前项目结构一致。
+   * openWorkspace 内部对相同 rootPath 会早退，重复调用是安全的。
+   */
+  private _flushWorkspaceRoot(): void {
+    if (!window.electronAPI?.extension?.rpc) return;
+    const root = this.store.getState().workspace.rootSource;
+    const rootPath = typeof root === 'string' ? root : null;
+    window.electronAPI.extension.rpc('ext.invoke', {
+      extId: 'ideacode-git',
+      method: 'openWorkspace',
+      args: [{ path: rootPath }],
+    }).catch(() => { /* ignore */ });
   }
 
   /**
@@ -192,6 +213,11 @@ export class ExtensionBridge {
 
     this.isReady = true;
     console.log('[ExtensionBridge] 扩展桥接已初始化', this.isReady);
+
+    // host 就绪后兜底：若 host 启动期间 root 已变更但 rpc 未就绪，
+    // _subscribeWorkspaceRoot 已被跳过。此处主动重放一次，确保 git 面板
+    // 与当前项目结构一致（避免显示上一个项目的 git 缓存数据）。
+    this._flushWorkspaceRoot();
   }
 
   private async _waitForHostReady(timeout = 10000): Promise<void> {

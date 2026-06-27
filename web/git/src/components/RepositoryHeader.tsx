@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { GitBranch, ChevronDown, Plus } from 'lucide-react';
-import type { GitStatus } from '../types';
+import { GitBranch, ChevronDown, Plus, Link2, Loader2 } from 'lucide-react';
+import type { GitStatus, GitRemote } from '../types';
 import { useGitStore } from '../store/gitStore';
 import { sendRpc } from '../api';
 import { branchPickerEvents } from '../utils/events';
@@ -11,14 +11,35 @@ interface Props {
   rootPath: string;
   onCheckout: (name: string) => void;
   onCreateBranch: (name: string) => void;
+  /** 关联远程仓库回调（项目已 init 但无 remote 时使用） */
+  onAssociateRemote?: (url: string) => void;
+  /** 远程仓库列表（由父级 SourceControlView 检测并传入，空表示未关联远程） */
+  remotes: GitRemote[];
+  /** 父级是否正在执行操作 */
+  busy?: boolean;
 }
 
-export default function RepositoryHeader({ status, rootPath, onCheckout, onCreateBranch }: Props) {
+export default function RepositoryHeader({ status, rootPath, onCheckout, onCreateBranch, onAssociateRemote, remotes, busy }: Props) {
   const branches = useGitStore((s) => s.branches);
   const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
   const ref = useRef<HTMLDivElement>(null);
+
+  /* ─── 关联远程仓库入口（remotes 由父级检测传入，为空时显示入口） ─── */
+  const [associateMode, setAssociateMode] = useState(false);
+  const [remoteUrl, setRemoteUrl] = useState('');
+
+  const submitAssociate = () => {
+    const trimmed = remoteUrl.trim();
+    if (!trimmed || busy) return;
+    onAssociateRemote?.(trimmed);
+    setRemoteUrl('');
+    setAssociateMode(false);
+  };
+
+  const hasRemote = remotes.length > 0;
+  const showAssociateEntry = !hasRemote && !!onAssociateRemote;
 
   // 点击下拉框外部关闭
   useEffect(() => {
@@ -103,6 +124,17 @@ export default function RepositoryHeader({ status, rootPath, onCheckout, onCreat
         <span className="git-repo-header__name" title={rootPath}>
           源代码管理
         </span>
+        {showAssociateEntry && !associateMode && (
+          <button
+            className="git-btn git-repo-header__associate-btn"
+            onClick={() => setAssociateMode(true)}
+            disabled={busy}
+            title="当前仓库尚未关联远程仓库，点击关联"
+          >
+            <Link2 size={12} />
+            <span>关联远程仓库</span>
+          </button>
+        )}
         <button className="git-branch-btn" onClick={() => setOpen((v) => !v)} title="切换分支">
           <GitBranch size={12} />
           <span>{displayName}</span>
@@ -115,6 +147,47 @@ export default function RepositoryHeader({ status, rootPath, onCheckout, onCreat
           <ChevronDown size={12} className={open ? 'git-rotated' : ''} />
         </button>
       </div>
+
+      {associateMode && showAssociateEntry && (
+        <div className="git-repo-header__associate">
+          <input
+            className="git-repo-header__input"
+            type="text"
+            placeholder="https://github.com/user/repo.git"
+            value={remoteUrl}
+            onChange={(e) => setRemoteUrl(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') submitAssociate();
+              if (e.key === 'Escape') {
+                setAssociateMode(false);
+                setRemoteUrl('');
+              }
+            }}
+            autoFocus
+            disabled={busy}
+          />
+          <div className="git-repo-header__associate-actions">
+            <button
+              className="git-btn git-btn--primary"
+              onClick={submitAssociate}
+              disabled={busy || !remoteUrl.trim()}
+            >
+              {busy ? <Loader2 size={12} className="git-spin" /> : <Link2 size={12} />}
+              <span>关联</span>
+            </button>
+            <button
+              className="git-btn"
+              onClick={() => {
+                setAssociateMode(false);
+                setRemoteUrl('');
+              }}
+              disabled={busy}
+            >
+              <span>取消</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {open && (
         <div className="git-branch-popover">
