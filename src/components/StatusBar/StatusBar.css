@@ -106,8 +106,14 @@
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
   max-height: 320px;
   overflow-y: auto;
-  z-index: 1000;
-  min-width: 220px;
+  /* z-index 必须高于所有面板（RightPanel=1000, SidePanel modal=9999, QuickOpen=1000），
+     仅低于全局浮层 ContextMenu/ModalWebview/TerminalModal=10000，避免被遮罩 */
+  z-index: 10001;
+  /* 宽度自适应：min 限制最小可读宽度，max 限制不超出视口；
+     分支名长时自动扩展，短时不会过宽 */
+  min-width: 260px;
+  max-width: min(480px, 80vw);
+  width: max-content;
   padding: 4px 0;
   transform-origin: bottom left;
 }
@@ -270,6 +276,27 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.status-bar__branch-ab {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.status-bar__branch-ab .ahead {
+  color: #4a9eff;
+}
+
+.status-bar__branch-ab .behind {
+  color: #e2c08d;
+}
+
+.status-bar__branch-list {
+  max-height: 240px;
+  overflow-y: auto;
 }
 
 .status-bar__branch-empty {

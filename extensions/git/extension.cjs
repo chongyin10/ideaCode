@@ -1472,5 +1472,23 @@ module.exports = {
   setActiveFile({ path: path2 }) {
     activeFile = { path: path2 || null, staged: resolveActiveFileStaged(path2) };
     pushActiveFile();
+  },
+  // 供主应用 RPC 调用（如状态栏分支选择器），不依赖 webview 通道
+  async getBranches() {
+    if (!currentRepo) return [];
+    return await currentRepo.listBranches();
+  },
+  async checkoutBranch({ name }) {
+    if (!currentRepo) throw new Error("\u6CA1\u6709\u6253\u5F00\u7684\u4ED3\u5E93");
+    await currentRepo.checkoutBranch(name);
+    pushBranches();
+    pushLog();
+    return { success: true };
+  },
+  async createBranch({ name, startPoint }) {
+    if (!currentRepo) throw new Error("\u6CA1\u6709\u6253\u5F00\u7684\u4ED3\u5E93");
+    await currentRepo.createBranch(name, startPoint);
+    pushBranches();
+    return { success: true };
   }
 };

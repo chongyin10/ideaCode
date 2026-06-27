@@ -642,4 +642,22 @@ module.exports = {
     activeFile = { path: path || null, staged: resolveActiveFileStaged(path) };
     pushActiveFile();
   },
+  // 供主应用 RPC 调用（如状态栏分支选择器），不依赖 webview 通道
+  async getBranches() {
+    if (!currentRepo) return [];
+    return await currentRepo.listBranches();
+  },
+  async checkoutBranch({ name }) {
+    if (!currentRepo) throw new Error('没有打开的仓库');
+    await currentRepo.checkoutBranch(name);
+    pushBranches();
+    pushLog();
+    return { success: true };
+  },
+  async createBranch({ name, startPoint }) {
+    if (!currentRepo) throw new Error('没有打开的仓库');
+    await currentRepo.createBranch(name, startPoint);
+    pushBranches();
+    return { success: true };
+  },
 };
