@@ -62,25 +62,25 @@ const QuickOpen = ({ onClose, files }: QuickOpenProps) => {
 
   const { prefix, query: searchQuery } = parseQuery(query);
 
-  // 先按排除目录和路径前缀过滤，再执行模糊搜索
+  // 按排除目录过滤：结果只依赖 allFilePaths + excludeDirs，不随用户输入变化。
+  // 用 Set 替代 excludeDirs.some(includes)，将 O(N·E·P) 降为 O(N·P)。
+  const excludeFiltered = useMemo(() => {
+    if (excludeDirs.length === 0) return allFilePaths;
+    const excludeSet = new Set(excludeDirs);
+    return allFilePaths.filter((p) => {
+      const parts = p.split('/');
+      for (let i = 0; i < parts.length; i++) {
+        if (excludeSet.has(parts[i])) return false;
+      }
+      return true;
+    });
+  }, [allFilePaths, excludeDirs]);
+
+  // 路径前缀过滤：每次按键会变化，依赖上一步缓存结果
   const filteredFiles = useMemo(() => {
-    let files = allFilePaths;
-
-    // 排除目录
-    if (excludeDirs.length > 0) {
-      files = files.filter((path) => {
-        const parts = path.split('/');
-        return !excludeDirs.some((dir) => parts.includes(dir));
-      });
-    }
-
-    // 路径前缀过滤
-    if (prefix) {
-      files = files.filter((path) => path.startsWith(prefix));
-    }
-
-    return files;
-  }, [allFilePaths, excludeDirs, prefix]);
+    if (!prefix) return excludeFiltered;
+    return excludeFiltered.filter((p) => p.startsWith(prefix));
+  }, [excludeFiltered, prefix]);
 
   // 执行模糊搜索
   const results = useMemo(() => {

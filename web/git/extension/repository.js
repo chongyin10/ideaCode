@@ -15,7 +15,9 @@ const path = require('path');
 const { execGit, git, GitError } = require('./gitCLI');
 const { parseStatus } = require('./statusParser');
 
-const STATUS_POLL_INTERVAL = 2000;       // 空闲时定期刷新
+// 兜底轮询间隔：fs.watch 已覆盖 99% 实时场景，这里仅作 fs.watch 漏报兜底。
+// 从 2s 放宽到 30s，避免与 fs.watch 重复触发导致 git status 子进程执行 2~3 次/保存。
+const STATUS_POLL_INTERVAL = 30000;
 const FAST_POLL_INTERVAL = 500;          // 操作后快速刷新窗口
 const FAST_POLL_DURATION = 5000;          // 快速刷新持续时间
 const WATCHER_DEBOUNCE_MS = 300;          // 文件变更去抖，避免频繁刷 git status

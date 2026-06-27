@@ -1,14 +1,14 @@
 const fs = require('fs').promises;
 const fsSync = require('fs');
 const path = require('path');
-const { ipcMain, BrowserWindow, shell } = require('electron');
+const { ipcMain, BrowserWindow, shell, app } = require('electron');
 const { Channels } = require('../../shared/channels.cjs');
 
 /**
  * 文件系统 IPC 处理器
- * 
+ *
  * 职责：为渲染进程提供受控的本地文件系统访问能力。
- * 
+ *
  * 安全设计：
  * 1. 所有路径由用户通过系统对话框主动选择，非任意路径访问
  * 2. 不暴露 rm、chmod 等危险操作
@@ -29,6 +29,28 @@ function findGitRoot(startPath) {
     dir = path.dirname(dir);
   }
   return null;
+}
+
+/**
+ * watchPath → gitRoot 缓存。
+ *
+ * fs.watch 回调在大目录变更（如 npm install、git checkout）时会触发数十次事件，
+ * 每次都调用 findGitRoot 同步向上遍历查找 .git，会阻塞主进程。
+ * 同一 watchPath 下所有文件的 git root 相同，缓存后只首次查找，后续命中。
+ * watchPath 取消监听时清理对应缓存。
+ */
+const gitRootCache = new Map();
+
+/**
+ * 带缓存的 findGitRoot
+ * @param {string} watchPath
+ * @returns {string | null}
+ */
+function findGitRootCached(watchPath) {
+  if (gitRootCache.has(watchPath)) return gitRootCache.get(watchPath);
+  const root = findGitRoot(watchPath);
+  gitRootCache.set(watchPath, root);
+  return root;
 }
 
 function registerFsHandlers() {
@@ -115,10 +137,10 @@ function registerFsHandlers() {
 
   /**
    * 触发 Git 状态刷新（防抖）
-   * @param {string} changedPath
+   * @param {string} watchPath 被监听的根目录（用于查找 git root）
    */
-  function triggerGitRefresh(changedPath) {
-    const gitRoot = findGitRoot(changedPath);
+  function triggerGitRefresh(watchPath) {
+    const gitRoot = findGitRootCached(watchPath);
     if (!gitRoot) return;
 
     const existing = gitRefreshTimers.get(gitRoot);
@@ -136,6 +158,13 @@ function registerFsHandlers() {
       }, 150)
     );
   }
+
+  // 应用退出时清理所有防抖定时器，避免定时器在 app 销毁后仍触发
+  app.on('before-quit', () => {
+    for (const timer of gitRefreshTimers.values()) clearTimeout(timer);
+    gitRefreshTimers.clear();
+    gitRootCache.clear();
+  });
 
   ipcMain.handle(Channels.FS_WATCH, async (_event, watchPath) => {
     if (watchers.has(watchPath)) {
@@ -168,8 +197,8 @@ function registerFsHandlers() {
           });
 
           // 若变更发生在 Git 仓库内，触发 Source Control 刷新
-          const changedPath = safeFilename ? path.join(watchPath, safeFilename) : watchPath;
-          triggerGitRefresh(changedPath);
+          // 用 watchPath 而非 changedPath 查找 git root，命中缓存避免同步阻塞
+          triggerGitRefresh(watchPath);
         }
       );
 
@@ -186,6 +215,8 @@ function registerFsHandlers() {
     if (watcher) {
       watcher.close();
       watchers.delete(watchPath);
+      // 清理 gitRoot 缓存：取消监听后该 watchPath 不再产生事件
+      gitRootCache.delete(watchPath);
       return { success: true };
     }
     return { success: false, reason: '未找到监听器' };

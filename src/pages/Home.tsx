@@ -66,39 +66,80 @@ const formatTime = (timestamp: number, translate: (key: string, options?: Record
 
 const COOC_KEY = 'ideacode_split_cooccurrence';
 const COOC_DECAY = 0.98;
+const COOC_FLUSH_INTERVAL = 30000; // 30s 批量持久化，避免每次记录都全量序列化
 
 interface CoocMatrix { [fileA: string]: { [fileB: string]: number } }
 
-function loadCooc(): CoocMatrix {
-  try { const raw = localStorage.getItem(COOC_KEY); return raw ? JSON.parse(raw) : {}; }
-  catch { return {}; }
+// 内存化矩阵：避免每次记录都 localStorage.getItem + JSON.parse 全量加载。
+// 启动时懒加载一次，之后只读写内存；30s 批量 flush 到 localStorage。
+let coocMatrix: CoocMatrix | null = null;
+let coocDirty = false;
+let coocFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+function getCoocMatrix(): CoocMatrix {
+  if (coocMatrix === null) {
+    try {
+      const raw = localStorage.getItem(COOC_KEY);
+      coocMatrix = raw ? JSON.parse(raw) : {};
+    } catch {
+      coocMatrix = {};
+    }
+  }
+  return coocMatrix!;
 }
-function saveCooc(m: CoocMatrix) {
-  try { localStorage.setItem(COOC_KEY, JSON.stringify(m)); } catch { /* 忽略 */ }
+
+function scheduleCoocFlush() {
+  if (coocFlushTimer) return;
+  coocDirty = true;
+  coocFlushTimer = setTimeout(() => {
+    coocFlushTimer = null;
+    if (coocDirty && coocMatrix) {
+      coocDirty = false;
+      try { localStorage.setItem(COOC_KEY, JSON.stringify(coocMatrix)); } catch { /* 忽略 */ }
+    }
+  }, COOC_FLUSH_INTERVAL);
 }
+
+/** 惰性衰减：仅衰减指定行，避免每次记录都全表 O(N²) 扫描 */
+function decayRow(m: CoocMatrix, key: string) {
+  const row = m[key];
+  if (!row) return;
+  for (const k2 of Object.keys(row)) {
+    row[k2] *= COOC_DECAY;
+    if (row[k2] < 0.01) delete row[k2];
+  }
+  if (Object.keys(row).length === 0) delete m[key];
+}
+
 function recordCooccurrence(fileA: string, fileB: string) {
   if (!fileA || !fileB || fileA === fileB) return;
-  const m = loadCooc();
-  for (const key of Object.keys(m)) {
-    for (const k2 of Object.keys(m[key])) {
-      m[key][k2] *= COOC_DECAY;
-      if (m[key][k2] < 0.01) delete m[key][k2];
-    }
-    if (Object.keys(m[key]).length === 0) delete m[key];
-  }
+  const m = getCoocMatrix();
+  // 仅衰减涉及的两行（O(N) 而非 O(N²)），未访问的行保持原值
+  decayRow(m, fileA);
+  decayRow(m, fileB);
   if (!m[fileA]) m[fileA] = {};
   if (!m[fileB]) m[fileB] = {};
   m[fileA][fileB] = (m[fileA][fileB] || 0) + 0.15;
   m[fileB][fileA] = (m[fileB][fileA] || 0) + 0.15;
-  saveCooc(m);
+  scheduleCoocFlush();
 }
 /* ─── 主组件 ─── */
 
 function Home() {
   const { t } = useTranslation();
   const dispatch = useAppDispatch();
-  const workspace = useAppSelector((state) => state.workspace);
-  const { openedFiles, recentProjects, editorGroups, activeGroupIndex, allFilePaths, mirrorContent, splitPhase, editorSnapshots: snapshots, missingFileIds } = workspace;
+  // 按字段拆分细粒度 selector，避免任一 workspace 字段变化（高频的 setMirrorFileContent /
+  // gitStatus / searchHighlight 等）都触发 Home 全量重渲染，进而级联所有 TabBar/MonacoEditor。
+  // useAppSelector 用 Object.is 比较返回值，Immer 仅对真正变化的字段产生新引用。
+  const openedFiles = useAppSelector((state) => state.workspace.openedFiles);
+  const recentProjects = useAppSelector((state) => state.workspace.recentProjects);
+  const editorGroups = useAppSelector((state) => state.workspace.editorGroups);
+  const activeGroupIndex = useAppSelector((state) => state.workspace.activeGroupIndex);
+  const allFilePaths = useAppSelector((state) => state.workspace.allFilePaths);
+  const mirrorContent = useAppSelector((state) => state.workspace.mirrorContent);
+  const splitPhase = useAppSelector((state) => state.workspace.splitPhase);
+  const snapshots = useAppSelector((state) => state.workspace.editorSnapshots);
+  const missingFileIds = useAppSelector((state) => state.workspace.missingFileIds);
   const splitView = editorGroups.length > 1;
   const settingsVisible = useAppSelector((state) => state.workspace.settingsVisible);
   const rootSource = useAppSelector((state) => state.workspace.rootSource);
@@ -278,8 +319,9 @@ function Home() {
 
   /* ─── 键盘快捷键（用 ref 避免 deps 变化） ─── */
 
-  const wsRef = useRef(workspace);
-  wsRef.current = workspace;
+  // 仅跟踪快捷键需要的两个字段，避免引用整个 workspace 切片
+  const wsRef = useRef({ editorGroups, activeGroupIndex });
+  wsRef.current = { editorGroups, activeGroupIndex };
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {

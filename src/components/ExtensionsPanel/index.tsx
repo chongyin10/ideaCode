@@ -42,12 +42,22 @@ const ExtensionsPanel = () => {
 
   useEffect(() => {
     refresh();
-    // 定时刷新状态（因为扩展可能在后台被激活）
+    // 定时刷新状态（扩展可能在后台被激活）。
+    // 用签名浅比较：仅当扩展数量或激活状态变化时才 setState，
+    // 避免每次轮询都生成新数组引用触发无谓重渲染。
     const timer = setInterval(() => {
       const bridge = getBridge();
-      if (bridge?.getAllExtensions) {
-        setExtensions(bridge.getAllExtensions());
-      }
+      if (!bridge?.getAllExtensions) return;
+      const next = bridge.getAllExtensions();
+      setExtensions((prev) => {
+        if (prev.length !== next.length) return next;
+        // 比较每项的 name + activated 签名
+        for (let i = 0; i < next.length; i++) {
+          if (prev[i]?.manifest?.name !== next[i]?.manifest?.name) return next;
+          if (prev[i]?.activated !== next[i]?.activated) return next;
+        }
+        return prev; // 签名相同，返回旧引用，不触发重渲染
+      });
     }, 2000);
     return () => clearInterval(timer);
   }, [refresh]);
