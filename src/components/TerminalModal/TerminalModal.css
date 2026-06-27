@@ -46,6 +46,11 @@
   border-bottom: 1px solid #3c3c3c;
   user-select: none;
   flex-shrink: 0;
+  cursor: move;
+}
+
+.terminal-modal__titlebar .icon-btn {
+  cursor: pointer;
 }
 
 .terminal-modal__title {

@@ -21006,12 +21006,14 @@ async function activate(context) {
             session.output.push(`[${(/* @__PURE__ */ new Date()).toLocaleTimeString()}] \u8FDE\u63A5\u6210\u529F`);
             session.output.push(getPrompt(session));
           } else {
-            session.status = "disconnected";
+            session.status = "failed";
             session.output.push(`[${(/* @__PURE__ */ new Date()).toLocaleTimeString()}] \u8FDE\u63A5\u5931\u8D25: ${result.error}`);
+            log("error", `[SSH Extension] \u8FDE\u63A5\u5931\u8D25 [${conn.name}]: ${result.error}`);
           }
         } catch (err) {
-          session.status = "disconnected";
+          session.status = "failed";
           session.output.push(`[${(/* @__PURE__ */ new Date()).toLocaleTimeString()}] \u8FDE\u63A5\u9519\u8BEF: ${err.message}`);
+          log("error", `[SSH Extension] \u8FDE\u63A5\u5F02\u5E38 [${conn.name}]: ${err.message}`);
         }
         broadcast({ type: "sessions", sessions: Array.from(sessions.values()) });
         break;
@@ -21091,7 +21093,8 @@ async function activate(context) {
           name: terminalName,
           executable: "ssh",
           args: ["-p", String(conn.port || 22), `${conn.username}@${conn.host}`],
-          isModal: true
+          isModal: true,
+          profile: { name: "ssh", path: "ssh" }
         };
         if (conn.authType === "password" && conn.password) {
           options.input = conn.password;

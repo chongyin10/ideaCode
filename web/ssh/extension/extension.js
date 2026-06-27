@@ -686,12 +686,14 @@ async function activate(context) {
             session.output.push(`[${new Date().toLocaleTimeString()}] 连接成功`);
             session.output.push(getPrompt(session));
           } else {
-            session.status = 'disconnected';
+            session.status = 'failed';
             session.output.push(`[${new Date().toLocaleTimeString()}] 连接失败: ${result.error}`);
+            log('error', `[SSH Extension] 连接失败 [${conn.name}]: ${result.error}`);
           }
         } catch (err) {
-          session.status = 'disconnected';
+          session.status = 'failed';
           session.output.push(`[${new Date().toLocaleTimeString()}] 连接错误: ${err.message}`);
+          log('error', `[SSH Extension] 连接异常 [${conn.name}]: ${err.message}`);
         }
 
         broadcast({ type: 'sessions', sessions: Array.from(sessions.values()) });
@@ -777,6 +779,7 @@ async function activate(context) {
           executable: 'ssh',
           args: ['-p', String(conn.port || 22), `${conn.username}@${conn.host}`],
           isModal: true,
+          profile: { name: 'ssh', path: 'ssh' },
         };
         // 密码认证时自动输入密码，并过滤掉密码提示行，避免显示不美观
         if (conn.authType === 'password' && conn.password) {

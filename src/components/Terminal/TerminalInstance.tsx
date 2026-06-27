@@ -146,6 +146,9 @@ export const TerminalInstance = forwardRef<TerminalInstanceHandle, TerminalInsta
         macOptionIsMeta: true,
         allowTransparency: true,
         reflowCursorLine: false,
+        // SSH 终端远端 PTY 输出 \n 不带 \r，开启 convertEol 让 xterm.js 自动补 \r，
+        // 使回车后的新提示符回到行首换行显示，而非追加在当前行末。
+        convertEol: tab?.profile?.name === 'ssh',
       });
 
       const fitAddon = new FitAddon();
@@ -183,7 +186,11 @@ export const TerminalInstance = forwardRef<TerminalInstanceHandle, TerminalInsta
         if (!activeRef.current) return;
         const pid = processIdRef.current;
         if (pid != null) {
-          sendInput(pid, data);
+          let payload = data;
+          if (isSshRef.current && payload.indexOf('\x7f') !== -1) {
+            payload = payload.replace(/\x7f/g, '\x08');
+          }
+          sendInput(pid, payload);
         }
       });
 
@@ -220,6 +227,10 @@ export const TerminalInstance = forwardRef<TerminalInstanceHandle, TerminalInsta
     gpuRef.current = gpuAcceleration;
     const onContextMenuRef = useRef(onContextMenu);
     onContextMenuRef.current = onContextMenu;
+    // SSH 终端：将 xterm 默认的 DEL(\x7f) 转为 BS(\x08)，
+    // 避免远端 shell stty erase 不匹配时按 backspace 重复输出提示符
+    const isSshRef = useRef(tab?.profile?.name === 'ssh');
+    isSshRef.current = tab?.profile?.name === 'ssh';
 
     // 订阅 PTY 输出
     useEffect(() => {
@@ -235,9 +246,13 @@ export const TerminalInstance = forwardRef<TerminalInstanceHandle, TerminalInsta
           if (tab?.outputFilter) {
             try {
               const regex = new RegExp(tab.outputFilter, 'gi');
+              const before = data;
               data = data.replace(regex, '');
-              // 过滤后去掉开头的空行，避免残留 \r\n 导致顶部空白
-              data = data.replace(/^[\r\n]+/, '');
+              // 仅在过滤命中时去掉开头残留的空行，避免误删正常输出开头的换行符
+              // （否则回车后 bash 输出 \r\n + 新提示符，开头的 \r\n 被删导致提示符追加在当前行末）
+              if (data !== before) {
+                data = data.replace(/^[\r\n]+/, '');
+              }
             } catch {
               // 非法正则则忽略过滤
             }

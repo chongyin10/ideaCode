@@ -192,7 +192,7 @@ function App() {
     | { type: 'error'; connectionId: string; message: string }
     | null
   >(null);
-  const [logs, setLogs] = useState<string[]>([]);
+  const [logs, setLogs] = useState<{ message: string; level?: string }[]>([]);
   const terminalRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const formRef = useRef<HTMLDivElement>(null);
   const hasMountedRef = useRef(false);
@@ -266,8 +266,9 @@ function App() {
         setFileTreeStatus(null);
       } else if (message.type === 'sshLog') {
         const logMsg = (message.message as string) || '';
+        const logLevel = (message.level as string) || 'log';
         setLogs((prev) => {
-          const next = [...prev, logMsg];
+          const next = [...prev, { message: logMsg, level: logLevel }];
           return next.length > 30 ? next.slice(next.length - 30) : next;
         });
       }
@@ -417,6 +418,9 @@ function App() {
   const hasConnecting = (connectionId: string) =>
     connectingIds.has(connectionId) || connectionSessions[connectionId]?.some((s) => s.status === 'connecting');
 
+  const hasFailed = (connectionId: string) =>
+    connectionSessions[connectionId]?.some((s) => s.status === 'failed');
+
   const toggleConnection = (conn: SshConnection) => {
     const activeSessions = connectionSessions[conn.id]?.filter((s) => s.status === 'connected') || [];
     if (activeSessions.length > 0) {
@@ -461,6 +465,7 @@ function App() {
             connections.map((conn) => {
               const connected = isConnected(conn.id);
               const connecting = hasConnecting(conn.id);
+              const failed = hasFailed(conn.id);
               const loadingFileTree = fileTreeStatus?.type === 'loading' && fileTreeStatus?.connectionId === conn.id;
               return (
                 <div key={conn.id} className={`connection-card ${editingId === conn.id ? 'is-editing' : ''}`}>
@@ -475,8 +480,8 @@ function App() {
                         </svg>
                       </span>
                     )}
-                    <span className={`connection-card__status ${connected ? 'connected' : connecting ? 'connecting' : 'disconnected'}`}>
-                      {connected ? '已连接' : connecting ? '连接中' : '未连接'}
+                    <span className={`connection-card__status ${connected ? 'connected' : connecting ? 'connecting' : failed ? 'failed' : 'disconnected'}`}>
+                      {connected ? '已连接' : connecting ? '连接中' : failed ? '连接失败' : '未连接'}
                     </span>
                   </div>
                   <div className="connection-card__meta" title={`${conn.username}@${conn.host}:${conn.port}`}>
@@ -491,7 +496,7 @@ function App() {
                       onClick={() => toggleConnection(conn)}
                       disabled={connecting}
                     >
-                      {connected ? '断开' : connecting ? '连接中' : '连接'}
+                      {connected ? '断开' : connecting ? '连接中' : failed ? '重试' : '连接'}
                     </button>
                     {connected && (
                       <button className="btn btn-sm btn-secondary" onClick={() => handleOpenTerminal(conn)}>
@@ -667,8 +672,11 @@ function App() {
           <span className="count-badge">{sessions.length}</span>
         </div>
         {expandedSections.sessions && sessions.length > 0 && (
-        <div className="session-list">
-            {sessions.map((session) => {
+        <div
+          className="session-list"
+          style={sessions.length > 5 ? { maxHeight: '280px', overflowY: 'auto' } : undefined}
+        >
+            {[...sessions].reverse().map((session) => {
               const expanded = expandedSessions[session.id] || false;
               return (
                 <div key={session.id} className="session">
@@ -735,7 +743,12 @@ function App() {
           </div>
           <div className="ssh-log">
             {logs.map((log, idx) => (
-              <div key={idx} className="ssh-log__line">{log}</div>
+              <div
+                key={idx}
+                className={`ssh-log__line ${log.level === 'error' ? 'ssh-log__line--error' : ''}`}
+              >
+                {log.message}
+              </div>
             ))}
           </div>
         </div>
