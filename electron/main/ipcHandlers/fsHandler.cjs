@@ -1,6 +1,9 @@
 const fs = require('fs').promises;
 const fsSync = require('fs');
 const path = require('path');
+const { execFile } = require('child_process');
+const { promisify } = require('util');
+const execFileAsync = promisify(execFile);
 const { ipcMain, BrowserWindow, shell, app } = require('electron');
 const { Channels } = require('../../shared/channels.cjs');
 
@@ -106,7 +109,18 @@ function registerFsHandlers() {
   ipcMain.handle(Channels.FS_DELETE, async (_event, targetPath) => {
     const stat = await fs.stat(targetPath);
     if (stat.isDirectory()) {
-      await fs.rm(targetPath, { recursive: true, force: true });
+      try {
+        // maxRetries 处理文件被短暂占用（watcher / Spotlight 索引）导致的 ENOTEMPTY
+        await fs.rm(targetPath, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      } catch (err) {
+        // fs.rm 在 macOS 上可能因 .app 包内的符号链接/只读权限/扩展属性而失败。
+        // 回退到系统 rm -rf，能正确处理这些边缘情况。
+        if (err.code === 'ENOTEMPTY' || err.code === 'EPERM' || err.code === 'EACCES') {
+          await execFileAsync('rm', ['-rf', targetPath]);
+        } else {
+          throw err;
+        }
+      }
     } else {
       await fs.unlink(targetPath);
     }
