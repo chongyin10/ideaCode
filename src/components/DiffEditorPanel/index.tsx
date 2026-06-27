@@ -30,6 +30,25 @@ import {
 import { tsService, type TsSemanticTokens } from '../../services/tsLanguageService';
 import './DiffEditorPanel.css';
 
+/* ─── 辅助：为 diff 左侧（git HEAD）构造独立虚拟路径 ─── */
+/**
+ * tsserver 按 filePath 维护文件内容，一个 filePath 只持有一份内容。
+ * diff 左侧（original = git HEAD）与右侧（modified = 工作区）内容不同，
+ * 若复用同一 filePath，original 的 open 会覆盖 modified 内容。
+ * 因此为 original 构造一个独立虚拟路径，并保留原扩展名（如 .ts/.tsx），
+ * 让 tsserver 仍按对应语言进行 tokenization，生成与 original 内容匹配的 semantic tokens。
+ *
+ * 例：/Users/foo/bar.ts → /Users/foo/bar.diff-original.ts
+ */
+function makeDiffOriginalPath(filePath: string): string {
+  const lastSlash = filePath.lastIndexOf('/');
+  const lastDot = filePath.lastIndexOf('.');
+  if (lastDot > lastSlash) {
+    return filePath.slice(0, lastDot) + '.diff-original' + filePath.slice(lastDot);
+  }
+  return filePath + '.diff-original';
+}
+
 /* ─── Props ─── */
 
 interface DiffEditorPanelProps {
@@ -50,7 +69,13 @@ const DiffEditorPanel = ({ diffData, groupId }: DiffEditorPanelProps) => {
   const semTokensDisposableRef = useRef<Monaco.IDisposable | null>(null);
   const diagUnsubRef = useRef<(() => void) | null>(null);
   const retryTriggerRef = useRef<(() => void) | null>(null);
-  const prefetchedTokensRef = useRef<TsSemanticTokens | null>(null);
+  // 预取的 semantic tokens：左右两个面板是独立 ITextModel，内容不同
+  // （original = git HEAD，modified = 工区），tokens 基于「行+列+长度」相对编码，
+  // 必须各自使用对应内容的 tokens，否则会出现字符高亮错位。
+  const prefetchedTokensRef = useRef<{ modified: TsSemanticTokens | null; original: TsSemanticTokens | null }>({
+    modified: null,
+    original: null,
+  });
   const [currentDiffIndex, setCurrentDiffIndex] = useState(-1);
   const [lineChanges, setLineChanges] = useState<Monaco.editor.ILineChange[]>([]);
 
@@ -62,6 +87,8 @@ const DiffEditorPanel = ({ diffData, groupId }: DiffEditorPanelProps) => {
 
   // 预取 semantic tokens：在渲染 DiffEditor 之前，把文件推送给 tsserver 并等待 tokens 返回。
   // 这样 DiffEditor 首次渲染时 provider 就能用预取的 tokens，高亮立即生效。
+  // 左右两个面板独立预取：modified 用真实 filePath，original 用虚拟路径（保留扩展名让 tsserver 识别语言），
+  // 互不干扰。tsserver 一个 filePath 只持有一份内容，若 original 复用 filePath 会覆盖 modified。
   useEffect(() => {
     if (!isTsJs || !diffData.filePath) {
       setTokensReady(true);
@@ -70,30 +97,46 @@ const DiffEditorPanel = ({ diffData, groupId }: DiffEditorPanelProps) => {
 
     let cancelled = false;
     const filePath = diffData.filePath;
-    const content = diffData.modified;
+    const originalPath = makeDiffOriginalPath(filePath);
+
+    // 轮询获取某路径的 semantic tokens，最多 5 秒（10 次 × 500ms）
+    const fetchTokens = async (path: string, content: string): Promise<TsSemanticTokens | null> => {
+      await tsService.open(path, content);
+      for (let i = 0; i < 10; i++) {
+        if (cancelled) return null;
+        try {
+          const tokens = await tsService.semanticTokens(path);
+          if (tokens && tokens.data && tokens.data.length > 0) {
+            return tokens;
+          }
+        } catch { /* tsserver 未就绪，继续重试 */ }
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+      return null;
+    };
 
     const prepare = async () => {
       try {
-        // 1. 把文件内容推送给 tsserver
-        await tsService.open(filePath, content);
+        // 1. 预取 modified tokens（真实 filePath）
+        const modTokens = await fetchTokens(filePath, diffData.modified);
+        if (cancelled) return;
 
-        // 2. 轮询等待 tsserver 返回有效 tokens（最多 5 秒 = 10 次 × 500ms）
-        for (let i = 0; i < 10; i++) {
-          if (cancelled) return;
+        // 2. 预取 original tokens（虚拟路径，tsserver 当作独立文件处理）
+        let origTokens: TsSemanticTokens | null = null;
+        if (diffData.original) {
           try {
-            const tokens = await tsService.semanticTokens(filePath);
-            if (tokens && tokens.data && tokens.data.length > 0) {
-              if (!cancelled) {
-                prefetchedTokensRef.current = tokens;
-                setTokensReady(true);
-              }
-              return;
-            }
-          } catch { /* tsserver 未就绪，继续重试 */ }
-          await new Promise((resolve) => setTimeout(resolve, 500));
+            origTokens = await fetchTokens(originalPath, diffData.original);
+          } catch {
+            // original 预取失败：左侧走基础语法高亮（不会错位）
+          } finally {
+            // 释放虚拟文件，避免 tsserver 残留占用
+            try { tsService.close(originalPath); } catch { /* 忽略 */ }
+          }
         }
-        // 超时仍未获取到 tokens：放弃等待，降级为基础语法高亮
-        if (!cancelled) setTokensReady(true);
+        if (cancelled) return;
+
+        prefetchedTokensRef.current = { modified: modTokens, original: origTokens };
+        setTokensReady(true);
       } catch {
         // open 或 semanticTokens 出错：降级为基础语法高亮
         if (!cancelled) setTokensReady(true);
@@ -101,12 +144,15 @@ const DiffEditorPanel = ({ diffData, groupId }: DiffEditorPanelProps) => {
     };
 
     setTokensReady(false);
+    prefetchedTokensRef.current = { modified: null, original: null };
     prepare();
 
     return () => {
       cancelled = true;
+      // 清理虚拟文件
+      try { tsService.close(originalPath); } catch { /* 忽略 */ }
     };
-  }, [diffData.filePath, diffData.modified, isTsJs]);
+  }, [diffData.filePath, diffData.modified, diffData.original, isTsJs]);
 
   // 使用 groupId 生成唯一的 model path，避免分屏时 model 冲突
   const modelPathPrefix = groupId ? `${groupId}-` : '';
@@ -182,7 +228,13 @@ const DiffEditorPanel = ({ diffData, groupId }: DiffEditorPanelProps) => {
       if (isTsJs) {
         // 防止 groupId 切换或重渲染时重复注册
         semTokensDisposableRef.current?.dispose();
-        semTokensDisposableRef.current = registerDiffSemanticTokensProvider(monaco, language, prefetchedTokensRef.current, groupId);
+        semTokensDisposableRef.current = registerDiffSemanticTokensProvider(
+          monaco,
+          language,
+          prefetchedTokensRef.current.modified,
+          prefetchedTokensRef.current.original,
+          groupId,
+        );
       }
 
       // 为内部编辑器启用语义高亮

@@ -46,16 +46,22 @@ export const SEMANTIC_LANGUAGES = new Set([
  * 行为：
  * - 仅处理 scheme 为 gitdiff-original / gitdiff-modified 的模型；
  *   其它模型返回 null，让 MonacoEditor 注册的 file:// provider 接管。
- * - 优先使用调用方预取的 tokens（避免 tsserver 冷启动延迟），
- *   预取失败时实时请求 tsService.semanticTokens()。
+ * - 左右两个面板是**相互独立**的 ITextModel，内容不同（一个是 git HEAD，一个是工作区），
+ *   semantic tokens 基于「行+列+长度」相对编码，必须各自使用对应内容的 tokens，
+ *   否则会出现字符高亮错位（如 modified 的 tokens 套到 original 上，标识符颜色串位）。
+ * - 因此 provider 按 scheme 区分：original model 用预取的 original tokens，
+ *   modified model 用预取的 modified tokens。预取失败时 modified 走实时请求兜底，
+ *   original（tsserver 只持有 modified 内容）走空数组 → 基础语法高亮（不会错位）。
  *
- * @param prefetchedTokens 调用方预取的 semantic tokens（可选）
+ * @param prefetchedModifiedTokens modified 面板预取的 semantic tokens（可选）
+ * @param prefetchedOriginalTokens original 面板预取的 semantic tokens（可选）
  * @returns disposable（monaco.languages.registerDocumentSemanticTokensProvider 返回值）
  */
 export function registerDiffSemanticTokensProvider(
   monaco: typeof Monaco,
   language: string,
-  prefetchedTokens?: TsSemanticTokens | null,
+  prefetchedModifiedTokens?: TsSemanticTokens | null,
+  prefetchedOriginalTokens?: TsSemanticTokens | null,
   groupId?: string,
 ): Monaco.IDisposable {
   return monaco.languages.registerDocumentSemanticTokensProvider(language, {
@@ -70,19 +76,26 @@ export function registerDiffSemanticTokensProvider(
       const p = model.uri.path || '';
       if (!p) return null;
 
-      // 1. 优先使用预取的 tokens（DiffEditorPanel 在渲染前已等待 tsserver 加载完成）
-      if (prefetchedTokens && prefetchedTokens.data && prefetchedTokens.data.length > 0) {
-        return { resultId: prefetchedTokens.resultId, data: new Uint32Array(prefetchedTokens.data) };
+      // 按 scheme 选取对应内容的预取 tokens（左右面板独立）
+      const prefetched = scheme === 'gitdiff-original' ? prefetchedOriginalTokens : prefetchedModifiedTokens;
+      if (prefetched && prefetched.data && prefetched.data.length > 0) {
+        const src = prefetched.data;
+        const data = src instanceof Uint32Array ? src : new Uint32Array(src);
+        return { resultId: prefetched.resultId, data };
       }
 
-      // 2. 预取不可用时实时请求（兜底）
-      try {
-        const tokens: TsSemanticTokens | null = await tsService.semanticTokens(p);
-        if (tokens && tokens.data && tokens.data.length > 0) {
-          return { resultId: tokens.resultId, data: new Uint32Array(tokens.data) };
+      // 兜底：modified 可实时请求 tsserver（它持有 modified 内容）；
+      // original 不能实时请求（tsserver 只 open 了 modified，会拿到 modified 的 tokens → 错位），
+      // 返回空数组走基础语法高亮，至少不错位。
+      if (scheme === 'gitdiff-modified') {
+        try {
+          const tokens: TsSemanticTokens | null = await tsService.semanticTokens(p);
+          if (tokens && tokens.data && tokens.data.length > 0) {
+            return { resultId: tokens.resultId, data: new Uint32Array(tokens.data) };
+          }
+        } catch {
+          // tsserver 未就绪或不可达
         }
-      } catch {
-        // tsserver 未就绪或不可达
       }
       return { data: new Uint32Array(0) };
     },
