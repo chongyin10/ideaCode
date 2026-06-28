@@ -6,16 +6,31 @@
  * - 否则使用内部简化实现（异步 spawn + 累积输出）
  *
  * 输出上限统一 64KB（与 Extension.js 内部一致）；超出部分截断尾部并标记。
+ *
+ * §智能 Shell 校验：调 shellDetect.isShellCommand 双重保护
+ *   防止 LLM 把 JS/TS/Python 等代码当 shell 命令传过来执行（agent 幻觉常见场景）。
  */
 
 const { spawn } = require('child_process');
 const path = require('path');
+const { isShellCommand } = require('../../shellDetect.cjs');
 const MAX_OUTPUT_BYTES = 64 * 1024; // 与 Extension.js 内的 MAX_OUTPUT_BYTES 一致
 
 async function executeShell(args, context) {
   const { command, cwd, timeout = 60000 } = args || {};
   if (!command || typeof command !== 'string') {
     return { success: false, error: '缺少 command 参数' };
+  }
+
+  // §智能 Shell 校验：拦截 LLM 误传的非 shell 代码（如整段 JS/TS/Python）
+  // 与前端 ShellSkill.canActivate 复用同源逻辑，避免 agent 误执行。
+  if (!isShellCommand(command)) {
+    return {
+      success: false,
+      error: `检测到当前参数不是 shell 命令（可能包含 JS/TS/Python/Go 等代码强特征），已拦截。请确认命令是否正确。`,
+      rejected: 'notShellCommand',
+      commandPreview: command.slice(0, 200),
+    };
   }
 
   const workspaceRoot = context.workspaceRoot || '';

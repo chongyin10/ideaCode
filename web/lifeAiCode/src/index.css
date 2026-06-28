@@ -1799,6 +1799,131 @@ body {
   background: rgba(99, 102, 241, 0.3);
   color: #c7d2fe;
 }
+/* §撤销修改按钮：橙红色调，区别于查看变更的紫蓝色调，暗示这是一项有后果的操作 */
+.status-card__action--undo {
+  color: var(--text-tertiary);
+  border-color: var(--border-subtle, rgba(255,255,255,0.08));
+}
+.status-card__action--undo:hover {
+  background: rgba(251, 146, 60, 0.12);
+  color: #fb923c;
+  border-color: rgba(251, 146, 60, 0.4);
+}
+.status-card__action--undo.status-card__action--active {
+  background: rgba(251, 146, 60, 0.15);
+  border-color: rgba(251, 146, 60, 0.5);
+  color: #fdba74;
+}
+.status-card__action--undo.status-card__action--active .status-card__action-count {
+  background: rgba(251, 146, 60, 0.3);
+  color: #fed7aa;
+}
+
+/* §撤销修改确认弹窗 */
+.status-revert-confirm {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  min-width: 320px;
+  max-width: 460px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(251, 146, 60, 0.4);
+  border-radius: 6px;
+  background: var(--bg-elevated, #1e1e2e);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4), 0 2px 6px rgba(0,0,0,0.3);
+  z-index: 100;
+  animation: changesPopupIn 0.18s var(--ease-out, ease-out);
+  overflow: hidden;
+}
+.status-revert-confirm__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px 6px;
+  color: #fb923c;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--font-sans);
+  border-bottom: 1px solid rgba(251, 146, 60, 0.2);
+}
+.status-revert-confirm__body {
+  padding: 8px 12px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  font-family: var(--font-sans);
+}
+.status-revert-confirm__files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0 12px 8px;
+  max-height: 80px;
+  overflow-y: auto;
+}
+.status-revert-confirm__file {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.status-revert-confirm__more {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-style: italic;
+}
+.status-revert-confirm__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 8px 12px 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.status-revert-confirm__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 11.5px;
+  font-family: var(--font-sans);
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border: 1px solid transparent;
+}
+.status-revert-confirm__btn--cancel {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-secondary);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+.status-revert-confirm__btn--cancel:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text-primary);
+}
+.status-revert-confirm__btn--confirm {
+  background: rgba(251, 146, 60, 0.18);
+  color: #fdba74;
+  border-color: rgba(251, 146, 60, 0.4);
+}
+.status-revert-confirm__btn--confirm:hover {
+  background: rgba(251, 146, 60, 0.3);
+  color: #fed7aa;
+  border-color: rgba(251, 146, 60, 0.6);
+}
+
 .status-card__token {
   display: inline-flex;
   align-items: center;
@@ -1948,6 +2073,114 @@ body {
 }
 .status-changes-popup__removed {
   color: #f87171;
+}
+
+/* ── 提问定位 Dropdown ── */
+.status-question-nav {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  width: 360px;
+  max-height: 320px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.1));
+  border-radius: 6px;
+  background: var(--bg-elevated, #1e1e2e);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4), 0 2px 6px rgba(0,0,0,0.3);
+  z-index: 30;
+  animation: statusNavIn 0.15s var(--ease-out);
+}
+@keyframes statusNavIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.status-question-nav__header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,0.08));
+  font-size: 11px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+.status-question-nav__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: rgba(255,255,255,0.1);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+}
+.status-question-nav__list {
+  overflow-y: auto;
+  padding: 4px;
+  flex: 1;
+  min-height: 0;
+}
+.status-question-nav__list::-webkit-scrollbar { width: 6px; }
+.status-question-nav__list::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.1);
+  border-radius: 3px;
+}
+.status-question-nav__item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-family: var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.status-question-nav__item:hover {
+  background: rgba(255,255,255,0.06);
+}
+.status-question-nav__index {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 8px;
+  background: rgba(99, 102, 241, 0.15);
+  color: #818cf8;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  margin-top: 1px;
+}
+.status-question-nav__text {
+  flex: 1;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: break-word;
+}
+
+/* §定位提问：临时高亮目标消息行 */
+.message-row--located {
+  animation: msgLocated 2s ease-out;
+}
+@keyframes msgLocated {
+  0%, 100% { background: transparent; box-shadow: none; }
+  10%, 60% { background: rgba(99, 102, 241, 0.12); box-shadow: 0 0 0 1px rgba(99, 102, 241, 0.3); }
 }
 
 /* Streaming cursor (text-end blinking caret) */

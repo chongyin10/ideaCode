@@ -1512,6 +1512,38 @@ async function activate(context) {
           await compactHistory();
           break;
         }
+        case 'revertFiles': {
+          // §撤销修改：将 AI 自动修改的文件恢复到修改前的内容
+          // 通过 lifeAiCode.applyChanges RPC 逐个写入原始内容
+          const changes = message.changes || [];
+          const revertedPaths = [];
+          let hasError = false;
+          for (const change of changes) {
+            try {
+              if (typeof process !== 'undefined' && process.send) {
+                process.send({
+                  jsonrpc: '2.0',
+                  method: 'lifeAiCode.applyChanges',
+                  params: { filePath: change.filePath, content: change.original },
+                });
+                revertedPaths.push(change.filePath);
+              } else {
+                hasError = true;
+                console.error('[LifeAiCode] revertFiles: Extension Host 未连接到主进程');
+              }
+            } catch (err) {
+              hasError = true;
+              console.error('[LifeAiCode] revertFiles: 恢复文件失败:', change.filePath, err.message);
+            }
+          }
+          postToWebView({
+            type: 'filesReverted',
+            filePaths: revertedPaths,
+            success: !hasError,
+            message: hasError ? '部分文件恢复失败，请检查日志' : undefined,
+          });
+          break;
+        }
         default:
           console.warn('[LifeAiCode] 未知 WebView 命令:', message.command);
       }

@@ -327,7 +327,9 @@ export type WebViewRequest =
   | { command: 'confirmAgentEdit'; editId: string }
   | { command: 'rejectAgentEdit'; editId: string }
   // §需求8：手动压缩上下文 — 调 LLM 生成历史摘要替换早期消息
-  | { command: 'compactHistory'; messages: { role: 'user' | 'assistant'; content: string }[] };
+  | { command: 'compactHistory'; messages: { role: 'user' | 'assistant'; content: string }[] }
+  // §撤销修改：将 AI 自动修改的文件恢复到修改前的内容
+  | { command: 'revertFiles'; changes: Array<{ filePath: string; original: string }> };
 
 export type ExtensionMessage =
   | { type: 'chatResponse'; id: string; content: string; done: boolean }
@@ -355,6 +357,8 @@ export type ExtensionMessage =
   | { type: 'planGenerated'; steps: Array<{ step: number; tool: string; args: Record<string, unknown>; reason: string }> }
   // §需求9：计划步骤状态变更（pending/running/done/error/skipped）
   | { type: 'planStepUpdate'; index: number; status: 'pending' | 'running' | 'done' | 'error' | 'skipped'; summary?: string }
+  // §撤销修改：文件恢复完成通知
+  | { type: 'filesReverted'; filePaths: string[]; success: boolean; message?: string }
   | { type: 'error'; message: string };
 
 /* ─── VSCode API 类型 ─── */

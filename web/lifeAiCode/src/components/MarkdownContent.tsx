@@ -14,6 +14,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import { CodeBlock, ShellContext } from './codeblock';
+import { detectCodeLanguage } from './codeblock/languages';
 import type { ShellOutputsMap } from './codeblock';
 
 interface MarkdownContentProps {
@@ -177,124 +178,6 @@ function stripRedundantPreCodeWrapper(content: string): string {
 }
 
 /**
- * 智能检测代码片段的语言类型
- * 通过特征匹配得分，返回最接近的语言
- */
-function detectLanguage(code: string): string {
-  const scores: Record<string, number> = {};
-  const add = (lang: string, n: number) => { scores[lang] = (scores[lang] || 0) + n; };
-
-  // shebang 强信号
-  const shebang = code.match(/^#!.*?\n/)?.[0] || '';
-  if (shebang) {
-    if (/bash|\/sh\b|zsh/.test(shebang)) add('bash', 10);
-    if (/python/.test(shebang)) add('python', 10);
-    if (/node/.test(shebang)) add('javascript', 10);
-  }
-
-  // Python
-  if (/^\s*def\s+\w+\s*\(/m.test(code)) add('python', 3);
-  if (/^\s*from\s+\w+\s+import\s+/m.test(code)) add('python', 4);
-  if (/^\s*elif\s+/m.test(code)) add('python', 5);
-  if (/^\s*if\s+__name__\s*==/m.test(code)) add('python', 5);
-  if (/^\s*class\s+\w+.*:\s*$/m.test(code)) add('python', 2);
-
-  // Go
-  if (/^func\s+\w+/m.test(code)) add('go', 5);
-  if (/^package\s+\w+/m.test(code)) add('go', 5);
-  if (/:?=\s*make\(/.test(code)) add('go', 2);
-
-  // Rust
-  if (/^fn\s+\w+/m.test(code)) add('rust', 5);
-  if (/\blet\s+mut\s+/.test(code)) add('rust', 5);
-  if (/^use\s+\w+::/m.test(code)) add('rust', 3);
-  if (/\bimpl\s+\w+/.test(code)) add('rust', 3);
-
-  // C/C++
-  if (/#include\s*[<"]/.test(code)) add('cpp', 5);
-  if (/std::/.test(code)) add('cpp', 3);
-
-  // C#
-  if (/using\s+System/.test(code)) add('csharp', 5);
-  if (/Console\.WriteLine/.test(code)) add('csharp', 3);
-
-  // Java
-  if (/System\.out\.print/.test(code)) add('java', 5);
-  if (/public\s+(static\s+)?class\s+\w+/.test(code)) add('java', 2);
-
-  // SQL
-  if (/\b(SELECT\s+.+\s+FROM|INSERT\s+INTO|UPDATE\s+.+\s+SET|DELETE\s+FROM|CREATE\s+TABLE)\b/i.test(code)) add('sql', 5);
-
-  // HTML
-  if (/<\/?\w+[\s>]/.test(code) && /<\/\w+>/.test(code) && !/\b(function|const|let|var)\b/.test(code)) add('html', 3);
-
-  // CSS
-  if (/[#.\w-]+\s*\{[^}]*:[^}]*;[^}]*\}/.test(code)) add('css', 3);
-  if (/^\s*@media/m.test(code)) add('css', 5);
-
-  // TypeScript
-  if (/interface\s+\w+\s*\{/.test(code)) add('typescript', 4);
-  if (/:\s*(string|number|boolean|void|any|never|unknown)\b/.test(code)) add('typescript', 3);
-  if (/<[A-Z]\w*>/.test(code)) add('typescript', 1);
-  if (/\bas\s+const\b/.test(code)) add('typescript', 2);
-
-  // JavaScript
-  if (/(?:const|let|var)\s+\w+\s*=/.test(code)) add('javascript', 1);
-  if (/function\s+\w+\s*\(/.test(code)) add('javascript', 1);
-  if (/=>/.test(code)) add('javascript', 1);
-
-  // 找最高分
-  let bestLang = 'typescript';
-  let bestScore = 0;
-  for (const [lang, score] of Object.entries(scores)) {
-    if (score > bestScore) {
-      bestScore = score;
-      bestLang = lang;
-    }
-  }
-
-  // JS/TS 精细化区分：有 TS 特征则 typescript，纯 JS 特征则 javascript
-  if (bestLang === 'javascript' && (scores.typescript || 0) > 0) {
-    bestLang = 'typescript';
-  }
-  if (bestLang === 'typescript' && (scores.typescript || 0) === 0) {
-    if (/(?:const|let|var)\s+\w+\s*=/.test(code) || /function\s+\w+\s*\(/.test(code)) {
-      bestLang = 'javascript';
-    }
-  }
-
-  return bestLang;
-}
-
-/**
- * 把 LLM 直接输出的 <code>...</code> 标签转成 markdown 代码
- * - 多行 <code>：转成带语言标识的代码块
- * - 单行 <code>：转成 inline code（`code`）
- * 会反转义 HTML 实体（&lt; → < 等）
- * 注意：在 stripRedundantPreCodeWrapper 之后执行，避免误处理整体包裹
- */
-function stripCodeTags(content: string): string {
-  return content.replace(/<code(?:\s[^>]*)?>([\s\S]*?)<\/code>/gi, (_match, inner) => {
-    const unescaped = inner
-      .replace(/&gt;/g, '>')
-      .replace(/&lt;/g, '<')
-      .replace(/&quot;/g, '"')
-      .replace(/&#39;/g, "'")
-      .replace(/&nbsp;/g, ' ')
-      .replace(/&amp;/g, '&');
-    const trimmed = unescaped.trim();
-    if (!trimmed) return '';
-    // 多行：转成代码块
-    if (trimmed.includes('\n')) {
-      const lang = detectLanguage(trimmed);
-      return '\n\n```' + lang + '\n' + trimmed + '\n```\n\n';
-    }
-    // 单行：inline code
-    return '`' + trimmed + '`';
-  });
-}
-
-/**
  * 检测一行是否是代码块的强起始特征
  * 用于识别"代码块从这里开始"（保守策略，避免误判普通文本）
  */
@@ -388,7 +271,7 @@ function wrapCodeInSegment(text: string): string {
         if (output.length > 0 && output[output.length - 1].trim() !== '') {
           output.push('');
         }
-        output.push('```' + detectLanguage(codeLines.join('\n')));
+        output.push('```' + (detectCodeLanguage(codeLines.join('\n')) || 'text'));
         output.push(...codeLines);
         output.push('```');
         i = j;
@@ -479,9 +362,6 @@ function preprocessMarkdown(content: string): { processed: string; incomplete: b
 
   // 0. 剥离 LLM 误用的 <pre><code>...</code></pre> 外层包裹
   result = stripRedundantPreCodeWrapper(result);
-
-  // 0.3. 把 LLM 直接输出的 <code>...</code> 标签转成 markdown 代码
-  result = stripCodeTags(result);
 
   // 0.5. 自动包裹未用 ``` 围栏的裸代码块
   // 某些 LLM 输出代码时不加 ``` 围栏，导致代码被当作普通段落渲染

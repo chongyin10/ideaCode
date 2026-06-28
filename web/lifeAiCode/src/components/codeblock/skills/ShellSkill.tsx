@@ -11,7 +11,15 @@
 
 import type { CodeBlockSkill, CodeBlockSkillContext, ShellOutputsMap } from './types';
 import { Play, Loader2, Check, X, Square } from 'lucide-react';
+import { isShellCommand } from '../shellDetect';
 
+/**
+ * ShellSkill 静态语言前缀：
+ * 1. 第一层粗筛：CodeBlock 只在 markdown 声明的语言属于这个集合时才考虑激活
+ * 2. 第二层精筛：canActivate 用 isShellCommand 智能判断代码真正是否为 shell 命令
+ *    避免 import/export 等 JS/TS 代码被 detectCodeLanguage 误识别为 bash 后
+ *    显示"执行"按钮（用户点击会把 JS 代码当 shell 执行）。
+ */
 const SHELL_LANGUAGES = ['bash', 'shell', 'sh', 'zsh', 'fish'];
 
 /* ── ANSI → HTML 转换（保留终端彩色输出） ──────────────────────── */
@@ -56,7 +64,11 @@ function ansiToHtml(text: string): string {
   return result;
 }
 
-/** 提取代码块中要执行的命令（去掉 $ 前缀、合并多行） */
+/**
+ * 提取代码块中要执行的命令（去掉 $ 前缀、合并多行）
+ * 兼容 ShellSkill 内部调用，与 shellDetect.describeShellCommand 用途不同
+ * （本函数返回完整多行命令串，describeShellCommand 仅返回简短描述）
+ */
 function extractShellCommand(code: string): string | null {
   const lines = code.split('\n');
   const commands: string[] = [];
@@ -105,7 +117,14 @@ function computeStatus(execId: string | undefined, shellOutputs?: ShellOutputsMa
 
 export const ShellSkill: CodeBlockSkill = {
   id: 'shell',
-  languages: SHELL_LANGUAGES,
+  // 不再静态匹配 languages，而是用 canActivate 做两层判断：
+  // 1. 语言必须是 shell 系列（bash/sh/zsh/...）
+  // 2. 代码本体必须通过智能 shell 命令检测（isShellCommand）
+  // 这样可以避免 JS/TS/Python 等代码被误识别为 bash 后弹出"执行"按钮。
+  canActivate(ctx: CodeBlockSkillContext): boolean {
+    if (!SHELL_LANGUAGES.includes(ctx.language)) return false;
+    return isShellCommand(ctx.code);
+  },
 
   renderActions(ctx: CodeBlockSkillContext) {
     const { code, onExecuteShell, onKillShell, shellOutputs, setSkillState } = ctx;

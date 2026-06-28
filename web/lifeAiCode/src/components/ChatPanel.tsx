@@ -8,7 +8,7 @@ import { AgentStatusBar } from './agent/AgentStatusBar';
 import { ToolCallLog } from './agent/ToolCallLog';
 import { DiffConfirmDialog } from './agent/DiffConfirmDialog';
 import { PlanChecklist, type PlanStep } from './agent/PlanChecklist';
-import { ShieldCheck, Brain, ArrowDown, User, Sparkles, Paperclip, Send, MessageSquare, Loader2, Check, Square, ChevronDown, X, GripVertical, Pencil, MoreHorizontal, FileText, Terminal, RefreshCw, Network, Lightbulb, GitCompare, Trash2, Archive } from 'lucide-react';
+import { ShieldCheck, Brain, ArrowDown, User, Sparkles, Paperclip, Send, MessageSquare, Loader2, Check, Square, ChevronDown, X, GripVertical, Pencil, MoreHorizontal, FileText, Terminal, RefreshCw, Network, Lightbulb, GitCompare, Trash2, Archive, MapPin, Undo2 } from 'lucide-react';
 
 /** 预处理：检测并补齐未闭合的 markdown 结构（供 chatResponse 处理时使用） */
 function groupConfigsByProviderOrder(configs: LlmConfig[]) {
@@ -166,13 +166,21 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
   const scrollRafRef = useRef<number | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [userScrolledUp, setUserScrolledUp] = useState(false);
+  // §需求1：使用 ref 实时跟踪是否吸附在底部，避免 React state 延迟导致自动滚动与用户滚动冲突
+  const isPinnedRef = useRef(true);
   const configPickerRef = useRef<HTMLDivElement>(null);
   const historyRef = useRef<HTMLDivElement>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const actionOverflowRef = useRef<HTMLDivElement>(null);
+  // §需求2：动态测量 input-tags / input-actions 的宽度来判断是否需要紧凑模式
+  const inputTagsRef = useRef<HTMLDivElement>(null);
+  const inputActionsRef = useRef<HTMLDivElement>(null);
+  const fullActionsWidthRef = useRef<number>(0);
   const vscode = getVsCodeApi();
   // 响应式 input-actions：面板宽度不足时把次要按钮收进 ... 溢出菜单
   const [compactActions, setCompactActions] = useState(false);
+  const compactActionsRef = useRef(compactActions);
+  compactActionsRef.current = compactActions;
   const [showActionOverflow, setShowActionOverflow] = useState(false);
 
   const activeMeta = activeConfig ? PROVIDER_META[activeConfig.provider] : null;
@@ -224,16 +232,39 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
     };
   }, [showConfigPicker, showHistory, showActionOverflow]);
 
-  // 响应式 input-actions：监测工具栏宽度，空间不足时启用紧凑模式
+  // §需求2：响应式 input-actions — 动态测量 input-tags 内容是否溢出，
+  // 仅当空间确实不足（input-tags 右边界被触碰）时才把次要按钮收进 ... 溢出菜单，
+  // 替代原固定 400px 阈值，避免过早显示“...”图标
   useEffect(() => {
-    const el = toolbarRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        setCompactActions(entry.contentRect.width < 400);
+    const toolbar = toolbarRef.current;
+    const tagsEl = inputTagsRef.current;
+    const actionsEl = inputActionsRef.current;
+    if (!toolbar || !tagsEl || !actionsEl) return;
+
+    const measure = () => {
+      // 测量 input-tags 子元素的天然宽度（不受 flex 收缩影响）
+      const children = Array.from(tagsEl.children) as HTMLElement[];
+      const TAGS_GAP = 6;
+      const tagsNaturalWidth = children.reduce((sum, child) => sum + child.offsetWidth, 0)
+        + Math.max(0, children.length - 1) * TAGS_GAP;
+
+      // 非紧凑模式下记录 input-actions 的完整宽度，用于稳定比较
+      if (!compactActionsRef.current) {
+        fullActionsWidthRef.current = actionsEl.offsetWidth;
       }
-    });
-    ro.observe(el);
+      const actionsWidth = fullActionsWidthRef.current || actionsEl.offsetWidth;
+
+      const TOOLBAR_GAP = 8;
+      const TOOLBAR_PADDING = 20; // 10px left + 10px right
+      const totalNeeded = tagsNaturalWidth + actionsWidth + TOOLBAR_GAP;
+      const available = toolbar.clientWidth - TOOLBAR_PADDING;
+
+      setCompactActions(totalNeeded > available);
+    };
+
+    const ro = new ResizeObserver(measure);
+    ro.observe(toolbar);
+    measure();
     return () => ro.disconnect();
   }, []);
 
@@ -248,13 +279,18 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
   }, []);
 
   // 自动滚动到底部：用 rAF 节流 + 直接设置 scrollTop，避免高频 scrollIntoView 导致抖动
+  // §需求1：改用 ref 而非 state 判断是否吸附底部，避免 React 渲染延迟导致
+  // 自动滚动与用户向上滚动冲突（用户需大力滑动才能克服自动滚动）
   useEffect(() => {
-    if (userScrolledUp) return;
+    if (!isPinnedRef.current) return;
     const el = messagesContainerRef.current;
     if (!el) return;
     if (scrollRafRef.current != null) cancelAnimationFrame(scrollRafRef.current);
     scrollRafRef.current = requestAnimationFrame(() => {
-      el.scrollTop = el.scrollHeight;
+      // rAF 回调中再次检查 ref——用户可能在此帧内滚动了
+      if (isPinnedRef.current) {
+        el.scrollTop = el.scrollHeight;
+      }
       scrollRafRef.current = null;
     });
     return () => {
@@ -263,20 +299,58 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
         scrollRafRef.current = null;
       }
     };
-  }, [messages, toolCalls, agentStatus, userScrolledUp]);
+  }, [messages, toolCalls, agentStatus]);
 
-  // 监听滚动，判断用户是否主动离开底部
+  // §需求1：监听 wheel/touch/scroll 事件，实时检测用户滚动方向
+  // wheel/touchmove 在 scroll 之前触发，能立即将 isPinnedRef 置 false，
+  // 避免自动滚动覆盖用户的向上滚动操作，实现丝滑滚动
   useEffect(() => {
     const el = messagesContainerRef.current;
     if (!el) return;
-    const threshold = 80;
-    const handleScroll = () => {
+    const threshold = 40;
+
+    const updatePinned = () => {
       const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
-      setUserScrolledUp(distance > threshold);
+      const pinned = distance <= threshold;
+      isPinnedRef.current = pinned;
+      setUserScrolledUp(!pinned);
     };
-    el.addEventListener('scroll', handleScroll);
-    handleScroll();
-    return () => el.removeEventListener('scroll', handleScroll);
+
+    // wheel 事件：用户向上滚动时立即取消吸附
+    const handleWheel = (e: WheelEvent) => {
+      if (e.deltaY < 0 && isPinnedRef.current) {
+        isPinnedRef.current = false;
+        setUserScrolledUp(true);
+      }
+    };
+
+    // touch 事件：移动端向上滑动时立即取消吸附
+    let touchStartY = 0;
+    const handleTouchStart = (e: TouchEvent) => {
+      touchStartY = e.touches[0]?.clientY ?? 0;
+    };
+    const handleTouchMove = (e: TouchEvent) => {
+      const deltaY = touchStartY - (e.touches[0]?.clientY ?? 0);
+      if (deltaY < 0 && isPinnedRef.current) {
+        isPinnedRef.current = false;
+        setUserScrolledUp(true);
+      }
+    };
+
+    const handleScroll = () => updatePinned();
+
+    el.addEventListener('wheel', handleWheel, { passive: true });
+    el.addEventListener('touchstart', handleTouchStart, { passive: true });
+    el.addEventListener('touchmove', handleTouchMove, { passive: true });
+    el.addEventListener('scroll', handleScroll, { passive: true });
+    updatePinned();
+
+    return () => {
+      el.removeEventListener('wheel', handleWheel);
+      el.removeEventListener('touchstart', handleTouchStart);
+      el.removeEventListener('touchmove', handleTouchMove);
+      el.removeEventListener('scroll', handleScroll);
+    };
   }, []);
 
   // 聚焦输入框
@@ -609,6 +683,25 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
           });
           break;
         }
+        case 'filesReverted': {
+          // §撤销修改：文件恢复完成通知
+          if (msg.success) {
+            // 清空已记录的 AI 修改文件列表
+            setAgentEditedFiles([]);
+          }
+          const id = Date.now();
+          setNotice({
+            level: msg.success ? 'success' : 'error',
+            message: msg.success
+              ? `已撤销 ${msg.filePaths.length} 个文件的 AI 修改`
+              : (msg.message || '撤销失败'),
+            id,
+          });
+          setTimeout(() => {
+            setNotice((cur) => (cur && cur.id === id ? null : cur));
+          }, 3000);
+          break;
+        }
       }
     };
 
@@ -828,6 +921,24 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
     return estimateTokenUsage(messages, cw);
   }, [messages, activeConfig]);
 
+  // §定位提问：收集当前会话的用户提问
+  const userQuestions = useMemo(
+    () => messages
+      .filter((m) => m.role === 'user' && m.content.trim() && !m.placeholder)
+      .map((m) => ({ id: m.id, content: m.content.trim() })),
+    [messages],
+  );
+
+  // §定位提问：滚动到指定消息并临时高亮
+  const handleLocateMessage = useCallback((id: string) => {
+    const el = document.getElementById(`msg-${id}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.classList.add('message-row--located');
+      setTimeout(() => el.classList.remove('message-row--located'), 2000);
+    }
+  }, []);
+
   // Bug 4: 队列模式，当前显示的是第一个
   const currentPendingEdit = pendingAgentEdits[0] || null;
 
@@ -848,6 +959,15 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
       vscode.postMessage({ command: 'cancelAgent' } as WebViewRequest);
     }
   };
+
+  // §撤销修改：将 AI 自动修改的文件恢复到修改前的内容
+  const handleRevertChanges = useCallback((changes: SuggestionChange[]) => {
+    if (!vscode || changes.length === 0) return;
+    vscode.postMessage({
+      command: 'revertFiles',
+      changes: changes.map((c) => ({ filePath: c.filePath, original: c.original })),
+    } as WebViewRequest);
+  }, [vscode]);
 
   const contextFile = context?.activeFile?.filePath;
   const fileName = contextFile ? contextFile.split('/').pop() || contextFile : '';
@@ -1070,7 +1190,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
               return null;
             }
             return (
-            <div key={msg.id} className={`message-row message-row--${msg.role}`}>
+            <div key={msg.id} id={`msg-${msg.id}`} className={`message-row message-row--${msg.role}`}>
               <div className="message-inner">
                 {/* Avatar */}
                 {msg.role === 'assistant' ? (
@@ -1171,6 +1291,9 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
                 vscode?.postMessage({ command: 'compactHistory', messages: realMsgs } as WebViewRequest);
               }
             }}
+            userQuestions={userQuestions}
+            onLocateMessage={handleLocateMessage}
+            onRevertChanges={handleRevertChanges}
           />
         </div>
       )}
@@ -1181,6 +1304,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
           className="scroll-to-bottom"
           title="回到底部"
           onClick={() => {
+            isPinnedRef.current = true;
             setUserScrolledUp(false);
             messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
           }}
@@ -1225,7 +1349,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
             rows={1}
           />
           <div className="input-toolbar" ref={toolbarRef}>
-            <div className="input-tags">
+            <div className="input-tags" ref={inputTagsRef}>
               {fileName && (
                 <button className="input-tag" title={contextFile}>
                   <Paperclip size={11} strokeWidth={2} />
@@ -1293,7 +1417,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
                 )}
               </div>
             </div>
-            <div className="input-actions">
+            <div className="input-actions" ref={inputActionsRef}>
               <div title={isProcessing ? '当前正在对话中，功能暂不可用' : undefined} style={{ display: 'inline-flex' }}>
                 <AgentModeToggle enabled={agentMode} onToggle={() => !isProcessing && setAgentMode(!agentMode)} disabled={isProcessing} />
               </div>
@@ -1459,15 +1583,62 @@ function PreparingPlaceholder({
   onOpenDiff,
   tokenUsage,
   onCompact,
+  userQuestions,
+  onLocateMessage,
+  onRevertChanges,
 }: {
   agentStatus?: { status: string; message: string; stepType?: string } | null;
   changes?: SuggestionChange[];
   onOpenDiff?: (change: SuggestionChange) => void;
   tokenUsage?: { tokens: number; percent: number; contextWindow: number };
   onCompact?: () => void;
+  /** §定位提问：当前会话的用户提问列表 */
+  userQuestions?: { id: string; content: string }[];
+  /** §定位提问：点击某条提问后滚动定位 */
+  onLocateMessage?: (id: string) => void;
+  /** §撤销修改：将 AI 修改的文件恢复到修改前的内容 */
+  onRevertChanges?: (changes: SuggestionChange[]) => void;
 }) {
   const isDone = agentStatus?.status === 'done';
   const [showChanges, setShowChanges] = useState(false);
+  // §定位提问 Dropdown
+  const [showQuestionNav, setShowQuestionNav] = useState(false);
+  // §撤销修改确认弹窗状态
+  const [showRevertConfirm, setShowRevertConfirm] = useState(false);
+  const revertConfirmRef = useRef<HTMLDivElement>(null);
+  const questionNavRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!showQuestionNav) return;
+    const handleMouseDown = (e: MouseEvent) => {
+      if (questionNavRef.current && !questionNavRef.current.contains(e.target as Node)) {
+        setShowQuestionNav(false);
+      }
+    };
+    // §iframe 失焦兜底：webview 在 iframe 内，点击 IDE 区域不触发 mousedown
+    const handleBlur = () => setShowQuestionNav(false);
+    document.addEventListener('mousedown', handleMouseDown);
+    window.addEventListener('blur', handleBlur);
+    return () => {
+      document.removeEventListener('mousedown', handleMouseDown);
+      window.removeEventListener('blur', handleBlur);
+    };
+  }, [showQuestionNav]);
+  // §撤销修改确认弹窗：点击外部关闭
+  useEffect(() => {
+    if (!showRevertConfirm) return;
+    const handleMouseDown = (e: MouseEvent) => {
+      if (revertConfirmRef.current && !revertConfirmRef.current.contains(e.target as Node)) {
+        setShowRevertConfirm(false);
+      }
+    };
+    const handleBlur = () => setShowRevertConfirm(false);
+    document.addEventListener('mousedown', handleMouseDown);
+    window.addEventListener('blur', handleBlur);
+    return () => {
+      document.removeEventListener('mousedown', handleMouseDown);
+      window.removeEventListener('blur', handleBlur);
+    };
+  }, [showRevertConfirm]);
   // 任务完成：静态无动画，使用 status-card--done 停止 iconPulse/iconSpin
   if (isDone) {
     return (
@@ -1479,12 +1650,35 @@ function PreparingPlaceholder({
         {changes.length > 0 && onOpenDiff && (
           <button
             className={`status-card__action ${showChanges ? 'status-card__action--active' : ''}`}
-            onClick={() => setShowChanges(!showChanges)}
+            onClick={() => { setShowChanges(!showChanges); setShowQuestionNav(false); setShowRevertConfirm(false); }}
             title="查看代码变更"
           >
             <GitCompare size={11} strokeWidth={1.8} />
             <span>代码变更</span>
             <span className="status-card__action-count">{changes.length}</span>
+          </button>
+        )}
+        {/* §撤销修改：将 AI 自动修改的文件恢复到修改前的内容 */}
+        {changes.length > 0 && onRevertChanges && (
+          <button
+            className={`status-card__action status-card__action--undo ${showRevertConfirm ? 'status-card__action--active' : ''}`}
+            onClick={() => { setShowRevertConfirm(!showRevertConfirm); setShowChanges(false); setShowQuestionNav(false); }}
+            title="撤销 AI 修改的文件，恢复到修改前的状态"
+          >
+            <Undo2 size={11} strokeWidth={1.8} />
+            <span>撤销修改</span>
+            <span className="status-card__action-count">{changes.length}</span>
+          </button>
+        )}
+        {userQuestions && userQuestions.length > 0 && onLocateMessage && (
+          <button
+            className={`status-card__action ${showQuestionNav ? 'status-card__action--active' : ''}`}
+            onClick={() => { setShowQuestionNav(!showQuestionNav); setShowChanges(false); }}
+            title="定位到提问"
+          >
+            <MapPin size={11} strokeWidth={1.8} />
+            <span>提问</span>
+            <span className="status-card__action-count">{userQuestions.length}</span>
           </button>
         )}
         {tokenUsage && tokenUsage.tokens > 0 && (
@@ -1530,6 +1724,68 @@ function PreparingPlaceholder({
                   </button>
                 );
               })}
+            </div>
+          </div>
+        )}
+        {showQuestionNav && userQuestions && userQuestions.length > 0 && (
+          <div className="status-question-nav" ref={questionNavRef}>
+            <div className="status-question-nav__header">
+              <span>会话提问</span>
+              <span className="status-question-nav__count">{userQuestions.length}</span>
+            </div>
+            <div className="status-question-nav__list">
+              {userQuestions.map((q, idx) => (
+                <button
+                  key={q.id}
+                  className="status-question-nav__item"
+                  onClick={() => { onLocateMessage?.(q.id); setShowQuestionNav(false); }}
+                  title={q.content}
+                >
+                  <span className="status-question-nav__index">{idx + 1}</span>
+                  <span className="status-question-nav__text">{q.content}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {/* §撤销修改确认弹窗 */}
+        {showRevertConfirm && changes.length > 0 && onRevertChanges && (
+          <div className="status-revert-confirm" ref={revertConfirmRef}>
+            <div className="status-revert-confirm__header">
+              <Undo2 size={12} strokeWidth={1.8} />
+              <span>确认撤销 AI 修改</span>
+            </div>
+            <div className="status-revert-confirm__body">
+              即将把 {changes.length} 个文件恢复到 AI 修改前的状态，此操作不可撤销。
+            </div>
+            <div className="status-revert-confirm__files">
+              {changes.slice(0, 5).map((c, idx) => {
+                const fname = c.filePath.split(/[\\/]/).pop() || c.filePath;
+                return (
+                  <span key={idx} className="status-revert-confirm__file" title={c.filePath}>
+                    {fname}
+                  </span>
+                );
+              })}
+              {changes.length > 5 && (
+                <span className="status-revert-confirm__more">等 {changes.length} 个文件</span>
+              )}
+            </div>
+            <div className="status-revert-confirm__actions">
+              <button
+                type="button"
+                className="status-revert-confirm__btn status-revert-confirm__btn--cancel"
+                onClick={() => setShowRevertConfirm(false)}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="status-revert-confirm__btn status-revert-confirm__btn--confirm"
+                onClick={() => { onRevertChanges(changes); setShowRevertConfirm(false); }}
+              >
+                确认撤销
+              </button>
             </div>
           </div>
         )}

@@ -9,3 +9,5 @@ export { ShellContext } from './ShellContext';
 export type { ShellContextValue } from './ShellContext';
 export type { ShellOutputsMap, ShellStatus, CodeBlockSkill, CodeBlockSkillContext } from './skills/types';
 export { registerSkill, getMatchingSkills } from './skills/registry';
+// 智能 Shell 命令检测（前后端共用入口，后端 cjs 版见 extension-host/shellDetect.cjs）
+export { isShellCommand, hasShellCommand, describeShellCommand } from './shellDetect';
