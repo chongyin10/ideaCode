@@ -911,12 +911,23 @@ export class ExtensionBridge {
       const { getLanguageFromPath } = await import('../utils/languageFromPath');
       const language = getLanguageFromPath(filePath);
       try {
+        // 当 original 为空（AI 只提供了新增行 + 而没有 - 原始行）时，
+        // 尝试从磁盘读取当前文件内容作为 original，确保 DiffEditor 左右两栏都有内容。
+        // 新文件场景（文件不存在）original 保持空字符串，左侧显示空白表示全新文件。
+        let originalContent = original;
+        if (!originalContent && isPath(filePath)) {
+          try {
+            originalContent = await fsReadFile(filePath);
+          } catch {
+            // 文件不存在或读取失败，original 保持空字符串
+          }
+        }
         const { openDiffView } = await import('../store/slices/workspaceSlice');
         this.store.dispatch(
           openDiffView({
             filePath,
             fileName,
-            original,
+            original: originalContent,
             modified,
             language,
           }) as any

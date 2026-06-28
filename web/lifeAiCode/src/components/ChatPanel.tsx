@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
-import type { ChatMessage, CodeContext, WebViewRequest, ExtensionMessage, LlmConfig, ProviderType, ToolCallInfo } from '../types';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import type { ChatMessage, CodeContext, WebViewRequest, ExtensionMessage, LlmConfig, ProviderType, ToolCallInfo, SuggestionChange } from '../types';
 import { PROVIDER_META, getConnectionStatusColor } from '../types';
 import { SuggestionList } from './SuggestionList';
 import { ContentBlocks } from './ContentBlocks';
@@ -7,7 +7,7 @@ import { AgentModeToggle } from './agent/AgentModeToggle';
 import { AgentStatusBar } from './agent/AgentStatusBar';
 import { ToolCallLog } from './agent/ToolCallLog';
 import { DiffConfirmDialog } from './agent/DiffConfirmDialog';
-import { ShieldCheck, Brain, ArrowDown, User, Sparkles, Paperclip, Send, MessageSquare, Loader2, Check, Square, ChevronDown, X, GripVertical, Pencil, MoreHorizontal, FileText, Terminal, RefreshCw, Network, Lightbulb } from 'lucide-react';
+import { ShieldCheck, Brain, ArrowDown, User, Sparkles, Paperclip, Send, MessageSquare, Loader2, Check, Square, ChevronDown, X, GripVertical, Pencil, MoreHorizontal, FileText, Terminal, RefreshCw, Network, Lightbulb, GitCompare } from 'lucide-react';
 
 /** 预处理：检测并补齐未闭合的 markdown 结构（供 chatResponse 处理时使用） */
 function groupConfigsByProviderOrder(configs: LlmConfig[]) {
@@ -27,12 +27,14 @@ function preprocessMarkdown(content: string): { processed: string; incomplete: b
   let result = content;
   const reasons: string[] = [];
 
-  const fenceMatches = content.match(/```/g);
+  // 1. 未闭合的代码块 fence（``` 数量为奇数）
+  const fenceMatches = result.match(/```/g);
   if (fenceMatches && fenceMatches.length % 2 !== 0) {
     result += '\n\n```';
     reasons.push('代码块未闭合');
   }
 
+  // 2. 未闭合的 HTML 标签
   const openTags: Record<string, number> = {};
   const tagRegex = /<\/?(code|strong|em|del|a|b|i|u|span)\b[^>]*>/gi;
   let m: RegExpExecArray | null;
@@ -55,7 +57,7 @@ function preprocessMarkdown(content: string): { processed: string; incomplete: b
   }
   if (suffix) result += suffix;
 
-  return { processed: result.trimEnd(), incomplete: reasons.length > 0, reasons };
+  return { processed: result, incomplete: reasons.length > 0, reasons };
 }
 
 function getVsCodeApi() {
@@ -140,6 +142,8 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
   const [showConfigPicker, setShowConfigPicker] = useState(false);
   const [history, setHistory] = useState<ChatHistoryItem[]>(loadHistory);
   const [showHistory, setShowHistory] = useState(false);
+  // §继续会话：当前恢复的历史会话 ID（用于继续对话时拼接历史上下文，以及更新历史项）
+  const [currentHistoryId, setCurrentHistoryId] = useState<string | null>(null);
   const [historyDragId, setHistoryDragId] = useState<string | null>(null);
   const [historyDropTarget, setHistoryDropTarget] = useState<{ id: string; after: boolean } | null>(null);
   const [shellOutputs, setShellOutputs] = useState<Record<string, { output: string; status: 'running' | 'success' | 'error' | 'killed' }>>({});
@@ -150,6 +154,8 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
   // Bug 4: 改为数组队列，支持多个 pending 编辑同时存在
   // 原来单个 state 会被后续 edit 覆盖，用户丢失前一个确认弹窗
   const [pendingAgentEdits, setPendingAgentEdits] = useState<Array<{ editId: string; filePath: string; original: string; modified: string }>>([]);
+  // 持久记录本次会话中所有被 AI 修改过的文件（包括 suggestion 和 agent edit）
+  const [agentEditedFiles, setAgentEditedFiles] = useState<SuggestionChange[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const scrollRafRef = useRef<number | null>(null);
@@ -170,10 +176,17 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
   // 避免每次 autoAccept/pendingAgentEdit 变化时重订阅（重订阅期间到达的消息可能丢失）。
   const autoAcceptRef = useRef(autoAccept);
   autoAcceptRef.current = autoAccept;
+  // autoAccept 绑定到 aiEditMode：编辑模式开启时自动接受建议，关闭时手动接受
+  useEffect(() => { setAutoAccept(aiEditMode); }, [aiEditMode]);
   const pendingAgentEditsRef = useRef(pendingAgentEdits);
   pendingAgentEditsRef.current = pendingAgentEdits;
   const onOpenConfigRef = useRef(onOpenConfig);
   onOpenConfigRef.current = onOpenConfig;
+  // §继续会话：用 ref 让 message listener 能访问最新的 currentHistoryId / messages
+  const currentHistoryIdRef = useRef<string | null>(null);
+  currentHistoryIdRef.current = currentHistoryId;
+  const messagesRef = useRef<ChatMessage[]>(messages);
+  messagesRef.current = messages;
 
   // 点击外部关闭下拉面板
   useEffect(() => {
@@ -370,15 +383,27 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
           // 保存当前对话到历史并清空
           setMessages((prevMessages) => {
             // 保存历史前过滤掉占位消息
-            const realMessages = prevMessages.filter((m) => !m.placeholder);
-            if (realMessages.length > 0) {
-              const item: ChatHistoryItem = {
-                id: `chat-${Date.now()}`,
-                title: historyTitle(realMessages),
-                timestamp: Date.now(),
-                messages: realMessages,
-              };
+            const realMessages = prevMessages.filter((m) => !m.placeholder && m.content.trim());
+            if (realMessages.length > 0 && realMessages.some((m) => m.role === 'user')) {
+              const existingId = currentHistoryIdRef.current;
               setHistory((prevHistory) => {
+                // §继续会话：若当前是从历史恢复的会话，更新该历史项；否则新建
+                if (existingId) {
+                  const updated = prevHistory.map((h) => h.id === existingId ? {
+                    ...h,
+                    messages: realMessages,
+                    timestamp: Date.now(),
+                    title: historyTitle(realMessages),
+                  } : h);
+                  saveHistory(updated);
+                  return updated;
+                }
+                const item: ChatHistoryItem = {
+                  id: `chat-${Date.now()}`,
+                  title: historyTitle(realMessages),
+                  timestamp: Date.now(),
+                  messages: realMessages,
+                };
                 const updated = [item, ...prevHistory.filter((h) => h.id !== item.id)];
                 saveHistory(updated);
                 return updated;
@@ -386,6 +411,12 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
             }
             return [];
           });
+          // 新建会话时清空历史跟踪状态与执行记录
+          setCurrentHistoryId(null);
+          setAgentEditedFiles([]);
+          setAgentStatus(null);
+          setToolCalls([]);
+          setPendingAgentEdits([]);
           setError(null);
           break;
         }
@@ -486,6 +517,12 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
             original: msg.original,
             modified: msg.modified,
           }]);
+          // 持久记录被 AI 修改的文件（用于"文件变更"列表）
+          setAgentEditedFiles((prev) => {
+            const change: SuggestionChange = { filePath: msg.filePath, original: msg.original, modified: msg.modified, explanation: '', startLine: 0, endLine: 0 };
+            const filtered = prev.filter((c) => c.filePath !== change.filePath);
+            return [...filtered, change];
+          });
           break;
         }
         case 'agentEditStatus': {
@@ -506,11 +543,58 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vscode]);
 
-  // 从历史恢复对话
+  // 从历史恢复对话：渲染历史消息，并标记 currentHistoryId 以便后续继续会话时拼接上下文
   const restoreHistory = useCallback((item: ChatHistoryItem) => {
     setMessages(item.messages);
+    setCurrentHistoryId(item.id);
+    // 恢复历史时清空执行状态与文件变更记录，避免上一次会话的残留干扰
+    setAgentStatus({ status: 'done', message: '历史会话已恢复', stepType: 'done' });
+    setAgentEditedFiles([]);
+    setToolCalls([]);
+    setPendingAgentEdits([]);
+    setError(null);
     setShowHistory(false);
   }, []);
+
+  // §继续会话：对话完成（agentStatus.status === 'done'）时自动保存/更新历史
+  // 避免重复保存：用 messages 内容签名判断是否有变化
+  const lastSavedSignatureRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (agentStatus?.status !== 'done') return;
+    const realMessages = messagesRef.current.filter((m) => !m.placeholder && m.content.trim());
+    if (realMessages.length === 0 || !realMessages.some((m) => m.role === 'user')) return;
+
+    // 用内容签名避免重复保存（恢复历史时 signature 与已保存的一致，会跳过）
+    const signature = realMessages.map((m) => `${m.role}:${m.content.length}`).join('|');
+    if (lastSavedSignatureRef.current === signature) return;
+    lastSavedSignatureRef.current = signature;
+
+    const existingId = currentHistoryIdRef.current;
+    setHistory((prev) => {
+      if (existingId) {
+        // 更新现有历史项
+        const updated = prev.map((h) => h.id === existingId ? {
+          ...h,
+          messages: realMessages,
+          timestamp: Date.now(),
+          title: historyTitle(realMessages),
+        } : h);
+        saveHistory(updated);
+        return updated;
+      }
+      // 新建历史项
+      const item: ChatHistoryItem = {
+        id: `chat-${Date.now()}`,
+        title: historyTitle(realMessages),
+        timestamp: Date.now(),
+        messages: realMessages,
+      };
+      setCurrentHistoryId(item.id);
+      const updated = [item, ...prev].slice(0, MAX_HISTORY);
+      saveHistory(updated);
+      return updated;
+    });
+  }, [agentStatus]);
 
   const reorderHistory = useCallback((fromId: string, toId: string, after: boolean) => {
     if (fromId === toId) return;
@@ -572,7 +656,19 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
       return;
     }
 
-    vscode.postMessage({ command: 'sendMessage', text: text.trim(), context, thinkingEnabled, agentMode } as WebViewRequest);
+    vscode.postMessage({
+      command: 'sendMessage',
+      text: text.trim(),
+      context,
+      thinkingEnabled,
+      agentMode,
+      // §继续会话：把当前已有对话作为历史上下文传给后端，让 LLM 能理解多轮上下文
+      // 排除占位消息和空内容，最多保留最近 20 条避免 token 爆炸
+      history: messagesRef.current
+        .filter((m) => !m.placeholder && m.content.trim())
+        .slice(-20)
+        .map((m) => ({ role: m.role === 'assistant' ? 'assistant' as const : 'user' as const, content: m.content })),
+    } as WebViewRequest);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -599,6 +695,37 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
   const handleOpenDiffInEditor = (change: { filePath: string; original: string; modified: string }) => {
     if (vscode) vscode.postMessage({ command: 'openDiffInEditor', filePath: change.filePath, original: change.original, modified: change.modified } as WebViewRequest);
   };
+
+  // 收集本次对话中的所有代码变更（从 suggestions 中提取）
+  const collectedChanges = useMemo<SuggestionChange[]>(() => {
+    const all: SuggestionChange[] = [];
+    for (const msg of messages) {
+      if (msg.suggestions) {
+        for (const s of msg.suggestions) {
+          if (s.changes) all.push(...s.changes);
+          if (s.diffData) all.push(...s.diffData);
+        }
+      }
+    }
+    // 按 filePath 去重，保留最新
+    const seen = new Map<string, SuggestionChange>();
+    for (const c of all) {
+      seen.set(c.filePath, c);
+    }
+    return Array.from(seen.values());
+  }, [messages]);
+
+  // 合并 suggestions 变更 + agent 编辑变更（按 filePath 去重）
+  const allChanges = useMemo<SuggestionChange[]>(() => {
+    const seen = new Map<string, SuggestionChange>();
+    for (const c of [...collectedChanges, ...agentEditedFiles]) {
+      seen.set(c.filePath, c);
+    }
+    return Array.from(seen.values());
+  }, [collectedChanges, agentEditedFiles]);
+
+  // 估算本次对话的 token 使用率百分比
+  const tokenPercent = useMemo(() => estimateTokenPercent(messages), [messages]);
 
   // Bug 4: 队列模式，当前显示的是第一个
   const currentPendingEdit = pendingAgentEdits[0] || null;
@@ -631,41 +758,6 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
     const d = new Date(ts);
     const pad = (n: number) => String(n).padStart(2, '0');
     return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  };
-
-  const handleRegenerate = () => {
-    // §4.9: 之前直接重发 sendMessage 既不清旧 assistant 消息也不设 isProcessing，
-    // 导致 UI 上旧的 AI 回答仍然保留、且用户在生成期间能继续输入。
-    if (!vscode || isProcessing || messages.length === 0) return;
-    const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
-    if (!lastUserMsg) return;
-
-    // 删除最后一条 assistant 消息（如果有），并补上占位提示
-    setMessages((prev) => {
-      const arr = [...prev];
-      for (let i = arr.length - 1; i >= 0; i--) {
-        if (arr[i].role === 'assistant') {
-          arr.splice(i, 1);
-          break;
-        }
-      }
-      arr.push({
-        id: `placeholder-${Date.now()}`,
-        role: 'assistant',
-        content: '',
-        timestamp: Date.now(),
-        placeholder: true,
-        streaming: true,
-      });
-      return arr;
-    });
-    setIsProcessing(true);
-    // 新对话开始时清空上一次的完成状态与执行记录
-    setAgentStatus(null);
-    if (agentMode) {
-      setToolCalls([]);
-    }
-    vscode.postMessage({ command: 'sendMessage', text: lastUserMsg.content, context, thinkingEnabled, agentMode } as WebViewRequest);
   };
 
   /** 让 LLM 继续完成被截断的回答 */
@@ -912,7 +1004,6 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
                     modelLabel={msg.role === 'assistant' ? modelLabel : undefined}
                     provider={activeConfig?.provider || 'custom'}
                     onCopy={msg.role === 'assistant' ? (text) => navigator.clipboard.writeText(text).catch(() => {}) : undefined}
-                    onRegenerate={msg.role === 'assistant' && !msg.streaming ? handleRegenerate : undefined}
                     onContinue={msg.role === 'assistant' && msg.incomplete ? () => handleContinue(msg.id) : undefined}
                     onExecuteShell={(id, shellCommand) => {
                       vscode?.postMessage({ command: 'executeShell', id, shellCommand, cwd: context?.workspaceRoot || '' } as WebViewRequest);
@@ -943,11 +1034,15 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
         <div ref={messagesEndRef} />
       </div>
 
-      {/* 底部状态指示器：固定在消息列表底部。
-          处理中持续显示当前状态；对话结束后保留显示"任务完成"。 */}
-      {(isProcessing || agentStatus?.status === 'done') && (
+      {/* 底部状态指示器：处理中显示动态状态；完成后保留显示；有消息时也显示（含历史会话） */}
+      {(isProcessing || agentStatus?.status === 'done' || messages.some((m) => m.role === 'assistant' && !m.placeholder)) && (
         <div className="status-indicator-zone">
-          <PreparingPlaceholder agentStatus={agentStatus} />
+          <PreparingPlaceholder
+            agentStatus={agentStatus}
+            changes={allChanges}
+            onOpenDiff={handleOpenDiffInEditor}
+            tokenPercent={tokenPercent}
+          />
         </div>
       )}
 
@@ -1009,11 +1104,12 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
                 </button>
               )}
               {/* Model selector */}
-              <div className="kc-config-selector" ref={configPickerRef} style={{ position: 'relative' }}>
+              <div className={`kc-config-selector ${isProcessing ? 'kc-config-selector--disabled' : ''}`} ref={configPickerRef} style={{ position: 'relative' }}>
                 <button
                   className="input-tag input-tag--model"
-                  title={activeConfig ? `${activeMeta?.label || '未知'}: ${activeConfig.model || activeConfig.name}` : '未配置'}
-                  onClick={() => setShowConfigPicker(!showConfigPicker)}
+                  title={isProcessing ? '当前正在对话中，功能暂不可用' : (activeConfig ? `${activeMeta?.label || '未知'}: ${activeConfig.model || activeConfig.name}` : '未配置')}
+                  disabled={isProcessing}
+                  onClick={() => !isProcessing && setShowConfigPicker(!showConfigPicker)}
                 >
                   <span className="kc-config-indicator" style={{
                     background: getConnectionStatusColor(activeConfig?.connectionStatus),
@@ -1069,47 +1165,42 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
               </div>
             </div>
             <div className="input-actions">
-              <AgentModeToggle enabled={agentMode} onToggle={() => setAgentMode(!agentMode)} />
+              <div title={isProcessing ? '当前正在对话中，功能暂不可用' : undefined} style={{ display: 'inline-flex' }}>
+                <AgentModeToggle enabled={agentMode} onToggle={() => !isProcessing && setAgentMode(!agentMode)} disabled={isProcessing} />
+              </div>
               {!compactActions && (
                 <>
                   <button
-                    className={`input-icon-btn ${thinkingEnabled ? 'input-icon-btn--active' : ''}`}
-                    title={thinkingEnabled ? '思考模式已开启' : '思考模式已关闭'}
-                    onClick={() => setThinkingEnabled(!thinkingEnabled)}
+                    className={`input-icon-btn ${thinkingEnabled ? 'input-icon-btn--active' : ''} ${isProcessing ? 'input-icon-btn--disabled' : ''}`}
+                    title={isProcessing ? '当前正在对话中，功能暂不可用' : (thinkingEnabled ? '思考模式已开启' : '思考模式已关闭')}
+                    disabled={isProcessing}
+                    onClick={() => !isProcessing && setThinkingEnabled(!thinkingEnabled)}
                   >
                     <Brain size={15} strokeWidth={1.8} />
                   </button>
-                  {/* §4.4: toggleEditMode 之前在前端无触发入口（死代码），AI 编辑模式只能由后端推送设置。
-                      这里补一个按钮，让用户能主动切换 编辑模式 ↔ 只读模式。
-                      仅发命令到 Extension Host，由后端走完整链路后回推 aiEditMode 消息同步回前端 state。 */}
                   <button
-                    className={`input-icon-btn ${aiEditMode ? 'input-icon-btn--active' : ''}`}
-                    title={aiEditMode ? '编辑模式已开启（AI 可直接修改代码）' : '只读模式已开启（AI 仅提供建议，不修改代码）'}
+                    className={`input-icon-btn ${aiEditMode ? 'input-icon-btn--active' : ''} ${isProcessing ? 'input-icon-btn--disabled' : ''}`}
+                    title={isProcessing ? '当前正在对话中，功能暂不可用' : (aiEditMode ? '编辑模式已开启（AI 可直接修改代码，自动接受建议）' : '只读模式已开启（AI 仅提供建议，不修改代码）')}
+                    disabled={isProcessing}
                     onClick={() => {
-                      vscode?.postMessage({ command: 'toggleEditMode' } as WebViewRequest);
+                      if (!isProcessing) vscode?.postMessage({ command: 'toggleEditMode' } as WebViewRequest);
                     }}
                   >
                     <Pencil size={15} strokeWidth={1.8} />
-                  </button>
-                  <button
-                    className={`input-icon-btn ${autoAccept ? 'input-icon-btn--active' : ''}`}
-                    title={autoAccept ? '自动接受已开启' : '自动接受已关闭'}
-                    onClick={() => setAutoAccept(!autoAccept)}
-                  >
-                    <ShieldCheck size={15} strokeWidth={1.8} />
                   </button>
                 </>
               )}
               {compactActions && (
                 <div className="action-overflow" ref={actionOverflowRef} style={{ position: 'relative' }}>
                   <button
-                    className={`input-icon-btn ${showActionOverflow ? 'input-icon-btn--active' : ''}`}
-                    title="更多操作"
-                    onClick={() => setShowActionOverflow(!showActionOverflow)}
+                    className={`input-icon-btn ${showActionOverflow ? 'input-icon-btn--active' : ''} ${isProcessing ? 'input-icon-btn--disabled' : ''}`}
+                    title={isProcessing ? '当前正在对话中，功能暂不可用' : '更多操作'}
+                    disabled={isProcessing}
+                    onClick={() => !isProcessing && setShowActionOverflow(!showActionOverflow)}
                   >
                     <MoreHorizontal size={15} strokeWidth={1.8} />
                   </button>
-                  {showActionOverflow && (
+                  {showActionOverflow && !isProcessing && (
                     <div className="action-overflow-menu">
                       <button
                         className={`action-overflow-menu__item ${thinkingEnabled ? 'action-overflow-menu__item--active' : ''}`}
@@ -1126,14 +1217,6 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
                         <Pencil size={14} strokeWidth={1.8} />
                         <span>编辑模式</span>
                         <span className="action-overflow-menu__state">{aiEditMode ? '开' : '关'}</span>
-                      </button>
-                      <button
-                        className={`action-overflow-menu__item ${autoAccept ? 'action-overflow-menu__item--active' : ''}`}
-                        onClick={() => { setAutoAccept(!autoAccept); }}
-                      >
-                        <ShieldCheck size={14} strokeWidth={1.8} />
-                        <span>自动接受</span>
-                        <span className="action-overflow-menu__state">{autoAccept ? '开' : '关'}</span>
                       </button>
                     </div>
                   )}
@@ -1195,29 +1278,167 @@ function resolveStatusVariant(stepType?: string, message?: string) {
   return STATUS_VARIANTS.default;
 }
 
-function PreparingPlaceholder({ agentStatus }: { agentStatus?: { status: string; message: string; stepType?: string } | null }) {
+/** LCS 行级 diff，统计 added/removed 行数 */
+function computeChangeStats(change: SuggestionChange): { added: number; removed: number } {
+  const oldLines = change.original.split('\n');
+  const newLines = change.modified.split('\n');
+  const m = oldLines.length;
+  const n = newLines.length;
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      if (oldLines[i] === newLines[j]) dp[i][j] = dp[i + 1][j + 1] + 1;
+      else dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  let i = 0, j = 0, added = 0, removed = 0;
+  while (i < m && j < n) {
+    if (oldLines[i] === newLines[j]) { i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { removed++; i++; }
+    else { added++; j++; }
+  }
+  while (i < m) { removed++; i++; }
+  while (j < n) { added++; j++; }
+  return { added, removed };
+}
+
+/** 估算 token 使用率百分比（基于消息内容长度，中英混合约 3 字符/token） */
+function estimateTokenPercent(messages: ChatMessage[]): number {
+  const totalChars = messages.reduce((sum, m) => {
+    const content = m.content || '';
+    const blocks = m.blocks?.reduce((s: number, b) => s + (b.type === 'text' ? b.content.length : b.type === 'reasoning' ? b.content.length : 0), 0) || 0;
+    return sum + content.length + blocks;
+  }, 0);
+  if (totalChars === 0) return 0;
+  const estimatedTokens = Math.ceil(totalChars / 3);
+  const contextWindow = 128000;
+  return Math.min((estimatedTokens / contextWindow) * 100, 100);
+}
+
+function PreparingPlaceholder({
+  agentStatus,
+  changes = [],
+  onOpenDiff,
+  tokenPercent,
+}: {
+  agentStatus?: { status: string; message: string; stepType?: string } | null;
+  changes?: SuggestionChange[];
+  onOpenDiff?: (change: SuggestionChange) => void;
+  tokenPercent?: number;
+}) {
   const isDone = agentStatus?.status === 'done';
+  const [showChanges, setShowChanges] = useState(false);
   // 任务完成：静态无动画，使用 status-card--done 停止 iconPulse/iconSpin
   if (isDone) {
     return (
-      <div className="status-card status-card--done">
+      <div className="status-card status-card--done" style={{ position: 'relative' }}>
         <span className="status-card__icon">
           <Check size={12} strokeWidth={2} />
         </span>
         <span className="status-card__text">任务完成</span>
+        {changes.length > 0 && onOpenDiff && (
+          <button
+            className={`status-card__action ${showChanges ? 'status-card__action--active' : ''}`}
+            onClick={() => setShowChanges(!showChanges)}
+            title="查看代码变更"
+          >
+            <GitCompare size={11} strokeWidth={1.8} />
+            <span>代码变更</span>
+            <span className="status-card__action-count">{changes.length}</span>
+          </button>
+        )}
+        {typeof tokenPercent === 'number' && tokenPercent > 0 && (
+          <span className="status-card__token" title="上下文窗口 Token 使用率（估算）">
+            Token {tokenPercent.toFixed(1)}%
+          </span>
+        )}
+        {showChanges && changes.length > 0 && (
+          <div className="status-changes-popup">
+            <div className="status-changes-popup__header">
+              <span>变更文件</span>
+              <span className="status-changes-popup__count">{changes.length}</span>
+            </div>
+            <div className="status-changes-popup__list">
+              {changes.map((change, idx) => {
+                const stats = computeChangeStats(change);
+                const fileName = change.filePath.split(/[\\/]/).pop() || change.filePath;
+                return (
+                  <button
+                    key={idx}
+                    className="status-changes-popup__item"
+                    onClick={() => { onOpenDiff?.(change); setShowChanges(false); }}
+                    title={change.filePath}
+                  >
+                    <span className="status-changes-popup__file">{fileName}</span>
+                    <span className="status-changes-popup__path">{change.filePath}</span>
+                    <span className="status-changes-popup__stats">
+                      {stats.added > 0 && <span className="status-changes-popup__added">+{stats.added}</span>}
+                      {stats.removed > 0 && <span className="status-changes-popup__removed">-{stats.removed}</span>}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
     );
   }
   const { Icon, text, variant } = resolveStatusVariant(agentStatus?.stepType, agentStatus?.message);
   return (
-    <div className={`status-card status-card--${variant}`}>
+    <div className={`status-card status-card--${variant}`} style={{ position: 'relative' }}>
       <span className="status-card__icon">
         <Icon size={12} strokeWidth={2} />
       </span>
       <span className="status-card__text">{text}</span>
+      {changes.length > 0 && onOpenDiff && (
+        <button
+          className={`status-card__action ${showChanges ? 'status-card__action--active' : ''}`}
+          onClick={() => setShowChanges(!showChanges)}
+          title="查看代码变更"
+        >
+          <GitCompare size={11} strokeWidth={1.8} />
+          <span>文件变更</span>
+          <span className="status-card__action-count">{changes.length}</span>
+        </button>
+      )}
+      {typeof tokenPercent === 'number' && tokenPercent > 0 && (
+        <span className="status-card__token" title="上下文窗口 Token 使用率（估算）">
+          Token {tokenPercent.toFixed(1)}%
+        </span>
+      )}
       <span className="status-card__dots">
         <span /><span /><span />
       </span>
+      {showChanges && changes.length > 0 && (
+        <div className="status-changes-popup">
+          <div className="status-changes-popup__header">
+            <span>变更文件</span>
+            <span className="status-changes-popup__count">{changes.length}</span>
+          </div>
+          <div className="status-changes-popup__list">
+            {changes.map((change, idx) => {
+              const stats = computeChangeStats(change);
+              const fileName = change.filePath.split(/[\\/]/).pop() || change.filePath;
+              return (
+                <button
+                  key={idx}
+                  className="status-changes-popup__item"
+                  onClick={() => { onOpenDiff?.(change); setShowChanges(false); }}
+                  title={change.filePath}
+                >
+                  <span className="status-changes-popup__file">{fileName}</span>
+                  <span className="status-changes-popup__path">{change.filePath}</span>
+                  <span className="status-changes-popup__stats">
+                    {stats.added > 0 && <span className="status-changes-popup__added">+{stats.added}</span>}
+                    {stats.removed > 0 && <span className="status-changes-popup__removed">-{stats.removed}</span>}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

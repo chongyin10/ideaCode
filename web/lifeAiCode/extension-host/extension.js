@@ -495,9 +495,9 @@ async function processMessage(text, context, options = {}) {
   if (isProcessing) return;
   isProcessing = true;
 
-  const { thinkingEnabled, continueFromMessageId, continueFromContent, continueFromText } = options || {};
+  const { thinkingEnabled, continueFromMessageId, continueFromContent, continueFromText, history } = options || {};
   const msgId = continueFromMessageId || generateId();
-  console.log('[LifeAiCode] 处理用户消息:', text.slice(0, 60), 'thinkingEnabled:', thinkingEnabled, 'continue:', !!continueFromMessageId);
+  console.log('[LifeAiCode] 处理用户消息:', text.slice(0, 60), 'thinkingEnabled:', thinkingEnabled, 'continue:', !!continueFromMessageId, 'history:', Array.isArray(history) ? history.length : 0);
 
   // 记录上下文以便 continue 使用
   lastRequestContext = { text, context, thinkingEnabled };
@@ -559,7 +559,15 @@ async function processMessage(text, context, options = {}) {
           done: true,
         });
       }
-      messages = [{ role: 'user', content: userMessage }];
+      // §继续会话：若 WebView 传入了历史消息，作为多轮对话上下文前置拼接
+      // （过滤掉空内容和占位符，最多保留最近 10 轮避免 token 爆炸）
+      const historyMessages = Array.isArray(history) && history.length > 0
+        ? history
+            .filter((m) => m && m.content && typeof m.content === 'string' && m.content.trim())
+            .slice(-20)
+            .map((m) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content }))
+        : [];
+      messages = [...historyMessages, { role: 'user', content: userMessage }];
     }
 
     // 4. 调用 LLM（先尝试流式，失败回退非流式）
@@ -683,7 +691,8 @@ async function runAgentTask(text, context, options = {}) {
   isProcessing = true;
 
   const msgId = generateId();
-  console.log('[LifeAiCode][Agent] 开始任务:', text.slice(0, 60));
+  const { history } = options || {};
+  console.log('[LifeAiCode][Agent] 开始任务:', text.slice(0, 60), 'history:', Array.isArray(history) ? history.length : 0);
 
   try {
     if (!agentRuntime) {
@@ -703,6 +712,7 @@ async function runAgentTask(text, context, options = {}) {
 
     let streamedContent = '';
     const finalResponse = await agentRuntime.run(text, context, {
+      history,
       onToken: (token) => {
         // 实时推送内容到 WebView，过滤 prompt-based 模式下可能混入的 <tool_call> 标签
         streamedContent += token;
@@ -1192,9 +1202,9 @@ async function activate(context) {
             agentRuntime.context.workspaceRoot = ctx.workspaceRoot || '';
           }
           if (message.agentMode) {
-            await runAgentTask(message.text, ctx);
+            await runAgentTask(message.text, ctx, { history: message.history });
           } else {
-            await processMessage(message.text, ctx, { thinkingEnabled: message.thinkingEnabled });
+            await processMessage(message.text, ctx, { thinkingEnabled: message.thinkingEnabled, history: message.history });
           }
           break;
         }

@@ -114,6 +114,39 @@ const CANONICAL_PATTERN =
   /<(reasoning|edit|shell|fileStatus|step)\b([^>]*?)\/?>(?:([\s\S]*?)<\/\1>)?/gi;
 
 /* ─────────────────────────────────────────────────────────────────── */
+/*  代码块区间检测：避免误提取代码块内的 canonical 标签                      */
+/* ─────────────────────────────────────────────────────────────────── */
+
+/**
+ * 提取 markdown 围栏代码块（``` 或 ~~~）的区间列表。
+ * 返回的区间为 [start, end) 形式，供 isInsideCodeBlock 检测使用。
+ *
+ * 注意：canonical 标签如果出现在代码块内部（如 AI 回复的 JSX/HTML 代码中
+ * 恰好有 <step>、<edit> 等同名标签），不应被提取——否则 removeIntervals
+ * 会删除这些区间，把代码块拆碎，导致 ReactMarkdown 无法识别为代码块，
+ * 代码内容被当作普通段落渲染（换行变 <br>，丢失语法高亮）。
+ */
+function extractCodeBlockIntervals(text: string): Array<{ start: number; end: number }> {
+  const intervals: Array<{ start: number; end: number }> = [];
+  // 匹配 ``` 或 ~~~ 围栏代码块（支持开头指定语言）
+  const fenceRegex = /(```|~~~)([\s\S]*?)\1/g;
+  let m: RegExpExecArray | null;
+  while ((m = fenceRegex.exec(text)) !== null) {
+    intervals.push({ start: m.index, end: m.index + m[0].length });
+  }
+  // 匹配缩进式代码块（行首 4+ 空格，后跟非空内容行）——简化处理，跳过
+  return intervals;
+}
+
+/** 检查位置 pos 是否位于任何代码块区间内 */
+function isInsideCodeBlock(pos: number, codeBlocks: ReadonlyArray<{ start: number; end: number }>): boolean {
+  for (const cb of codeBlocks) {
+    if (pos >= cb.start && pos < cb.end) return true;
+  }
+  return false;
+}
+
+/* ─────────────────────────────────────────────────────────────────── */
 /*  区间补集工具：从源串中删除一组标签区间                                   */
 /* ─────────────────────────────────────────────────────────────────── */
 
@@ -185,10 +218,16 @@ export function parseProviderTags(text: string, provider: ProviderId): TagParseR
   const rules = PROVIDER_RULES[provider] || PROVIDER_RULES.custom;
   const tags: ExtractedTag[] = [];
 
+  // 0. 提取 markdown 代码块区间，避免误提取代码块内的标签
+  //    （如 JSX/HTML 代码中的 <step>、<edit> 等同名标签）
+  const codeBlocks = extractCodeBlockIntervals(text);
+
   // 1. 提取 thinking 标签
   if (rules.thinking) {
     for (const m of text.matchAll(rules.thinking)) {
       const start = m.index!;
+      // 跳过位于代码块内的匹配
+      if (isInsideCodeBlock(start, codeBlocks)) continue;
       const end = start + m[0].length;
       tags.push({
         kind: 'thinking',
@@ -204,6 +243,8 @@ export function parseProviderTags(text: string, provider: ProviderId): TagParseR
   if (rules.environment) {
     for (const m of text.matchAll(rules.environment)) {
       const start = m.index!;
+      // 跳过位于代码块内的匹配
+      if (isInsideCodeBlock(start, codeBlocks)) continue;
       const end = start + m[0].length;
       tags.push({
         kind: 'environment',
@@ -220,10 +261,13 @@ export function parseProviderTags(text: string, provider: ProviderId): TagParseR
     // 重新创建一个 regex 实例（必须，不然 /g 状态会污染）
     const re = new RegExp(CANONICAL_PATTERN.source, 'gi');
     for (const m of text.matchAll(re)) {
+      const start = m.index!;
+      // 跳过位于代码块内的匹配：代码块内的 <step>、<edit> 等是代码内容，
+      // 不是 AI 的步骤可视化标签，不能提取——否则会拆碎代码块
+      if (isInsideCodeBlock(start, codeBlocks)) continue;
       const tagName = m[1].toLowerCase() as CanonicalTagName;
       const attrs = m[2] || '';
       const innerContent = m[3] || '';
-      const start = m.index!;
       const end = start + m[0].length;
       tags.push({
         kind: 'canonical',

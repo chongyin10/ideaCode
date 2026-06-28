@@ -9,7 +9,7 @@
  *  CodeBlock 和 ShellContext 已迁移到 ./codeblock/，通过 Skill 模式
  *  扩展代码块行为。新增 shell 之外的语言行为不改动此文件。       */
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
@@ -125,18 +125,10 @@ export function MarkdownContent({
       </ShellContext.Provider>
 
       {optionList && (
-        <div className="option-list">
-          {optionList.options.map((opt, idx) => (
-            <button
-              key={idx}
-              className="option-btn"
-              onClick={() => onOptionClick?.(opt)}
-              title={opt}
-            >
-              {opt}
-            </button>
-          ))}
-        </div>
+        <OptionList
+          options={optionList.options}
+          onSelect={(opt) => onOptionClick?.(opt)}
+        />
       )}
 
       {incomplete && (
@@ -155,8 +147,54 @@ export function MarkdownContent({
 /*  辅助函数（Markdown 预处理）                                        */
 /* ─────────────────────────────────────────────────────────────────── */
 
+/**
+ * 剥离 LLM 误用的 <pre><code>...</code></pre> 外层包裹。
+ *
+ * 触发条件（同时满足）：
+ * 1. 内容整体被 <pre><code>...</code></pre> 包裹（允许首尾空白、标签属性）
+ * 2. 内部确实包含 ``` 围栏（说明是 markdown 内容被误包，而非纯代码展示）
+ *
+ * 处理：剥离外层标签 + 反转义 HTML 实体（&gt; → > 等），让内部 markdown 正常渲染。
+ * 保守策略：不满足条件时原样返回，避免破坏合法的 HTML 代码块。
+ */
+function stripRedundantPreCodeWrapper(content: string): string {
+  const trimmed = content.trim();
+  // 匹配 <pre...><code...>...</code></pre>（整体包裹）
+  const match = trimmed.match(/^<pre[^>]*>\s*<code[^>]*>([\s\S]*?)<\/code>\s*<\/pre>\s*$/i);
+  if (!match) return content;
+  const inner = match[1];
+  // 内部必须包含 ``` 围栏才剥离（否则可能是合法的纯代码展示）
+  if (!/```/.test(inner)) return content;
+  // 反转义 HTML 实体（LLM 在 <pre><code> 内常把 > < & 转义）
+  const unescaped = inner
+    .replace(/&gt;/g, '>')
+    .replace(/&lt;/g, '<')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&');
+  return unescaped.trim();
+}
+
 function parseOptionList(content: string): { preText: string; options: string[] } | null {
   const trimmed = content.trimEnd();
+
+  // 1. 优先匹配 HTML 格式：<div class="option-list"><button class="option-btn" title="...">...</button>...</div>
+  const htmlMatch = trimmed.match(/<div\s+class=["']option-list["']\s*>([\s\S]*?)<\/div>\s*$/i);
+  if (htmlMatch) {
+    const preText = trimmed.slice(0, trimmed.length - htmlMatch[0].length).trimEnd();
+    const buttonRegex = /<button\s+[^>]*class=["']option-btn["'][^>]*>([^<]*)<\/button>/gi;
+    const options: string[] = [];
+    let m: RegExpExecArray | null;
+    while ((m = buttonRegex.exec(htmlMatch[1])) !== null) {
+      options.push(m[1].trim());
+    }
+    if (options.length >= 2) {
+      return { preText, options };
+    }
+  }
+
+  // 2. 回退到 markdown 列表格式
   const listMatch = trimmed.match(/(?:\n|^)((?:[-*]|\d+\.)\s+.*(?:\n|$)(?:(?:[-*]|\d+\.)\s+.*(?:\n|$))+)\s*$/);
   if (!listMatch) return null;
 
@@ -184,8 +222,14 @@ function preprocessMarkdown(content: string): { processed: string; incomplete: b
   let result = content;
   const reasons: string[] = [];
 
+  // 0. 剥离 LLM 误用的 <pre><code>...</code></pre> 外层包裹
+  // 某些 LLM 把整个 markdown 回复用 <pre><code> 包裹，导致内部 ``` 围栏失效、
+  // 代码被当作纯文本渲染（换行变 <br>，=> 被转义为 &gt;）。
+  // 仅当内部确实包含 ``` 围栏时才剥离，避免破坏合法的 <pre><code> 代码展示。
+  result = stripRedundantPreCodeWrapper(result);
+
   // 1. 未闭合的代码块 fence（``` 数量为奇数）
-  const fenceMatches = content.match(/```/g);
+  const fenceMatches = result.match(/```/g);
   if (fenceMatches && fenceMatches.length % 2 !== 0) {
     result += '\n\n```';
     reasons.push('代码块未闭合');
@@ -207,7 +251,7 @@ function preprocessMarkdown(content: string): { processed: string; incomplete: b
     reasons.push('表格未闭合');
   }
 
-  // 3. 未闭合的 HTML 标签（粗略处理）
+  // 3. 未闭合的 HTML 标签
   const openTags: Record<string, number> = {};
   const tagRegex = /<\/?(code|strong|em|del|a|b|i|u|sub|sup|span)\b[^>]*>/gi;
   let m: RegExpExecArray | null;
@@ -235,4 +279,32 @@ function preprocessMarkdown(content: string): { processed: string; incomplete: b
     incomplete: reasons.length > 0,
     reasons,
   };
+}
+
+/* ─────────────────────────────────────────────────────────────────── */
+/*  OptionList：单选选项列表 + 边框渲染动画                              */
+/* ─────────────────────────────────────────────────────────────────── */
+
+function OptionList({ options, onSelect }: { options: string[]; onSelect: (text: string) => void }) {
+  const [selected, setSelected] = useState<number | null>(null);
+
+  return (
+    <div className="option-list">
+      {options.map((opt, idx) => (
+        <button
+          key={idx}
+          className={`option-btn ${selected === idx ? 'option-btn--selected' : ''}`}
+          style={{ animationDelay: `${idx * 80}ms` }}
+          onClick={() => {
+            setSelected(idx);
+            onSelect(opt);
+          }}
+          title={opt}
+        >
+          <span className="option-btn__radio" />
+          <span className="option-btn__text">{opt}</span>
+        </button>
+      ))}
+    </div>
+  );
 }

@@ -2,7 +2,7 @@ import { useState, useMemo, useRef, useEffect } from 'react';
 import {
   Brain, Bot, Pencil, Terminal, FileText, Search, Info,
   ChevronDown, Copy, Check, Loader2,
-  Sparkles, GitBranch,
+  GitBranch,
   AlertTriangle, RefreshCw,
 } from 'lucide-react';
 import type { ContentBlock as ContentBlockType, FileStatus, StepType, StepStatus } from '../types';
@@ -222,7 +222,6 @@ interface ContentBlocksProps {
   onKillShell?: (id: string) => void;
   onOptionClick?: (text: string) => void;
   onCopy?: (text: string) => void;
-  onRegenerate?: () => void;
   onContinue?: () => void;
   incomplete?: boolean;
   incompleteReasons?: string[];
@@ -241,7 +240,6 @@ export function ContentBlocks({
   onKillShell,
   onOptionClick,
   onCopy,
-  onRegenerate,
   onContinue,
   incomplete,
   incompleteReasons,
@@ -291,7 +289,6 @@ export function ContentBlocks({
       providerLabel={providerLabel}
       modelLabel={modelLabel}
       onCopy={onCopy ? () => onCopy(content) : undefined}
-      onRegenerate={completed ? onRegenerate : undefined}
       onContinue={onContinue}
       incomplete={incomplete}
       incompleteReasons={incompleteReasons}
@@ -328,7 +325,6 @@ interface MessageCardProps {
   modelLabel?: string;
   showActions?: boolean;
   onCopy?: () => void;
-  onRegenerate?: () => void;
   onContinue?: () => void;
   incomplete?: boolean;
   incompleteReasons?: string[];
@@ -339,7 +335,7 @@ function MessageCard({
   title, status, children,
   providerLabel, modelLabel,
   showActions = false,
-  onCopy, onRegenerate, onContinue,
+  onCopy, onContinue,
   incomplete, incompleteReasons,
   defaultCollapsed = false,
 }: MessageCardProps) {
@@ -419,28 +415,16 @@ function MessageCard({
           )}
 
           {/* Action bar at bottom of card */}
-          {showActions && (onCopy || onRegenerate) && (
+          {showActions && onCopy && (
             <div className="ai-card__section ai-card__section--actions">
-              {onCopy && (
-                <button
-                  className={`action-btn ${copied ? 'action-btn--active' : ''}`}
-                  onClick={(e) => { e.stopPropagation(); handleCopy(); }}
-                  title="复制全文"
-                >
-                  {copied ? <Check size={13} strokeWidth={2} /> : <Copy size={13} strokeWidth={1.8} />}
-                  {copied ? '已复制' : '复制'}
-                </button>
-              )}
-              {onRegenerate && (
-                <button
-                  className="action-btn"
-                  onClick={(e) => { e.stopPropagation(); onRegenerate(); }}
-                  title="重新生成"
-                >
-                  <Sparkles size={13} strokeWidth={1.8} />
-                  重新生成
-                </button>
-              )}
+              <button
+                className={`action-btn ${copied ? 'action-btn--active' : ''}`}
+                onClick={(e) => { e.stopPropagation(); handleCopy(); }}
+                title="复制全文"
+              >
+                {copied ? <Check size={13} strokeWidth={2} /> : <Copy size={13} strokeWidth={1.8} />}
+                {copied ? '已复制' : '复制'}
+              </button>
             </div>
           )}
         </div>

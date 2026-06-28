@@ -250,8 +250,14 @@ export function getConnectionStatusText(status?: LlmConfig['connectionStatus'], 
 
 /* ─── WebView 消息 ─── */
 
+/** 历史会话消息（用于继续会话时传给后端的多轮上下文） */
+export interface ChatHistoryMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 export type WebViewRequest =
-  | { command: 'sendMessage'; text: string; context: CodeContext; thinkingEnabled?: boolean; agentMode?: boolean }
+  | { command: 'sendMessage'; text: string; context: CodeContext; thinkingEnabled?: boolean; agentMode?: boolean; history?: ChatHistoryMessage[] }
   | { command: 'continueMessage'; messageId: string; continueFromContent: string }
   | { command: 'acceptSuggestion'; suggestionId: string }
   | { command: 'rejectSuggestion'; suggestionId: string }

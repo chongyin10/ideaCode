@@ -86,14 +86,23 @@ class AgentRuntime {
    * @returns {Promise<string>} 最终总结
    */
   async _runOne({ userInput, initialContext, callbacks }) {
-    const { onToken, onToolCall, onDone, onError } = callbacks;
+    const { onToken, onToolCall, onDone, onError, history } = callbacks;
     const signal = this._abortController.signal;
     const startTime = Date.now();
 
     try {
       // 初始上下文提示
       const contextStr = this._formatContext(initialContext);
+      // §继续会话：若调用方传入历史消息，作为多轮上下文前置拼接
+      // （过滤空内容，最多保留最近 20 条避免 token 爆炸）
+      const historyMessages = Array.isArray(history) && history.length > 0
+        ? history
+            .filter((m) => m && m.content && typeof m.content === 'string' && m.content.trim())
+            .slice(-20)
+            .map((m) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content }))
+        : [];
       const messages = [
+        ...historyMessages,
         { role: 'user', content: `${contextStr}\n\n## 用户任务\n${userInput}` },
       ];
 
