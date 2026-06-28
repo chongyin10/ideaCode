@@ -1,14 +1,14 @@
-import type { Suggestion } from '../types';
+import type { Suggestion, SuggestionChange } from '../types';
 import { SuggestionCard } from './SuggestionCard';
 
 interface SuggestionListProps {
   suggestions: Suggestion[];
   onAccept: (id: string) => void;
   onReject: (id: string) => void;
-  onPreviewDiff: (id: string) => void;
+  onOpenDiffInEditor: (change: SuggestionChange) => void;
 }
 
-export function SuggestionList({ suggestions, onAccept, onReject, onPreviewDiff }: SuggestionListProps) {
+export function SuggestionList({ suggestions, onAccept, onReject, onOpenDiffInEditor }: SuggestionListProps) {
   if (suggestions.length === 0) return null;
 
   return (
@@ -19,7 +19,7 @@ export function SuggestionList({ suggestions, onAccept, onReject, onPreviewDiff 
           suggestion={s}
           onAccept={onAccept}
           onReject={onReject}
-          onPreviewDiff={onPreviewDiff}
+          onOpenDiffInEditor={onOpenDiffInEditor}
           loading={s.status === 'pending'}
         />
       ))}

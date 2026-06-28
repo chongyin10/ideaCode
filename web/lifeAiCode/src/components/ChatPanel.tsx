@@ -7,7 +7,7 @@ import { AgentModeToggle } from './agent/AgentModeToggle';
 import { AgentStatusBar } from './agent/AgentStatusBar';
 import { ToolCallLog } from './agent/ToolCallLog';
 import { DiffConfirmDialog } from './agent/DiffConfirmDialog';
-import { ShieldCheck, Brain, ArrowDown, User, Sparkles, Paperclip, Send, MessageSquare, Loader2, Check, Square, ChevronDown, X, GripVertical, Pencil, MoreHorizontal } from 'lucide-react';
+import { ShieldCheck, Brain, ArrowDown, User, Sparkles, Paperclip, Send, MessageSquare, Loader2, Check, Square, ChevronDown, X, GripVertical, Pencil, MoreHorizontal, FileText, Terminal, RefreshCw, Network, Lightbulb } from 'lucide-react';
 
 /** 预处理：检测并补齐未闭合的 markdown 结构（供 chatResponse 处理时使用） */
 function groupConfigsByProviderOrder(configs: LlmConfig[]) {
@@ -142,16 +142,17 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
   const [showHistory, setShowHistory] = useState(false);
   const [historyDragId, setHistoryDragId] = useState<string | null>(null);
   const [historyDropTarget, setHistoryDropTarget] = useState<{ id: string; after: boolean } | null>(null);
-  const [shellOutputs, setShellOutputs] = useState<Record<string, { output: string; status: 'running' | 'success' | 'error' }>>({});
+  const [shellOutputs, setShellOutputs] = useState<Record<string, { output: string; status: 'running' | 'success' | 'error' | 'killed' }>>({});
   const [notice, setNotice] = useState<{ level: 'info' | 'success' | 'warning' | 'error'; message: string; id: number } | null>(null);
   const [agentMode, setAgentMode] = useState(false);
-  const [agentStatus, setAgentStatus] = useState<{ status: string; message: string } | null>(null);
+  const [agentStatus, setAgentStatus] = useState<{ status: string; message: string; stepType?: string } | null>(null);
   const [toolCalls, setToolCalls] = useState<ToolCallInfo[]>([]);
   // Bug 4: 改为数组队列，支持多个 pending 编辑同时存在
   // 原来单个 state 会被后续 edit 覆盖，用户丢失前一个确认弹窗
   const [pendingAgentEdits, setPendingAgentEdits] = useState<Array<{ editId: string; filePath: string; original: string; modified: string }>>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const scrollRafRef = useRef<number | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [userScrolledUp, setUserScrolledUp] = useState(false);
   const configPickerRef = useRef<HTMLDivElement>(null);
@@ -214,11 +215,22 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
     return () => window.removeEventListener('blur', handleBlur);
   }, []);
 
-  // 自动滚动到底部（仅在用户未主动上滑时即时跟随，避免平滑滚动导致按钮抖动）
+  // 自动滚动到底部：用 rAF 节流 + 直接设置 scrollTop，避免高频 scrollIntoView 导致抖动
   useEffect(() => {
-    if (!userScrolledUp) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
-    }
+    if (userScrolledUp) return;
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    if (scrollRafRef.current != null) cancelAnimationFrame(scrollRafRef.current);
+    scrollRafRef.current = requestAnimationFrame(() => {
+      el.scrollTop = el.scrollHeight;
+      scrollRafRef.current = null;
+    });
+    return () => {
+      if (scrollRafRef.current != null) {
+        cancelAnimationFrame(scrollRafRef.current);
+        scrollRafRef.current = null;
+      }
+    };
   }, [messages, toolCalls, agentStatus, userScrolledUp]);
 
   // 监听滚动，判断用户是否主动离开底部
@@ -281,6 +293,10 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
             }];
           });
           setIsProcessing(!msg.done);
+          if (msg.done) {
+            // 对话结束：保留状态栏，显示"任务完成"
+            setAgentStatus({ status: 'done', message: '任务完成', stepType: 'done' });
+          }
           break;
         }
         case 'suggestions': {
@@ -305,6 +321,8 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
             }, 0);
           }
           setIsProcessing(false);
+          // 建议返回也视为对话结束，显示"任务完成"
+          setAgentStatus({ status: 'done', message: '任务完成', stepType: 'done' });
           break;
         }
         case 'suggestionStatus': {
@@ -340,6 +358,8 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
           setMessages((prev) => prev.filter((m) => !m.placeholder));
           setError(msg.message);
           setIsProcessing(false);
+          // 错误不显示完成状态，清空状态栏
+          setAgentStatus(null);
           break;
         }
         case 'aiEditMode': {
@@ -379,13 +399,20 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
         }
         case 'shellUpdate': {
           console.log('[LifeAiCode WebView] shellUpdate received:', { id: msg.id, status: msg.status, outputLen: msg.output?.length });
-          setShellOutputs((prev) => ({
-            ...prev,
-            [msg.id]: { output: msg.output, status: msg.status },
-          }));
+          // 增量追加：executeShellInTerminal 通过 terminal.onDidWriteData 推送的是
+          // 逐段 chunk，webview 必须累加显示，否则每次会被覆盖只剩最后一段。
+          setShellOutputs((prev) => {
+            const existing = prev[msg.id];
+            const prevOutput = existing?.output || '';
+            const newOutput = prevOutput + (msg.output || '');
+            return {
+              ...prev,
+              [msg.id]: { output: newOutput, status: msg.status },
+            };
+          });
           // Bug 16: shell 结束后延迟清理对应条目，避免 shellOutputs 无限累积导致内存增长。
           // 保留 30 秒让用户能查看最终输出，之后自动移除。
-          if (msg.status === 'success' || msg.status === 'error') {
+          if (msg.status === 'success' || msg.status === 'error' || msg.status === 'killed') {
             const shellId = msg.id;
             setTimeout(() => {
               setShellOutputs((prev) => {
@@ -403,14 +430,14 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
           // 原代码未处理该消息类型，extension.js/agentRuntime.js 发送的 step 进度被静默丢弃。
           if (msg.status === 'running') {
             const STEP_LABELS: Record<string, string> = {
-              think: '思考中',
-              read: '读取文件',
-              agent: '执行工具',
-              edit: '应用编辑',
-              run: '执行命令',
+              think: '正在思考',
+              read: '正在读取文件',
+              agent: '正在分配工作',
+              edit: '正在编辑',
+              run: '正在执行命令',
             };
             const label = msg.label || msg.target || STEP_LABELS[msg.stepType] || msg.stepType;
-            setAgentStatus({ status: 'running', message: String(label) });
+            setAgentStatus({ status: 'running', message: String(label), stepType: msg.stepType });
           }
           break;
         }
@@ -424,9 +451,16 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
           break;
         }
         case 'agentStatus': {
-          setAgentStatus({ status: msg.status, message: msg.message });
-          if (msg.status === 'done' || msg.status === 'error' || msg.status === 'cancelled') {
+          if (msg.status === 'done') {
+            // Agent 任务完成：保留状态栏显示"任务完成"
+            setAgentStatus({ status: 'done', message: msg.message || '任务完成', stepType: 'done' });
             setIsProcessing(false);
+          } else if (msg.status === 'error' || msg.status === 'cancelled') {
+            // 错误/取消：不显示完成状态，清空状态栏
+            setAgentStatus(null);
+            setIsProcessing(false);
+          } else {
+            setAgentStatus({ status: msg.status, message: msg.message });
           }
           break;
         }
@@ -515,9 +549,9 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
     setMessages((prev) => [...prev, userMsg, placeholderMsg]);
     setInput('');
     setIsProcessing(true);
-    // 新 Agent 任务开始时清空上一次的执行记录，避免显示到新的占位消息上
+    // 新对话开始时清空上一次的完成状态与执行记录，避免显示到新的占位消息上
+    setAgentStatus(null);
     if (agentMode) {
-      setAgentStatus(null);
       setToolCalls([]);
     }
 
@@ -533,6 +567,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
           },
         ]);
         setIsProcessing(false);
+        setAgentStatus({ status: 'done', message: '任务完成', stepType: 'done' });
       }, 500);
       return;
     }
@@ -560,8 +595,9 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
     if (vscode) vscode.postMessage({ command: 'rejectSuggestion', suggestionId } as WebViewRequest);
   };
 
-  const handlePreviewDiff = (suggestionId: string) => {
-    if (vscode) vscode.postMessage({ command: 'previewDiff', suggestionId } as WebViewRequest);
+  // 在 IDE 代码编辑区域打开 diff 对比 tab（纯内存内容，不依赖磁盘文件）
+  const handleOpenDiffInEditor = (change: { filePath: string; original: string; modified: string }) => {
+    if (vscode) vscode.postMessage({ command: 'openDiffInEditor', filePath: change.filePath, original: change.original, modified: change.modified } as WebViewRequest);
   };
 
   // Bug 4: 队列模式，当前显示的是第一个
@@ -624,9 +660,9 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
       return arr;
     });
     setIsProcessing(true);
-    // 新 Agent 任务开始时清空上一次的执行记录
+    // 新对话开始时清空上一次的完成状态与执行记录
+    setAgentStatus(null);
     if (agentMode) {
-      setAgentStatus(null);
       setToolCalls([]);
     }
     vscode.postMessage({ command: 'sendMessage', text: lastUserMsg.content, context, thinkingEnabled, agentMode } as WebViewRequest);
@@ -647,6 +683,8 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
       continueFromContent: target.content,
     } as WebViewRequest);
     setIsProcessing(true);
+    // 继续生成视为新一轮处理，清空完成状态
+    setAgentStatus(null);
   };
 
   return (
@@ -725,6 +763,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
         </div>
       )}
 
+      <div className="messages-area">
       <div className="messages-container" ref={messagesContainerRef}>
         {notice && (
           <div className={`chat-notice chat-notice--${notice.level}`}>
@@ -808,7 +847,6 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
                           {agentMode && <ToolCallLog toolCalls={toolCalls} />}
                         </>
                       )}
-                      <PreparingPlaceholder />
                     </div>
                   </div>
                 </div>
@@ -879,6 +917,9 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
                     onExecuteShell={(id, shellCommand) => {
                       vscode?.postMessage({ command: 'executeShell', id, shellCommand, cwd: context?.workspaceRoot || '' } as WebViewRequest);
                     }}
+                    onKillShell={(id) => {
+                      vscode?.postMessage({ command: 'killShell', id } as WebViewRequest);
+                    }}
                     onOptionClick={(text) => sendMessage(text)}
                   />
 
@@ -888,7 +929,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
                       suggestions={msg.suggestions}
                       onAccept={handleAcceptSuggestion}
                       onReject={handleRejectSuggestion}
-                      onPreviewDiff={handlePreviewDiff}
+                      onOpenDiffInEditor={handleOpenDiffInEditor}
                     />
                   )}
                 </div>
@@ -901,6 +942,14 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
         {error && <div className="error-message">⚠️ {error}</div>}
         <div ref={messagesEndRef} />
       </div>
+
+      {/* 底部状态指示器：固定在消息列表底部。
+          处理中持续显示当前状态；对话结束后保留显示"任务完成"。 */}
+      {(isProcessing || agentStatus?.status === 'done') && (
+        <div className="status-indicator-zone">
+          <PreparingPlaceholder agentStatus={agentStatus} />
+        </div>
+      )}
 
       {/* Scroll to bottom button */}
       {userScrolledUp && (
@@ -915,6 +964,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
           <ArrowDown size={16} strokeWidth={2} />
         </button>
       )}
+      </div>
 
       {/* Agent 编辑确认弹窗 */}
       {currentPendingEdit && (
@@ -1115,14 +1165,58 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
 /*  准备中占位（用户提交后 → AI 真实返回前的过渡态）                   */
 /* ─────────────────────────────────────────────────────────────────── */
 
-function PreparingPlaceholder() {
+/**
+ * 动态状态卡片：根据 agentStatus 的 stepType/message 智能匹配当前状态，
+ * 显示对应的图标、文案和动画。
+ * 状态类型：思考中、读取文件、编辑、执行命令、分配工作、恢复中断、回答中、准备回复
+ */
+const STATUS_VARIANTS = {
+  thinking:  { Icon: Brain,       text: '正在思考',       variant: 'thinking'  },
+  reading:   { Icon: FileText,    text: '正在读取文件',    variant: 'reading'   },
+  editing:   { Icon: Pencil,      text: '正在编辑',       variant: 'editing'   },
+  running:   { Icon: Terminal,    text: '正在执行命令',    variant: 'running'   },
+  planning:  { Icon: Network,     text: '正在分配工作',    variant: 'planning'  },
+  recovering:{ Icon: RefreshCw,   text: '正在尝试恢复中断', variant: 'recovering' },
+  answering: { Icon: MessageSquare,text: '正在回答',       variant: 'answering' },
+  done:      { Icon: Check,       text: '任务完成',       variant: 'done'      },
+  default:   { Icon: Lightbulb,   text: '正在准备回复',    variant: 'default'   },
+} as const;
+
+function resolveStatusVariant(stepType?: string, message?: string) {
+  const msg = message || '';
+  // 任务完成状态优先识别（对话结束后保留显示）
+  if (stepType === 'done') return STATUS_VARIANTS.done;
+  if (stepType === 'think' || /思考/.test(msg)) return STATUS_VARIANTS.thinking;
+  if (stepType === 'read' || /读取|读文件/.test(msg)) return STATUS_VARIANTS.reading;
+  if (stepType === 'edit' || /编辑|修改/.test(msg)) return STATUS_VARIANTS.editing;
+  if (stepType === 'run' || /执行|命令/.test(msg)) return STATUS_VARIANTS.running;
+  if (stepType === 'agent' || /分配|工具/.test(msg)) return STATUS_VARIANTS.planning;
+  if (/恢复|中断/.test(msg)) return STATUS_VARIANTS.recovering;
+  if (/回答|回复/.test(msg)) return STATUS_VARIANTS.answering;
+  return STATUS_VARIANTS.default;
+}
+
+function PreparingPlaceholder({ agentStatus }: { agentStatus?: { status: string; message: string; stepType?: string } | null }) {
+  const isDone = agentStatus?.status === 'done';
+  // 任务完成：静态无动画，使用 status-card--done 停止 iconPulse/iconSpin
+  if (isDone) {
+    return (
+      <div className="status-card status-card--done">
+        <span className="status-card__icon">
+          <Check size={12} strokeWidth={2} />
+        </span>
+        <span className="status-card__text">任务完成</span>
+      </div>
+    );
+  }
+  const { Icon, text, variant } = resolveStatusVariant(agentStatus?.stepType, agentStatus?.message);
   return (
-    <div className="preparing-placeholder">
-      <span className="preparing-placeholder__icon">
-        <Loader2 size={14} strokeWidth={2.4} />
+    <div className={`status-card status-card--${variant}`}>
+      <span className="status-card__icon">
+        <Icon size={12} strokeWidth={2} />
       </span>
-      <span className="preparing-placeholder__text">正在准备回复</span>
-      <span className="preparing-placeholder__dots">
+      <span className="status-card__text">{text}</span>
+      <span className="status-card__dots">
         <span /><span /><span />
       </span>
     </div>

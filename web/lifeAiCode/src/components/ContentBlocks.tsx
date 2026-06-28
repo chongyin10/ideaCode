@@ -217,8 +217,9 @@ function stepLabel(stepType: StepType): string {
 interface ContentBlocksProps {
   content: string;
   role?: 'user' | 'assistant' | 'system';
-  shellOutputs?: Record<string, { output: string; status: 'running' | 'success' | 'error' }>;
+  shellOutputs?: Record<string, { output: string; status: 'running' | 'success' | 'error' | 'killed' }>;
   onExecuteShell?: (id: string, command: string) => void;
+  onKillShell?: (id: string) => void;
   onOptionClick?: (text: string) => void;
   onCopy?: (text: string) => void;
   onRegenerate?: () => void;
@@ -237,6 +238,7 @@ export function ContentBlocks({
   role = 'assistant',
   shellOutputs = {},
   onExecuteShell,
+  onKillShell,
   onOptionClick,
   onCopy,
   onRegenerate,
@@ -303,6 +305,7 @@ export function ContentBlocks({
             block={block}
             shellOutputs={shellOutputs}
             onExecuteShell={onExecuteShell}
+            onKillShell={onKillShell}
             onOptionClick={onOptionClick}
             completed={completed}
             showStreamingCursor={isStreaming && isLastBlock && block.type === 'text'}
@@ -462,14 +465,15 @@ function MessageCard({
 
 interface BlockRendererProps {
   block: ContentBlockType;
-  shellOutputs: Record<string, { output: string; status: 'running' | 'success' | 'error' }>;
+  shellOutputs: Record<string, { output: string; status: 'running' | 'success' | 'error' | 'killed' }>;
   onExecuteShell?: (id: string, command: string) => void;
+  onKillShell?: (id: string) => void;
   onOptionClick?: (text: string) => void;
   completed?: boolean;
   showStreamingCursor?: boolean;
 }
 
-function BlockRenderer({ block, shellOutputs, onExecuteShell, onOptionClick, completed, showStreamingCursor }: BlockRendererProps) {
+function BlockRenderer({ block, shellOutputs, onExecuteShell, onKillShell, onOptionClick, completed, showStreamingCursor }: BlockRendererProps) {
   switch (block.type) {
     case 'text':
       return (
@@ -478,6 +482,7 @@ function BlockRenderer({ block, shellOutputs, onExecuteShell, onOptionClick, com
             content={block.content}
             onOptionClick={onOptionClick}
             onExecuteShell={onExecuteShell}
+            onKillShell={onKillShell}
             shellOutputs={shellOutputs}
           />
           {showStreamingCursor && <span className="streaming-cursor" />}
@@ -488,7 +493,7 @@ function BlockRenderer({ block, shellOutputs, onExecuteShell, onOptionClick, com
     case 'edit':
       return <EditSummary filePath={block.filePath} additions={block.additions} deletions={block.deletions} />;
     case 'shell':
-      return <ToolCall command={block.command} output={block.output} status={block.status} shellOutputs={shellOutputs} onExecuteShell={onExecuteShell} />;
+      return <ToolCall command={block.command} output={block.output} status={block.status} shellOutputs={shellOutputs} onExecuteShell={onExecuteShell} onKillShell={onKillShell} />;
     case 'fileStatus':
       return <FileStatusRow filePath={block.filePath} status={block.status} />;
     case 'step':
@@ -567,13 +572,14 @@ function EditSummary({ filePath, additions, deletions }: { filePath: string; add
 
 function ToolCall({
   command, output: initialOutput, status: initialStatus,
-  shellOutputs, onExecuteShell,
+  shellOutputs, onExecuteShell, onKillShell,
 }: {
   command: string;
   output?: string;
-  status?: 'running' | 'success' | 'error';
-  shellOutputs: Record<string, { output: string; status: 'running' | 'success' | 'error' }>;
+  status?: 'running' | 'success' | 'error' | 'killed';
+  shellOutputs: Record<string, { output: string; status: 'running' | 'success' | 'error' | 'killed' }>;
   onExecuteShell?: (id: string, command: string) => void;
+  onKillShell?: (id: string) => void;
 }) {
   const execId = useMemo(() => `shell-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`, []);
   const executedRef = useRef(false);

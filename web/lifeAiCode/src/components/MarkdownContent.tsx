@@ -1,10 +1,10 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, createContext, useContext } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import { Copy, Check } from 'lucide-react';
+import { Copy, Check, ChevronDown, ChevronRight, TerminalSquare, Terminal, Square } from 'lucide-react';
 
 import clike from 'react-syntax-highlighter/dist/esm/languages/prism/clike';
 import tsx from 'react-syntax-highlighter/dist/esm/languages/prism/tsx';
@@ -166,11 +166,75 @@ function detectCodeLanguage(code: string): string | undefined {
 interface CodeBlockProps {
   language: string;
   children: React.ReactNode;
-  onExecuteShell?: (id: string, command: string) => void;
-  shellOutputs?: Record<string, { output: string; status: 'running' | 'success' | 'error' }>;
 }
 
+type ShellOutputsMap = Record<string, { output: string; status: 'running' | 'success' | 'error' | 'killed' }>;
+
+/**
+ * React Context：直接传递 shellOutputs 和 onExecuteShell 给 CodeBlock，
+ * 绕过 ReactMarkdown 的 prop 链。ReactMarkdown 在 markdown 文本不变时
+ * 可能不重新调用 code 渲染器，导致 shellOutputs 更新无法传递到 CodeBlock。
+ * Context 变化时所有订阅的 CodeBlock 直接 re-render，不受 ReactMarkdown 影响。
+ */
+const ShellContext = createContext<{
+  shellOutputs: ShellOutputsMap;
+  onExecuteShell?: (id: string, command: string) => void;
+  onKillShell?: (id: string) => void;
+}>({ shellOutputs: {} });
+
 const SHELL_LANGUAGES = new Set(['bash', 'shell', 'sh', 'zsh', 'fish']);
+
+/**
+ * ANSI 转义序列 → HTML 转换器。
+ * 保留终端颜色（SGR 序列），去掉光标移动等其他控制序列。
+ * 让 child_process.spawn 的彩色输出在 webview 中以终端风格显示。
+ */
+const ANSI_COLORS: Record<number, string> = {
+  30: '#5c6370', 31: '#e06c75', 32: '#98c379', 33: '#e5c07b',
+  34: '#61afef', 35: '#c678dd', 36: '#56b6c2', 37: '#abb2bf',
+  90: '#5c6370', 91: '#e06c75', 92: '#98c379', 93: '#e5c07b',
+  94: '#61afef', 95: '#c678dd', 96: '#56b6c2', 97: '#ffffff',
+};
+
+function ansiToHtml(text: string): string {
+  // 1. 处理 \r 回车：每行取最后一个 \r 之后的内容
+  let processed = text.replace(/[^\n]*\r([^\n])/g, '$1');
+
+  // 2. 先转义 HTML 特殊字符
+  let escaped = processed
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+  // 3. 处理 SGR 颜色序列 \x1b[Nm 或 \x1b[N;Mm
+  let result = '';
+  let lastIdx = 0;
+  let openSpan = false;
+  const sgrRegex = /\x1b\[([0-9;]*)m/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = sgrRegex.exec(escaped)) !== null) {
+    result += escaped.slice(lastIdx, match.index);
+    const codes = match[1] ? match[1].split(';').map(Number) : [0];
+    for (const code of codes) {
+      if (code === 0) {
+        if (openSpan) { result += '</span>'; openSpan = false; }
+      } else if (ANSI_COLORS[code]) {
+        if (openSpan) result += '</span>';
+        result += `<span style="color:${ANSI_COLORS[code]}">`;
+        openSpan = true;
+      }
+    }
+    lastIdx = sgrRegex.lastIndex;
+  }
+  result += escaped.slice(lastIdx);
+  if (openSpan) result += '</span>';
+
+  // 4. 去掉剩余的非 SGR ANSI 序列（光标移动、标题设置等）
+  result = result.replace(/\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07?|\x1b[=>]/g, '');
+
+  return result;
+}
 
 /** 提取代码块中要执行的命令（去掉 $ 前缀、合并多行） */
 function extractShellCommand(code: string): string | null {
@@ -205,10 +269,14 @@ function extractShellCommand(code: string): string | null {
   return commands.join('\n');
 }
 
-function CodeBlock({ language, children, onExecuteShell, shellOutputs }: CodeBlockProps) {
+function CodeBlock({ language, children }: CodeBlockProps) {
+  // 从 Context 获取 shellOutputs 和 onExecuteShell，绕过 ReactMarkdown 的 prop 链
+  const { shellOutputs, onExecuteShell, onKillShell } = useContext(ShellContext);
   const code = String(children).replace(/\n$/, '');
   const [copied, setCopied] = useState(false);
   const [execId, setExecId] = useState<string | null>(null);
+  // 占位区域是否折叠。默认展开，方便用户实时看执行过程。
+  const [outputCollapsed, setOutputCollapsed] = useState(false);
 
   const handleCopy = async () => {
     try {
@@ -234,36 +302,69 @@ function CodeBlock({ language, children, onExecuteShell, shellOutputs }: CodeBlo
     }
   }
   const shellResult = execId && shellOutputs ? shellOutputs[execId] : null;
+  // execId 已设但 shellResult 还没到（扩展尚未回推 shellUpdate）时，视为"连接中"
+  const isWaiting = !!execId && !shellResult;
+  const isRunning = shellResult?.status === 'running' || isWaiting;
+  // ANSI 颜色 → HTML，保留终端彩色输出
+  const htmlOutput = shellResult?.output ? ansiToHtml(shellResult.output) : '';
+  // 状态文本
+  const statusText = isWaiting ? '连接中…' :
+    shellResult?.status === 'running' ? '执行中…' :
+    shellResult?.status === 'success' ? '完成' :
+    shellResult?.status === 'error' ? '失败' :
+    shellResult?.status === 'killed' ? '已停止' : '';
+  const statusClass = isWaiting ? 'running' : (shellResult?.status || 'running');
 
   const handleRun = () => {
     if (!canRun || !shellCmd) return;
     const id = `bash-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     setExecId(id);
+    // 点击执行后默认展开占位区域，展示执行过程
+    setOutputCollapsed(false);
     onExecuteShell!(id, shellCmd);
+  };
+
+  // 停止正在运行的命令（如 npm run dev 这种长期挂起的进程），释放子进程资源
+  const handleKill = () => {
+    if (!execId || !onKillShell) return;
+    onKillShell(execId);
   };
 
   return (
     <div className="codeblock" data-lang={lang}>
       {displayLang && (
         <div className="codeblock-header">
-          <div className="codeblock-dots">
-            <span className="codeblock-dots__dot codeblock-dots__dot--red" />
-            <span className="codeblock-dots__dot codeblock-dots__dot--yellow" />
-            <span className="codeblock-dots__dot codeblock-dots__dot--green" />
+          <div className={`codeblock-dots ${isRunning ? 'codeblock-dots--running' : ''}`}>
+            <Terminal size={12} strokeWidth={2} />
           </div>
           <span className="codeblock-lang">{displayLang}</span>
           <div className="codeblock-header-actions">
             {canRun && shellCmd && (
-              <button
-                className={`codeblock-run-btn ${shellResult ? `codeblock-run-btn--${shellResult.status}` : ''}`}
-                onClick={handleRun}
-                title="在聊天窗口内执行（不弹出 IDE 终端）"
-                disabled={shellResult?.status === 'running'}
-              >
-                {shellResult?.status === 'running' ? '执行中…' :
-                 shellResult?.status === 'success' ? '✓ 已完成' :
-                 shellResult?.status === 'error' ? '✕ 失败' : '▶ 执行'}
-              </button>
+              <>
+                <button
+                  className={`codeblock-run-btn ${execId ? `codeblock-run-btn--${statusClass}` : ''}`}
+                  onClick={handleRun}
+                  title="在聊天窗口内执行（输出显示在下方，不弹出终端）"
+                  disabled={isRunning}
+                >
+                  {isWaiting ? '连接中…' :
+                   shellResult?.status === 'running' ? '执行中…' :
+                   shellResult?.status === 'success' ? '✓ 已完成' :
+                   shellResult?.status === 'error' ? '✕ 失败' :
+                   shellResult?.status === 'killed' ? '■ 已停止' : '▶ 执行'}
+                </button>
+                {/* 停止按钮：仅 running 状态显示，点击后 SIGTERM 终止子进程释放资源 */}
+                {isRunning && onKillShell && (
+                  <button
+                    className="codeblock-kill-btn"
+                    onClick={handleKill}
+                    title="停止执行（终止子进程，释放 CPU/内存）"
+                  >
+                    <Square size={10} strokeWidth={2.5} fill="currentColor" />
+                    停止
+                  </button>
+                )}
+              </>
             )}
             <button
               className={`codeblock-copy ${copied ? 'codeblock-copy--copied' : ''}`}
@@ -303,15 +404,32 @@ function CodeBlock({ language, children, onExecuteShell, shellOutputs }: CodeBlo
         )}
       </div>
 
-      {/* 执行结果 */}
-      {shellResult && (
-        <div className={`codeblock-shell-output codeblock-shell-output--${shellResult.status}`}>
-          <div className="codeblock-shell-output__header">
+      {/* 终端执行过程占位区域（可收缩），id=bash-xxx 便于外部定位。
+          条件用 execId：点击执行立即显示占位框（即使扩展尚未回推 shellUpdate，
+          shellResult 为 null 时用 statusText="连接中…" 占位，避免 UI 上"什么都没发生"） */}
+      {execId && (
+        <div
+          id={execId}
+          className={`codeblock-shell-output codeblock-shell-output--${statusClass} ${outputCollapsed ? 'codeblock-shell-output--collapsed' : ''}`}
+        >
+          <button
+            className="codeblock-shell-output__header"
+            onClick={() => setOutputCollapsed((v) => !v)}
+            title={outputCollapsed ? '展开' : '收起'}
+          >
+            <span className="codeblock-shell-output__toggle">
+              {outputCollapsed ? <ChevronRight size={12} strokeWidth={2} /> : <ChevronDown size={12} strokeWidth={2} />}
+            </span>
+            <TerminalSquare size={11} strokeWidth={1.8} />
             <span className="codeblock-shell-output__prompt">$</span>
             <span className="codeblock-shell-output__label">终端输出</span>
-          </div>
-          {shellResult.output && (
-            <pre className="codeblock-shell-output__body">{shellResult.output}</pre>
+            <span className="codeblock-shell-output__status">{statusText}</span>
+          </button>
+          {!outputCollapsed && htmlOutput && (
+            <pre
+              className="codeblock-shell-output__body"
+              dangerouslySetInnerHTML={{ __html: htmlOutput }}
+            />
           )}
         </div>
       )}
@@ -328,12 +446,13 @@ interface MarkdownContentProps {
   onOptionClick?: (text: string) => void;
   enableOptions?: boolean;
   onExecuteShell?: (id: string, command: string) => void;
-  shellOutputs?: Record<string, { output: string; status: 'running' | 'success' | 'error' }>;
+  onKillShell?: (id: string) => void;
+  shellOutputs?: Record<string, { output: string; status: 'running' | 'success' | 'error' | 'killed' }>;
 }
 
 export function MarkdownContent({
   content, onOptionClick, enableOptions = true,
-  onExecuteShell, shellOutputs,
+  onExecuteShell, onKillShell, shellOutputs,
 }: MarkdownContentProps) {
   // 防御性处理：preprocessMarkdown 抛错时回退到原始内容，避免整面板黑屏
   const { processed, incomplete, reasons } = useMemo(() => {
@@ -355,13 +474,16 @@ export function MarkdownContent({
     }
   }, [enableOptions, processed, onOptionClick]);
 
-  // 注意：这里不使用 useMemo，因为 ReactMarkdown 在 markdown 文本不变时
-  // 会跳过子组件的重新渲染。如果把 shellOutputs 放在 useMemo 的 deps 里，
-  // useMemo 确实会重算 components 对象，但 ReactMarkdown 不会重新调用子渲染器，
-  // 导致 shellOutputs 的更新无法传递到 CodeBlock。
-  // 这里直接定义对象（每次 MarkdownContent 渲染时重建），ReactMarkdown 会
-  // 因为 components 引用变化而触发子组件重新渲染，shellOutputs 变更能正确传递。
-  const markdownComponents: any = {
+  // ⚠️ 关键：components 必须用 useMemo 稳定引用，且依赖为空数组。
+  // 原因：CodeBlock 已通过 useContext(ShellContext) 订阅 shellOutputs，
+  // 不再需要 components 变化来传递数据。若 components 每次渲染都新建，
+  // shellOutputs 更新 → MarkdownContent 重渲染 → components 引用变化 →
+  // ReactMarkdown 重渲染整个 markdown 树 → CodeBlock 被卸载重建 →
+  // execId state 丢失 → 占位区域"瞬间出现又消失"。
+  // 用空依赖 useMemo 后，components 引用恒定，ReactMarkdown 不再因 components
+  // 变化重渲染，CodeBlock 实例和 execId state 得以保留；shellOutputs 更新
+  // 仅通过 Context 通道触发 CodeBlock 重渲染。
+  const markdownComponents: any = useMemo(() => ({
     code({ node, inline, className, children, ...props }: any) {
       const match = /language-(\w+)/.exec(className || '');
       const language = match ? match[1] : undefined;
@@ -372,15 +494,8 @@ export function MarkdownContent({
           </code>
         );
       }
-      return (
-        <CodeBlock
-          language={language}
-          onExecuteShell={onExecuteShell}
-          shellOutputs={shellOutputs}
-        >
-          {children}
-        </CodeBlock>
-      );
+      // shellOutputs 和 onExecuteShell 通过 ShellContext 传递，不作为 props
+      return <CodeBlock language={language}>{children}</CodeBlock>;
     },
     a({ node, ...props }: any) {
       return <a target="_blank" rel="noopener noreferrer" {...props} />;
@@ -414,15 +529,27 @@ export function MarkdownContent({
     strong({ node, ...props }: any) { return <strong {...props} />; },
     em({ node, ...props }: any) { return <em {...props} />; },
     del({ node, ...props }: any) { return <del {...props} />; },
-  };
+  }), []);
 
   const finalText = optionList ? optionList.preText : processed;
 
+  // ShellContext.Provider 包裹 ReactMarkdown：shellOutputs/onExecuteShell 变化时
+  // 直接通知所有 CodeBlock 重渲染，不受 ReactMarkdown 是否重渲染影响。
+  // 关键修复：解决"点击执行后占位区域不出现"——之前 props 传递会被
+  // ReactMarkdown 在 markdown 文本不变时跳过子组件渲染所屏蔽。
+  const ctxValue = useMemo(() => ({
+    shellOutputs: shellOutputs || {},
+    onExecuteShell,
+    onKillShell,
+  }), [shellOutputs, onExecuteShell, onKillShell]);
+
   return (
     <div className="md-content">
-      <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} components={markdownComponents}>
-        {finalText}
-      </ReactMarkdown>
+      <ShellContext.Provider value={ctxValue}>
+        <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} components={markdownComponents}>
+          {finalText}
+        </ReactMarkdown>
+      </ShellContext.Provider>
 
       {optionList && (
         <div className="option-list">

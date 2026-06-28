@@ -256,6 +256,7 @@ export type WebViewRequest =
   | { command: 'acceptSuggestion'; suggestionId: string }
   | { command: 'rejectSuggestion'; suggestionId: string }
   | { command: 'previewDiff'; suggestionId: string }
+  | { command: 'openDiffInEditor'; filePath: string; original: string; modified: string }
   | { command: 'applySuggestion'; suggestionId: string }
   | { command: 'explainCode'; code: string; context: CodeContext }
   | { command: 'suggestRefactor'; context: CodeContext }
@@ -266,6 +267,7 @@ export type WebViewRequest =
   | { command: 'requestConfig' }
   | { command: 'toggleEditMode' }
   | { command: 'executeShell'; id: string; shellCommand: string; cwd?: string }
+  | { command: 'killShell'; id: string }
   | { command: 'cancelAgent' }
   | { command: 'abortGeneration' }
   | { command: 'confirmAgentEdit'; editId: string }
@@ -282,7 +284,7 @@ export type ExtensionMessage =
   | { type: 'newChat' }
   | { type: 'openConfig' }
   | { type: 'showHistory' }
-  | { type: 'shellUpdate'; id: string; shellCommand: string; output: string; status: 'running' | 'success' | 'error'; exitCode?: number; signal?: string }
+  | { type: 'shellUpdate'; id: string; shellCommand: string; output: string; status: 'running' | 'success' | 'error' | 'killed'; exitCode?: number; signal?: string }
   | { type: 'notice'; level: 'info' | 'success' | 'warning' | 'error'; message: string; suggestionId?: string }
   | { type: 'toolCall'; tool: string; args: Record<string, unknown>; status: 'running' | 'success' | 'error'; duration?: number; summary?: string; result?: Record<string, unknown> }
   | { type: 'agentStatus'; status: 'running' | 'done' | 'error' | 'cancelled'; message: string }

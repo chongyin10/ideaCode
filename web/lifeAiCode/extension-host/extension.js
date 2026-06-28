@@ -138,6 +138,11 @@ const activeProcs = new Map(); // id -> { proc, finished, cwd }
 // 等待中的 executeShell 调用方（resolve/reject）—— 用于 Agent tool 同步等待输出
 const pendingShellWaits = new Map(); // id -> { resolve, reject }
 
+// executeShell 消息去重：同一 shellId 在 2 秒内重复到达时忽略，
+// 防止 webview → 渲染进程 → 扩展宿主的消息路由重复转发导致同一命令被 spawn 两次。
+const recentShellIds = new Map(); // id -> timestamp(ms)
+const SHELL_DEDUP_MS = 2000;
+
 /**
  * 异步执行 shell 命令。
  * - 立即把命令的初始事件 push 到 webview（命令回显 + cwd）
@@ -186,7 +191,7 @@ async function executeShellCommand(id, shellCommand, cwd) {
   try {
     proc = spawn(shell, shellArgs, {
       cwd: workingDir,
-      env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' },
+      env: { ...process.env, FORCE_COLOR: '1', CLICOLOR_FORCE: '1' },
       windowsHide: true,
     });
     console.log('[LifeAiCode][executeShellCommand] spawned pid:', proc.pid);
@@ -243,6 +248,8 @@ async function executeShellCommand(id, shellCommand, cwd) {
   const flushTimer = setInterval(() => {
     if (!entry.finished) flush('running');
   }, FLUSH_INTERVAL_MS);
+  // 存储 timer 引用，便于 killShellCommand 清理，防止进程结束后 timer 仍空转
+  entry.flushTimer = flushTimer;
 
   proc.stdout.on('data', (chunk) => {
     const text = chunk.toString('utf8');
@@ -268,6 +275,7 @@ async function executeShellCommand(id, shellCommand, cwd) {
     if (entry.finished) return;
     entry.finished = true;
     clearInterval(flushTimer);
+    if (entry.timeoutTimer) clearTimeout(entry.timeoutTimer);
     const status = code === 0 ? 'success' : (signal ? 'error' : 'error');
     flush(status);
     // 补一个空输出但带状态的最终事件（确保 webview 收到 done 信号）
@@ -297,7 +305,7 @@ async function executeShellCommand(id, shellCommand, cwd) {
   });
 
   // 兜底超时
-  setTimeout(() => {
+  const timeoutTimer = setTimeout(() => {
     if (entry.finished) return;
     entry.buffers.stdout += `\n[超时] 命令执行超过 5 分钟，已强制终止。\n`;
     flush('error');
@@ -306,6 +314,7 @@ async function executeShellCommand(id, shellCommand, cwd) {
       try { proc.kill('SIGKILL'); } catch { /* ignore */ }
     }, 2000);
   }, DEFAULT_TIMEOUT_MS);
+  entry.timeoutTimer = timeoutTimer;
 
   // 返回 Promise 给在等的调用方（Agent tool）
   // 注意：首次调用时这个 Promise 还没人等，所以 pendingShellWaits 里没记录
@@ -325,6 +334,82 @@ async function executeShellCommand(id, shellCommand, cwd) {
       }
     }, 60_000);
   });
+}
+
+/**
+ * 终止指定 shellId 对应的子进程，释放 CPU/内存资源。
+ * 用于 webview 点击"停止"按钮关闭长期运行命令（如 npm run dev）。
+ * - 先 SIGTERM 优雅终止，2 秒后 SIGKILL 强制兜底
+ * - 清理 flushTimer / timeoutTimer 避免泄漏
+ * - 推送 status='killed' 让 webview 切换 UI 状态
+ * - 唤醒在等结果的 Agent tool waiter
+ */
+function killShellCommand(id) {
+  const entry = activeProcs.get(id);
+  if (!entry) {
+    console.log('[LifeAiCode][killShell] no active proc for id:', id);
+    return false;
+  }
+  if (entry.finished) {
+    console.log('[LifeAiCode][killShell] already finished:', id);
+    return false;
+  }
+  const proc = entry.proc;
+  // 标记 finished，防止后续 'close' 事件重复处理
+  entry.finished = true;
+  // 清理定时器，释放资源
+  if (entry.flushTimer) { clearInterval(entry.flushTimer); entry.flushTimer = null; }
+  if (entry.timeoutTimer) { clearTimeout(entry.timeoutTimer); entry.timeoutTimer = null; }
+  // 最后 flush 一次剩余缓冲
+  try {
+    const flush = () => {
+      const stdout = entry.buffers.stdout;
+      const stderr = entry.buffers.stderr;
+      let combined = '';
+      if (stdout) combined += stdout;
+      if (stderr) combined += stderr;
+      if (combined) {
+        postToWebView({ type: 'shellUpdate', id, shellCommand: '', output: combined, status: 'killed' });
+        entry.buffers.stdout = '';
+        entry.buffers.stderr = '';
+      }
+    };
+    flush();
+  } catch { /* ignore */ }
+  // 推送终止事件（带 killed 状态），让 webview 切换 UI
+  postToWebView({
+    type: 'shellUpdate',
+    id, shellCommand: '',
+    output: '\n[已终止] 用户手动停止了命令执行。\n',
+    status: 'killed',
+    signal: 'SIGTERM',
+  });
+  // 优雅终止 → 2 秒后强制 kill 兜底（确保进程树释放，不残留 zombie）
+  if (proc) {
+    try { proc.kill('SIGTERM'); } catch { /* ignore */ }
+    setTimeout(() => {
+      try { proc.kill('SIGKILL'); } catch { /* ignore */ }
+    }, 2000);
+  }
+  // 唤醒在等结果的 Agent tool waiter（kill 也算结束）
+  const result = {
+    success: false,
+    error: '命令已被用户终止',
+    signal: 'SIGTERM',
+    output: entry.fullOutput ? entry.fullOutput.trim() + '\n[已终止]' : '[已终止]',
+  };
+  entry.result = result;
+  const waiter = pendingShellWaits.get(id);
+  if (waiter) {
+    pendingShellWaits.delete(id);
+    waiter.resolve(result);
+  }
+  // 释放 entry（保留短暂时间防止竞争，2 秒后删除）
+  setTimeout(() => {
+    activeProcs.delete(id);
+  }, 100);
+  console.log('[LifeAiCode][killShell] terminated:', id, 'pid:', proc ? proc.pid : null);
+  return true;
 }
 
 /**
@@ -1161,6 +1246,19 @@ async function activate(context) {
           previewDiff(message.suggestionId);
           break;
         }
+        case 'openDiffInEditor': {
+          // 在 IDE 代码编辑区域打开 diff 对比 tab（纯内存内容，不依赖磁盘文件）
+          try {
+            await contextBuilder.rpc.request('editor.openDiff', {
+              filePath: message.filePath,
+              original: message.original,
+              modified: message.modified,
+            });
+          } catch (err) {
+            postToWebView({ type: 'notice', level: 'error', message: `打开对比失败: ${err && err.message ? err.message : err}` });
+          }
+          break;
+        }
         case 'requestConfig': {
           broadcastConfigs();
           break;
@@ -1245,12 +1343,44 @@ async function activate(context) {
         case 'executeShell': {
           console.log('[LifeAiCode][executeShell] received full message:', JSON.stringify(message, null, 2));
           const shellId = message.id || `shell-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+          // 去重：同一 shellId 在 2 秒内重复到达时直接忽略，
+          // 避免消息路由重复转发导致同一命令被 spawn 两次
+          const now = Date.now();
+          const lastSeen = recentShellIds.get(shellId);
+          if (lastSeen && (now - lastSeen) < SHELL_DEDUP_MS) {
+            console.log('[LifeAiCode][executeShell] duplicate shellId ignored:', shellId);
+            break;
+          }
+          recentShellIds.set(shellId, now);
+          // 清理过期的去重条目（避免 Map 无限增长）
+          if (recentShellIds.size > 100) {
+            for (const [k, ts] of recentShellIds) {
+              if (now - ts > SHELL_DEDUP_MS * 5) recentShellIds.delete(k);
+            }
+          }
           console.log('[LifeAiCode][executeShell] dispatching:', { shellId, shellCommand: message.shellCommand, cwd: message.cwd });
           try {
+            // 聊天代码块"执行"按钮：隐藏执行（child_process.spawn）
+            // 不创建 IDE 底部终端 tab，输出实时流回聊天占位区域
             executeShellCommand(shellId, message.shellCommand, message.cwd);
           } catch (err) {
             console.error('[LifeAiCode][executeShell] sync throw:', err);
             postToWebView({ type: 'shellUpdate', id: shellId, shellCommand: message.shellCommand || '', output: `执行失败: ${err.message}`, status: 'error' });
+          }
+          break;
+        }
+        case 'killShell': {
+          // 用户点击"停止"按钮：终止长期运行命令（如 npm run dev），释放子进程资源
+          const shellId = message.id;
+          if (!shellId) {
+            console.warn('[LifeAiCode][killShell] missing id');
+            break;
+          }
+          try {
+            const killed = killShellCommand(shellId);
+            console.log('[LifeAiCode][killShell] result:', killed, 'id:', shellId);
+          } catch (err) {
+            console.error('[LifeAiCode][killShell] error:', err);
           }
           break;
         }
@@ -1329,6 +1459,24 @@ async function activate(context) {
 
 function deactivate() {
   console.log('[LifeAiCode] 扩展已停用');
+  // 清理所有活跃子进程，防止扩展卸载后残留 zombie 进程占用 CPU/内存
+  if (activeProcs.size > 0) {
+    console.log('[LifeAiCode] deactivate: cleaning up', activeProcs.size, 'active shell procs');
+    for (const [id, entry] of activeProcs) {
+      try {
+        if (entry.flushTimer) clearInterval(entry.flushTimer);
+        if (entry.timeoutTimer) clearTimeout(entry.timeoutTimer);
+        if (entry.proc && !entry.finished) {
+          try { entry.proc.kill('SIGTERM'); } catch { /* ignore */ }
+          // 同步 SIGKILL 兜底（进程即将退出，不等 2 秒）
+          setTimeout(() => {
+            try { entry.proc.kill('SIGKILL'); } catch { /* ignore */ }
+          }, 500);
+        }
+      } catch { /* ignore */ }
+    }
+    activeProcs.clear();
+  }
   if (panel) {
     try { panel.dispose(); } catch { /* ignore */ }
     panel = null;

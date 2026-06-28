@@ -168,12 +168,37 @@ body {
 /*  Messages Container                                              */
 /* ════════════════════════════════════════════════════════════════ */
 
+/* messages-area：包裹 messages-container 和 scroll-to-bottom 按钮，
+   提供独立的定位上下文，让 scroll-to-bottom 不叠加到 input-wrapper */
+.messages-area {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .messages-container {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 24px 0 16px;
+  padding: 24px 0 6px;
   position: relative;
+  /* 优化 streaming 高频更新时的滚动性能，减少抖动 */
+  overscroll-behavior: contain;
+  /* contain: layout 避免子元素变化导致全局重排 */
+  contain: layout;
+}
+
+/* 底部状态指示器区域：固定在消息列表下方，
+   与 .message-row 对齐（同样 max-width 880px 居中、水平 padding 8px） */
+.status-indicator-zone {
+  flex-shrink: 0;
+  width: 100%;
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 0 8px 2px;
+  box-sizing: border-box;
 }
 
 /* ════════════════════════════════════════════════════════════════ */
@@ -440,7 +465,7 @@ body {
   left: 0;
   top: 0;
   bottom: 0;
-  width: 3px;
+  width: 1px;
   background: var(--border-default);
   transition: background var(--duration-base) var(--ease-out);
 }
@@ -875,7 +900,7 @@ body {
 
 /* Traffic light dots */
 .codeblock-dots {
-  display: flex;
+  display: none;
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
@@ -890,7 +915,7 @@ body {
 .codeblock-dots__dot--green { background: #28c840; box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.15); }
 
 .codeblock-lang {
-  flex: 1;
+  flex: inherit;
   text-align: center;
   font-size: 11.5px;
   font-weight: 500;
@@ -1610,65 +1635,92 @@ body {
   to { opacity: 0; transform: translateY(-4px); }
 }
 
-/* 准备中占位：直接放在 .message-row 内部（与 AI 消息的 avatar 位置对齐） */
-.preparing-placeholder {
+/* ─── 动态状态卡片（紧凑低调样式，与消息内容左对齐）─── */
+/* 根据 agentStatus 的 stepType/message 显示不同图标和文案 */
+.status-card {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
-  align-self: flex-start;
-  margin-left: 0px; /* 32px avatar + 16px gap，与 AI 消息对齐 */
-  padding: 9px 16px;
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(59, 130, 246, 0.05));
-  border: 1px solid rgba(59, 130, 246, 0.22);
-  border-left: 3px solid var(--accent-500);
-  border-radius: var(--radius-md);
-  font-size: 13px;
+  gap: 5px;
+  padding: 1px 2px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  font-size: 11px;
   font-family: var(--font-sans);
-  color: var(--text-primary);
-  animation: preparingFadeIn 0.24s var(--ease-out);
-  box-shadow: 0 2px 10px rgba(59, 130, 246, 0.1);
-  min-width: 220px;
+  color: var(--text-tertiary);
+  user-select: none;
+  animation: statusCardIn 0.22s var(--ease-out, ease-out);
 }
-@keyframes preparingFadeIn {
+@keyframes statusCardIn {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: translateY(0); }
 }
-.preparing-placeholder__icon {
+.status-card__icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
-  color: var(--accent-400);
   flex-shrink: 0;
-  animation: preparingSpin 1.4s linear infinite;
+  color: var(--accent-400);
+  animation: iconPulse 1.8s ease-in-out infinite;
 }
-@keyframes preparingSpin {
-  to { transform: rotate(360deg); }
+@keyframes iconPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
 }
-.preparing-placeholder__text {
-  font-weight: 600;
-  color: var(--text-primary);
-  letter-spacing: 0.2px;
-  flex: 1;
+.status-card__text {
+  font-weight: 400;
+  color: var(--text-tertiary);
+  white-space: nowrap;
 }
-.preparing-placeholder__dots {
+.status-card__dots {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: 2px;
+  margin-left: 1px;
 }
-.preparing-placeholder__dots span {
-  width: 5px;
-  height: 5px;
+.status-card__dots span {
+  width: 3px;
+  height: 3px;
   border-radius: 50%;
-  background: var(--accent-400);
-  animation: preparingDot 1.2s var(--ease-in-out) infinite both;
+  background: var(--text-muted);
+  animation: dotBounce 1.2s ease-in-out infinite;
 }
-.preparing-placeholder__dots span:nth-child(2) { animation-delay: 0.15s; }
-.preparing-placeholder__dots span:nth-child(3) { animation-delay: 0.3s; }
-@keyframes preparingDot {
-  0%, 80%, 100% { transform: scale(0.5); opacity: 0.35; }
-  40% { transform: scale(1); opacity: 1; }
+.status-card__dots span:nth-child(2) { animation-delay: 0.15s; }
+.status-card__dots span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes dotBounce {
+  0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+  40% { opacity: 0.9; transform: scale(1.1); }
+}
+
+/* ── 各状态变体：仅改变图标/圆点颜色 ── */
+.status-card--thinking .status-card__icon { color: #a78bfa; }
+.status-card--thinking .status-card__dots span { background: #a78bfa; }
+
+.status-card--reading .status-card__icon { color: #22d3ee; }
+.status-card--reading .status-card__dots span { background: #22d3ee; }
+
+.status-card--editing .status-card__icon { color: #fb923c; }
+.status-card--editing .status-card__dots span { background: #fb923c; }
+
+.status-card--running .status-card__icon { color: #f87171; }
+.status-card--running .status-card__dots span { background: #f87171; }
+
+.status-card--planning .status-card__icon { color: #34d399; }
+.status-card--planning .status-card__dots span { background: #34d399; }
+
+.status-card--recovering .status-card__icon { color: #fbbf24; }
+.status-card--recovering .status-card__dots span { background: #fbbf24; }
+.status-card--recovering .status-card__icon { animation: iconSpin 1.2s linear infinite; }
+@keyframes iconSpin {
+  to { transform: rotate(360deg); }
+}
+
+.status-card--default .status-card__icon { animation: iconSpin 2s linear infinite; }
+
+/* 任务完成：绿色，静态无动画（dots 由 JSX 不渲染） */
+.status-card--done .status-card__icon {
+  color: var(--success-500);
+  animation: none;
 }
 
 /* Streaming cursor (text-end blinking caret) */
@@ -2022,6 +2074,27 @@ body {
   border-color: var(--border-strong);
 }
 
+/* 在编辑器中对比：tab 上的主操作按钮 */
+.diff-view__compare-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-xs);
+  padding: 2px 8px;
+  font-size: 10.5px;
+  color: var(--accent-400);
+  cursor: pointer;
+  transition: all var(--duration-fast);
+  font-family: var(--font-sans);
+}
+.diff-view__compare-btn:hover {
+  color: var(--accent-300, #93c5fd);
+  background: rgba(59, 130, 246, 0.1);
+  border-color: var(--accent-500);
+}
+
 .diff-view__explanation {
   padding: 8px 12px;
   background: rgba(255, 255, 255, 0.02);
@@ -2044,25 +2117,25 @@ body {
   user-select: none;
 }
 
-/* macOS 三色圆点 */
+/* 单个终端图标（替代原三色圆点），执行时闪烁 */
 .codeblock-dots {
   display: flex;
   align-items: center;
-  gap: 6px;
   flex-shrink: 0;
+  color: var(--text-tertiary);
 }
-.codeblock-dots__dot {
-  width: 11px;
-  height: 11px;
-  border-radius: 50%;
+.codeblock-dots--running {
+  color: var(--success-500, #98c379);
+  animation: codeblock-icon-blink 1s ease-in-out infinite;
 }
-.codeblock-dots__dot--red { background: #ff5f57; box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.15); }
-.codeblock-dots__dot--yellow { background: #febc2e; box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.15); }
-.codeblock-dots__dot--green { background: #28c840; box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.15); }
+@keyframes codeblock-icon-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
 
 .codeblock-lang {
   flex: 1;
-  text-align: center;
+  text-align: left;
   font-size: 11.5px;
   font-weight: 500;
   font-family: var(--font-sans);
@@ -2116,6 +2189,34 @@ body {
   border-color: rgba(239, 68, 68, 0.3);
   color: var(--error-400);
 }
+.codeblock-run-btn--killed {
+  background: rgba(156, 163, 175, 0.15);
+  border-color: rgba(156, 163, 175, 0.3);
+  color: var(--text-tertiary);
+}
+/* 停止按钮：终止长期运行命令（npm run dev 等），释放子进程资源 */
+.codeblock-kill-btn {
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 8px;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: var(--radius-sm);
+  color: var(--error-400);
+  font-size: 10.5px;
+  font-weight: 600;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: all var(--duration-fast);
+}
+.codeblock-kill-btn:hover {
+  background: rgba(239, 68, 68, 0.22);
+  border-color: rgba(239, 68, 68, 0.5);
+  color: #fff;
+}
 
 .codeblock-copy {
   display: inline-flex;
@@ -2143,7 +2244,7 @@ body {
   color: var(--success-400) !important;
 }
 
-/* 内联终端输出（在代码块下方） */
+/* 内联终端输出（在代码块下方，可收缩） */
 .codeblock-shell-output {
   border-top: 1px solid var(--code-border);
   background: rgba(0, 0, 0, 0.3);
@@ -2152,19 +2253,69 @@ body {
 .codeblock-shell-output--running { border-top-color: rgba(59, 130, 246, 0.3); }
 .codeblock-shell-output--success { border-top-color: rgba(34, 197, 94, 0.3); }
 .codeblock-shell-output--error { border-top-color: rgba(239, 68, 68, 0.3); }
+.codeblock-shell-output--killed { border-top-color: rgba(156, 163, 175, 0.3); }
+.codeblock-shell-output--collapsed .codeblock-shell-output__body { display: none; }
 @keyframes shellOutputIn {
   from { opacity: 0; max-height: 0; }
   to { opacity: 1; max-height: 400px; }
 }
 .codeblock-shell-output__header {
+  /* 重置 button 默认样式，避免边框白条 */
+  appearance: none;
+  -webkit-appearance: none;
+  border: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  outline: none;
+  margin: 0;
+  border-radius: 0;
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
   padding: 6px 14px;
   background: rgba(255, 255, 255, 0.02);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   font-family: var(--font-mono);
   font-size: 11px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: background var(--duration-fast);
+}
+.codeblock-shell-output__header:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+.codeblock-shell-output--collapsed .codeblock-shell-output__header {
+  border-bottom: none;
+}
+.codeblock-shell-output__toggle {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+.codeblock-shell-output__status {
+  margin-left: auto;
+  font-size: 10.5px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-tertiary);
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+.codeblock-shell-output--running .codeblock-shell-output__status {
+  background: rgba(59, 130, 246, 0.15);
+  color: var(--accent-400);
+}
+.codeblock-shell-output--success .codeblock-shell-output__status {
+  background: rgba(34, 197, 94, 0.15);
+  color: var(--success-400);
+}
+.codeblock-shell-output--error .codeblock-shell-output__status {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--error-400);
+}
+.codeblock-shell-output--killed .codeblock-shell-output__status {
+  background: rgba(156, 163, 175, 0.15);
   color: var(--text-tertiary);
 }
 .codeblock-shell-output__prompt {
@@ -2362,7 +2513,7 @@ body {
 
 .input-bar {
   flex-shrink: 0;
-  padding: 12px 24px 16px;
+  padding: 6px 24px 12px;
   background: var(--surface-0);
   border-top: 1px solid var(--border-subtle);
 }
@@ -2421,7 +2572,6 @@ body {
   align-items: center;
   min-width: 0;
   flex: 0 1 auto;
-  overflow: hidden;
 }
 /* 文件名标签在空间不足时截断 */
 .input-tag:not(.input-tag--model) {

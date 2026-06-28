@@ -2,7 +2,7 @@ import { useState, useMemo, type ReactNode } from 'react';
 import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import {
-  Check, X, GitMerge, FileText,
+  Check, X, GitCompare, FileText,
   Wrench, Bug, Sparkles, Zap, HelpCircle,
 } from 'lucide-react';
 import type { Suggestion, SuggestionChange } from '../types';
@@ -53,7 +53,7 @@ interface SuggestionCardProps {
   suggestion: Suggestion;
   onAccept: (id: string) => void;
   onReject: (id: string) => void;
-  onPreviewDiff: (id: string) => void;
+  onOpenDiffInEditor: (change: SuggestionChange) => void;
   loading?: boolean;
 }
 
@@ -145,7 +145,7 @@ function computeLineDiff(original: string, modified: string): DiffLine[] {
   return result;
 }
 
-export function SuggestionCard({ suggestion, onAccept, onReject, onPreviewDiff, loading }: SuggestionCardProps) {
+export function SuggestionCard({ suggestion, onAccept, onReject, onOpenDiffInEditor, loading }: SuggestionCardProps) {
   const [expanded, setExpanded] = useState(true);
 
   return (
@@ -182,7 +182,7 @@ export function SuggestionCard({ suggestion, onAccept, onReject, onPreviewDiff, 
           )}
 
           {suggestion.changes.map((change, idx) => (
-            <DiffView key={idx} change={change} />
+            <DiffView key={idx} change={change} onOpenDiffInEditor={onOpenDiffInEditor} />
           ))}
 
           {suggestion.status === 'pending' && (
@@ -193,11 +193,6 @@ export function SuggestionCard({ suggestion, onAccept, onReject, onPreviewDiff, 
               <button className="action-btn action-btn--reject" onClick={() => onReject(suggestion.id)}>
                 <X size={13} strokeWidth={2.5} /> 拒绝
               </button>
-              {suggestion.changes.length > 0 && (
-                <button className="action-btn action-btn--preview" onClick={() => onPreviewDiff(suggestion.id)}>
-                  <GitMerge size={13} strokeWidth={2} /> 预览差异
-                </button>
-              )}
             </div>
           )}
         </div>
@@ -210,8 +205,9 @@ export function SuggestionCard({ suggestion, onAccept, onReject, onPreviewDiff, 
 /*  Diff View — 双栏 diff，带行号、语法高亮                            */
 /* ─────────────────────────────────────────────────────────────────── */
 
-function DiffView({ change }: { change: SuggestionChange }) {
-  const [collapsed, setCollapsed] = useState(false);
+function DiffView({ change, onOpenDiffInEditor }: { change: SuggestionChange; onOpenDiffInEditor: (change: SuggestionChange) => void }) {
+  // 默认折叠：只显示文件名和统计，不展示具体变更记录
+  const [collapsed, setCollapsed] = useState(true);
   const language = useMemo(() => inferLanguage(change.filePath), [change.filePath]);
   const diffLines = useMemo(
     () => computeLineDiff(change.original, change.modified),
@@ -223,7 +219,7 @@ function DiffView({ change }: { change: SuggestionChange }) {
 
   return (
     <div className="diff-view">
-      {/* 文件头 */}
+      {/* 文件头（tab）：文件名 + 行数统计 + 在编辑器对比按钮 */}
       <div className="diff-view__file-header">
         <div className="diff-view__file-info">
           <FileText size={12} strokeWidth={1.8} />
@@ -233,6 +229,14 @@ function DiffView({ change }: { change: SuggestionChange }) {
         <div className="diff-view__stats">
           {removedCount > 0 && <span className="diff-view__stat diff-view__stat--removed">−{removedCount}</span>}
           {addedCount > 0 && <span className="diff-view__stat diff-view__stat--added">+{addedCount}</span>}
+          <button
+            className="diff-view__compare-btn"
+            onClick={() => onOpenDiffInEditor(change)}
+            title="在编辑器中对比"
+          >
+            <GitCompare size={12} strokeWidth={1.8} />
+            <span>对比</span>
+          </button>
           <button
             className="diff-view__toggle"
             onClick={() => setCollapsed(!collapsed)}

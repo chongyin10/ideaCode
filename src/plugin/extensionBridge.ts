@@ -897,6 +897,37 @@ export class ExtensionBridge {
       }
     });
 
+    /** 在 IDE 中打开纯内存内容的 Diff 视图（不依赖工作区磁盘文件） */
+    this.rpcHandlers.set('editor.openDiff', async (params) => {
+      const { filePath, original = '', modified = '' } = params as {
+        filePath: string;
+        original?: string;
+        modified?: string;
+      };
+      if (!filePath || typeof filePath !== 'string') {
+        return { success: false, error: '缺少 filePath 参数' };
+      }
+      const fileName = filePath.split(/[\\/]/).pop() || filePath;
+      const { getLanguageFromPath } = await import('../utils/languageFromPath');
+      const language = getLanguageFromPath(filePath);
+      try {
+        const { openDiffView } = await import('../store/slices/workspaceSlice');
+        this.store.dispatch(
+          openDiffView({
+            filePath,
+            fileName,
+            original,
+            modified,
+            language,
+          }) as any
+        );
+        return { success: true };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { success: false, error: msg };
+      }
+    });
+
     /** 加载目录（git 扩展要求打开新仓库时调用） */
     this.rpcHandlers.set('git.loadDirectory', async (params) => {
       const { path } = params as { path: string };
