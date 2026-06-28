@@ -52,14 +52,13 @@ mac:
   extendInfo:
     NSAppleEventsUsageDescription: IDEACODE 需要发送 Apple 事件以执行部分系统集成。
   # 目标产物：
-  #   - dir: 只输出 .app 文件夹，不创建 DMG 镜像（避开 Trae sandbox 对 hdiutil 访问 /dev/rdisk* 的限制）
+  #   - dir: 只输出 .app 文件夹（快速调试用）
   #   - dmg: 创建 DMG 安装包（需要在非 Trae sandbox 环境运行：macOS Terminal.app 或配置 sandbox 放行 /dev/rdisk*）
   # arch 不在配置文件指定，由命令行 --arm64/--x64/--universal 控制，
   # 避免「命令行打 arm64 但配置文件强制 universal」导致重复下载 x64 二进制。
   target:
     - target: dir
-    # 如需 DMG 分发，注释上一行并启用下一行：
-    # - target: dmg
+    - target: dmg
 
 # DMG 安装包布局（拖拽安装）
 dmg:
@@ -73,6 +72,73 @@ dmg:
   contents:
     - { x: 130, y: 220 }
     - { x: 410, y: 220, type: link, path: /Applications }
+
+# ─── Windows 配置 ───
+win:
+  # 目标产物：
+  #   - nsis: 标准 .exe 安装程序（支持选择目录、创建快捷方式）
+  #   - portable: 免安装便携版（单 .exe 文件，解压即用）
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+  # 图标路径（buildResources 目录下，需提供 build/icon.ico）
+  icon: build/icon.ico
+  # 签名：开发期不签名，跳过 signtool 调用避免无证书时卡顿
+  signAndEditExecutable: false
+
+# Windows NSIS 安装程序配置
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  allowElevation: true
+  shortcutName: IDEACODE
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  # 安装界面语言，zh-CN 缺失时回退到英文
+  installerLanguages:
+    - zh_CN
+    - en_US
+
+# ─── Linux 配置 ───
+linux:
+  category: Development
+  # 目标产物：
+  #   - AppImage: 通用可执行镜像（免安装，chmod +x 后直接运行，跨发行版）
+  #   - deb: Debian/Ubuntu 安装包（apt install ./xxx.deb）
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
+  # 图标路径（buildResources 目录下，需提供 build/icon.png 512x512）
+  icon: build/icon.png
+  maintainer: IDEACODE
+  vendor: IDEACODE
+
+# AppImage 配置
+appImage:
+  # 开发期不嵌入 license 文件
+  license: null
+
+# deb 配置
+deb:
+  depends:
+    - libgtk-3-0
+    - libnotify4
+    - libnss3
+    - libxss1
+    - libxtst6
+    - xdg-utils
+    - libatspi2.0-0
+    - libuuid1
+    - libsecret-1-0
 
 # ─── 打包压缩级别（根级别，控制 ASAR/app 压缩）───
 # store=不压缩（最快，包体大 30%）、normal=默认、maximum=最慢

@@ -2653,6 +2653,10 @@ body {
   bottom: 100%;
   margin-top: 0;
   margin-bottom: 6px;
+  /* 水平居中对齐到触发器区域，而非右对齐贴边 */
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
 }
 .kc-dropdown__group + .kc-dropdown__group {
   border-top: 1px solid var(--border-subtle);

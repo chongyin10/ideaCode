@@ -62,7 +62,6 @@ export function registerDiffSemanticTokensProvider(
   language: string,
   prefetchedModifiedTokens?: TsSemanticTokens | null,
   prefetchedOriginalTokens?: TsSemanticTokens | null,
-  groupId?: string,
 ): Monaco.IDisposable {
   return monaco.languages.registerDocumentSemanticTokensProvider(language, {
     getLegend: () => DEFAULT_SEMANTIC_TOKENS_LEGEND,

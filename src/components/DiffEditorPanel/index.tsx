@@ -233,7 +233,6 @@ const DiffEditorPanel = ({ diffData, groupId }: DiffEditorPanelProps) => {
           language,
           prefetchedTokensRef.current.modified,
           prefetchedTokensRef.current.original,
-          groupId,
         );
       }
 
