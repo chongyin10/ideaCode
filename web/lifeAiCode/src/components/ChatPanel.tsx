@@ -1,13 +1,14 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import type { ChatMessage, CodeContext, WebViewRequest, ExtensionMessage, LlmConfig, ProviderType, ToolCallInfo, SuggestionChange } from '../types';
-import { PROVIDER_META, getConnectionStatusColor } from '../types';
+import { PROVIDER_META, getConnectionStatusColor, getModelContextWindow } from '../types';
 import { SuggestionList } from './SuggestionList';
 import { ContentBlocks } from './ContentBlocks';
 import { AgentModeToggle } from './agent/AgentModeToggle';
 import { AgentStatusBar } from './agent/AgentStatusBar';
 import { ToolCallLog } from './agent/ToolCallLog';
 import { DiffConfirmDialog } from './agent/DiffConfirmDialog';
-import { ShieldCheck, Brain, ArrowDown, User, Sparkles, Paperclip, Send, MessageSquare, Loader2, Check, Square, ChevronDown, X, GripVertical, Pencil, MoreHorizontal, FileText, Terminal, RefreshCw, Network, Lightbulb, GitCompare } from 'lucide-react';
+import { PlanChecklist, type PlanStep } from './agent/PlanChecklist';
+import { ShieldCheck, Brain, ArrowDown, User, Sparkles, Paperclip, Send, MessageSquare, Loader2, Check, Square, ChevronDown, X, GripVertical, Pencil, MoreHorizontal, FileText, Terminal, RefreshCw, Network, Lightbulb, GitCompare, Trash2, Archive } from 'lucide-react';
 
 /** 预处理：检测并补齐未闭合的 markdown 结构（供 chatResponse 处理时使用） */
 function groupConfigsByProviderOrder(configs: LlmConfig[]) {
@@ -97,6 +98,8 @@ interface ChatHistoryItem {
   title: string;
   timestamp: number;
   messages: ChatMessage[];
+  /** §模型识别：记录该会话使用的模型 ID，恢复时自动选中 */
+  modelId?: string;
 }
 
 const HISTORY_KEY = 'lifeAiCode_chat_history';
@@ -156,6 +159,8 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
   const [pendingAgentEdits, setPendingAgentEdits] = useState<Array<{ editId: string; filePath: string; original: string; modified: string }>>([]);
   // 持久记录本次会话中所有被 AI 修改过的文件（包括 suggestion 和 agent edit）
   const [agentEditedFiles, setAgentEditedFiles] = useState<SuggestionChange[]>([]);
+  // §需求9：当前 Agent 任务的 plan steps（含状态），任务结束后保留供查看
+  const [planSteps, setPlanSteps] = useState<PlanStep[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const scrollRafRef = useRef<number | null>(null);
@@ -182,6 +187,9 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
   pendingAgentEditsRef.current = pendingAgentEdits;
   const onOpenConfigRef = useRef(onOpenConfig);
   onOpenConfigRef.current = onOpenConfig;
+  // §模型识别：ref 让 restoreHistory 能访问最新的 activeConfig
+  const activeConfigRef = useRef(activeConfig);
+  activeConfigRef.current = activeConfig;
   // §继续会话：用 ref 让 message listener 能访问最新的 currentHistoryId / messages
   const currentHistoryIdRef = useRef<string | null>(null);
   currentHistoryIdRef.current = currentHistoryId;
@@ -202,7 +210,18 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
       }
     };
     document.addEventListener('mousedown', close);
-    return () => document.removeEventListener('mousedown', close);
+    // §iframe 失焦兜底：webview 在 iframe 内，点击 IDE 区域不会触发 iframe 的 mousedown，
+    // 用 window blur 监听 iframe 失焦来关闭下拉面板
+    const handleBlur = () => {
+      if (showHistory) setShowHistory(false);
+      if (showConfigPicker) setShowConfigPicker(false);
+      if (showActionOverflow) setShowActionOverflow(false);
+    };
+    window.addEventListener('blur', handleBlur);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      window.removeEventListener('blur', handleBlur);
+    };
   }, [showConfigPicker, showHistory, showActionOverflow]);
 
   // 响应式 input-actions：监测工具栏宽度，空间不足时启用紧凑模式
@@ -403,6 +422,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
                   title: historyTitle(realMessages),
                   timestamp: Date.now(),
                   messages: realMessages,
+                  modelId: activeConfig?.id,
                 };
                 const updated = [item, ...prevHistory.filter((h) => h.id !== item.id)];
                 saveHistory(updated);
@@ -533,6 +553,62 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
           }
           break;
         }
+        case 'historyCompacted': {
+          // §需求8：上下文压缩完成，用摘要替换早期消息
+          // 保留最近 2 轮对话（4 条消息）+ 摘要作为首条 user 消息
+          setMessages((prev) => {
+            const realMsgs = prev.filter((m) => !m.placeholder && m.content.trim());
+            if (realMsgs.length <= 4) return prev; // 消息太少不压缩
+            const recent = realMsgs.slice(-4);
+            const summaryMsg: ChatMessage = {
+              id: `summary-${Date.now()}`,
+              role: 'user',
+              content: `[历史对话摘要]\n${msg.summary}`,
+              timestamp: Date.now(),
+            };
+            return [summaryMsg, ...recent];
+          });
+          // 重置签名避免立即重新保存历史
+          lastSavedSignatureRef.current = null;
+          // 显示压缩完成提示
+          const id = Date.now();
+          setNotice({
+            level: 'success',
+            message: `上下文已压缩：${msg.beforeTokens} → ${msg.afterTokens} tokens`,
+            id,
+          });
+          setTimeout(() => {
+            setNotice((cur) => (cur && cur.id === id ? null : cur));
+          }, 3000);
+          break;
+        }
+        case 'planGenerated': {
+          // §需求9：Planner 下发计划，初始化所有 step 为 pending
+          setPlanSteps(
+            msg.steps.map((s) => ({
+              step: s.step,
+              tool: s.tool,
+              args: s.args,
+              reason: s.reason,
+              status: 'pending' as const,
+            }))
+          );
+          break;
+        }
+        case 'planStepUpdate': {
+          // §需求9：更新某个 step 的状态（pending/running/done/error/skipped）
+          setPlanSteps((prev) => {
+            if (msg.index < 0 || msg.index >= prev.length) return prev;
+            const next = prev.slice();
+            next[msg.index] = {
+              ...next[msg.index],
+              status: msg.status,
+              summary: msg.summary ?? next[msg.index].summary,
+            };
+            return next;
+          });
+          break;
+        }
       }
     };
 
@@ -547,13 +623,32 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
   const restoreHistory = useCallback((item: ChatHistoryItem) => {
     setMessages(item.messages);
     setCurrentHistoryId(item.id);
+    // §模型识别：若历史会话记录了模型 ID，且与当前不同，自动切换到该模型
+    // 若 modelId 不存在或后端找不到对应配置，activeConfig 保持不变（即用当前选中的模型）
+    if (item.modelId && item.modelId !== activeConfigRef.current?.id) {
+      vscode?.postMessage({ command: 'switchConfig', configId: item.modelId } as WebViewRequest);
+    }
     // 恢复历史时清空执行状态与文件变更记录，避免上一次会话的残留干扰
     setAgentStatus({ status: 'done', message: '历史会话已恢复', stepType: 'done' });
     setAgentEditedFiles([]);
     setToolCalls([]);
+    setPlanSteps([]);
     setPendingAgentEdits([]);
     setError(null);
     setShowHistory(false);
+  }, []);
+
+  // §历史删除：从历史列表中移除指定会话项
+  const deleteHistoryItem = useCallback((id: string) => {
+    setHistory((prev) => {
+      const updated = prev.filter((h) => h.id !== id);
+      saveHistory(updated);
+      return updated;
+    });
+    // 如果删除的是当前恢复的会话，清空 currentHistoryId
+    if (currentHistoryIdRef.current === id) {
+      setCurrentHistoryId(null);
+    }
   }, []);
 
   // §继续会话：对话完成（agentStatus.status === 'done'）时自动保存/更新历史
@@ -588,6 +683,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
         title: historyTitle(realMessages),
         timestamp: Date.now(),
         messages: realMessages,
+        modelId: activeConfig?.id,
       };
       setCurrentHistoryId(item.id);
       const updated = [item, ...prev].slice(0, MAX_HISTORY);
@@ -637,6 +733,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
     setAgentStatus(null);
     if (agentMode) {
       setToolCalls([]);
+      setPlanSteps([]);
     }
 
     if (!vscode) {
@@ -724,8 +821,12 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
     return Array.from(seen.values());
   }, [collectedChanges, agentEditedFiles]);
 
-  // 估算本次对话的 token 使用率百分比
-  const tokenPercent = useMemo(() => estimateTokenPercent(messages), [messages]);
+  // §需求8：估算本次对话的 token 使用情况（token 数 + 百分比 + context window）
+  // 用当前选中模型的 context window 代替硬编码 128K
+  const tokenUsage = useMemo(() => {
+    const cw = activeConfig ? getModelContextWindow(activeConfig.provider, activeConfig.model) : 128000;
+    return estimateTokenUsage(messages, cw);
+  }, [messages, activeConfig]);
 
   // Bug 4: 队列模式，当前显示的是第一个
   const currentPendingEdit = pendingAgentEdits[0] || null;
@@ -780,14 +881,22 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
   };
 
   return (
-    <div className={`lifeAiCode-panel ${isPopup ? 'lifeAiCode-panel--popup' : ''}`}>
-      {/* 对话历史侧边栏 */}
+    <div
+      className={`lifeAiCode-panel ${isPopup ? 'lifeAiCode-panel--popup' : ''}`}
+      onMouseDown={(e) => {
+        // §历史 Dropdown 关闭：点击 history-dropdown 之外的任何区域都关闭
+        if (showHistory && historyRef.current && !historyRef.current.contains(e.target as Node)) {
+          setShowHistory(false);
+        }
+      }}
+    >
+      {/* 对话历史下拉菜单 */}
       {showHistory && (
-        <div className="history-sidebar" ref={historyRef}>
-          <div className="history-sidebar__header">
-            <span className="history-sidebar__title">对话历史</span>
+        <div className="history-dropdown" ref={historyRef}>
+          <div className="history-dropdown__header">
+            <span className="history-dropdown__title">对话历史</span>
             <button
-              className="history-sidebar__close"
+              className="history-dropdown__close"
               onClick={() => setShowHistory(false)}
               title="关闭"
             >
@@ -849,6 +958,16 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
                 {historyDropTarget?.id === item.id && historyDropTarget.after && (
                   <div className="history-item__drop-line" />
                 )}
+                <button
+                  className="history-item__delete"
+                  title="删除此会话"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    deleteHistoryItem(item.id);
+                  }}
+                >
+                  <Trash2 size={13} strokeWidth={1.8} />
+                </button>
               </div>
             ))}
           </div>
@@ -936,6 +1055,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
                               onCancel={agentStatus.status === 'running' ? handleCancelAgent : undefined}
                             />
                           )}
+                          {agentMode && planSteps.length > 0 && <PlanChecklist steps={planSteps} />}
                           {agentMode && <ToolCallLog toolCalls={toolCalls} />}
                         </>
                       )}
@@ -990,6 +1110,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
                           onCancel={agentStatus.status === 'running' ? handleCancelAgent : undefined}
                         />
                       )}
+                      {agentMode && planSteps.length > 0 && <PlanChecklist steps={planSteps} />}
                       {agentMode && <ToolCallLog toolCalls={toolCalls} />}
                     </>
                   )}
@@ -1041,7 +1162,15 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
             agentStatus={agentStatus}
             changes={allChanges}
             onOpenDiff={handleOpenDiffInEditor}
-            tokenPercent={tokenPercent}
+            tokenUsage={tokenUsage}
+            onCompact={() => {
+              const realMsgs = messagesRef.current
+                .filter((m) => !m.placeholder && m.content.trim())
+                .map((m) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content }));
+              if (realMsgs.length > 4) {
+                vscode?.postMessage({ command: 'compactHistory', messages: realMsgs } as WebViewRequest);
+              }
+            }}
           />
         </div>
       )}
@@ -1302,29 +1431,40 @@ function computeChangeStats(change: SuggestionChange): { added: number; removed:
   return { added, removed };
 }
 
-/** 估算 token 使用率百分比（基于消息内容长度，中英混合约 3 字符/token） */
-function estimateTokenPercent(messages: ChatMessage[]): number {
+/** §需求8：格式化 token 数为 K 简写（128000 → 128K） */
+function formatK(n: number): string {
+  if (n >= 1000) return `${Math.round(n / 1000)}K`;
+  return String(n);
+}
+
+/** §需求8：估算当前对话的 token 使用情况
+ *  返回估算 token 数、context window、百分比。
+ *  估算方式：中英混合约 3 字符/token（粗估，阶段2 将引入 tiktoken 精确计数）
+ *  仅统计前端 messages 的 content + blocks，不含 system prompt / tool schema（后端占大头） */
+function estimateTokenUsage(messages: ChatMessage[], contextWindow: number): { tokens: number; percent: number; contextWindow: number } {
   const totalChars = messages.reduce((sum, m) => {
     const content = m.content || '';
     const blocks = m.blocks?.reduce((s: number, b) => s + (b.type === 'text' ? b.content.length : b.type === 'reasoning' ? b.content.length : 0), 0) || 0;
     return sum + content.length + blocks;
   }, 0);
-  if (totalChars === 0) return 0;
+  if (totalChars === 0) return { tokens: 0, percent: 0, contextWindow };
   const estimatedTokens = Math.ceil(totalChars / 3);
-  const contextWindow = 128000;
-  return Math.min((estimatedTokens / contextWindow) * 100, 100);
+  const percent = Math.min((estimatedTokens / contextWindow) * 100, 100);
+  return { tokens: estimatedTokens, percent, contextWindow };
 }
 
 function PreparingPlaceholder({
   agentStatus,
   changes = [],
   onOpenDiff,
-  tokenPercent,
+  tokenUsage,
+  onCompact,
 }: {
   agentStatus?: { status: string; message: string; stepType?: string } | null;
   changes?: SuggestionChange[];
   onOpenDiff?: (change: SuggestionChange) => void;
-  tokenPercent?: number;
+  tokenUsage?: { tokens: number; percent: number; contextWindow: number };
+  onCompact?: () => void;
 }) {
   const isDone = agentStatus?.status === 'done';
   const [showChanges, setShowChanges] = useState(false);
@@ -1347,9 +1487,21 @@ function PreparingPlaceholder({
             <span className="status-card__action-count">{changes.length}</span>
           </button>
         )}
-        {typeof tokenPercent === 'number' && tokenPercent > 0 && (
-          <span className="status-card__token" title="上下文窗口 Token 使用率（估算）">
-            Token {tokenPercent.toFixed(1)}%
+        {tokenUsage && tokenUsage.tokens > 0 && (
+          <span className="status-card__token" title={`上下文 Token 使用率（估算）\n当前: ${tokenUsage.tokens.toLocaleString()} / ${tokenUsage.contextWindow.toLocaleString()}\n占比: ${tokenUsage.percent.toFixed(1)}%`}>
+            Token {formatK(tokenUsage.tokens)}/{formatK(tokenUsage.contextWindow)}
+            <span className={`status-card__token-percent ${tokenUsage.percent > 80 ? 'status-card__token-percent--high' : ''}`}>
+              {tokenUsage.percent.toFixed(0)}%
+            </span>
+            {onCompact && (
+              <button
+                className="status-card__compact-btn"
+                onClick={onCompact}
+                title="压缩上下文：生成历史摘要替换早期消息"
+              >
+                <Archive size={11} strokeWidth={1.8} />
+              </button>
+            )}
           </span>
         )}
         {showChanges && changes.length > 0 && (
@@ -1402,9 +1554,21 @@ function PreparingPlaceholder({
           <span className="status-card__action-count">{changes.length}</span>
         </button>
       )}
-      {typeof tokenPercent === 'number' && tokenPercent > 0 && (
-        <span className="status-card__token" title="上下文窗口 Token 使用率（估算）">
-          Token {tokenPercent.toFixed(1)}%
+      {tokenUsage && tokenUsage.tokens > 0 && (
+        <span className="status-card__token" title={`上下文 Token 使用率（估算）\n当前: ${tokenUsage.tokens.toLocaleString()} / ${tokenUsage.contextWindow.toLocaleString()}\n占比: ${tokenUsage.percent.toFixed(1)}%`}>
+          Token {formatK(tokenUsage.tokens)}/{formatK(tokenUsage.contextWindow)}
+          <span className={`status-card__token-percent ${tokenUsage.percent > 80 ? 'status-card__token-percent--high' : ''}`}>
+            {tokenUsage.percent.toFixed(0)}%
+          </span>
+          {onCompact && (
+            <button
+              className="status-card__compact-btn"
+              onClick={onCompact}
+              title="压缩上下文：生成历史摘要替换早期消息"
+            >
+              <Archive size={11} strokeWidth={1.8} />
+            </button>
+          )}
         </span>
       )}
       <span className="status-card__dots">

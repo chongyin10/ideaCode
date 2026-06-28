@@ -15,7 +15,6 @@
  * 4. 管理 WebView 面板（插件自定义 UI）
  */
 
-import path from 'path';
 import type { Store } from '@reduxjs/toolkit';
 import type { RootState, AppDispatch } from '../store';
 import { openFile, openVirtualFile, addWorkspaceFolder, removeWorkspaceFolder, setFileContent, markFileSaved, toggleAiEditMode, setGitStatus, setGitBranch, setExternalFileChange, reloadFilesFromDisk } from '../store/slices/workspaceSlice';
@@ -25,6 +24,7 @@ import { getMonacoEditorActions } from '../services/monacoEditorBridge';
 import { getPluginManager } from './core';
 import type { PluginManifest } from './types';
 import { terminalSDK, type TerminalCreateOptions } from '../services/terminalSDK';
+import { normalizePathForCompare } from '../utils/pathNormalize';
 import {
   registerViewContainer,
   unregisterViewContainer,
@@ -739,8 +739,9 @@ export class ExtensionBridge {
         return { success: false, error: '没有打开工作区' };
       }
 
-      const normalizedTarget = path.resolve(filePath);
-      const normalizedRoot = path.resolve(workspaceRoot);
+      // 浏览器环境不能用 Node 的 path.resolve，用 normalizePathForCompare 规范化后比较
+      const normalizedTarget = normalizePathForCompare(filePath);
+      const normalizedRoot = normalizePathForCompare(workspaceRoot);
       if (!normalizedTarget.startsWith(normalizedRoot)) {
         console.error('[LifeAiCode] applyChanges: 拒绝写入工作区外', filePath);
         return { success: false, error: '拒绝写入工作区外' };

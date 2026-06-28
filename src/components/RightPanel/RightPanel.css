@@ -235,6 +235,8 @@
   transition:
     opacity 0.2s ease 0.08s,
     transform 0.2s cubic-bezier(0.4, 0, 0.2, 1) 0.08s;
+  /* overlay 的定位参考，必须设置 */
+  position: relative;
 }
 
 .right-panel.is-visible .right-panel__content {
@@ -250,23 +252,4 @@
   justify-content: center;
   color: #858585;
   font-size: 12px;
-}
-
-/* ─── 历史记录弹出层 ─── */
-
-.right-panel__content-overlay {
-  position: absolute;
-  top: 32px;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  z-index: 90;
-  background: transparent;
-  cursor: default;
-}
-
-.extension-view__action-popover-anchor {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
 }

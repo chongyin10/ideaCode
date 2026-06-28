@@ -1,6 +1,6 @@
 import { useState, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { X, Maximize2, Minimize2, History } from 'lucide-react';
+import { X, Maximize2, Minimize2 } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import {
   toggleRightPanel,
@@ -12,7 +12,6 @@ import {
 } from '../../store/slices/layoutSlice';
 import { notifyPanelResizeStart, notifyPanelResizeEnd } from '../../services/panelResizeNotifier';
 import { DockableContent, ExtensionViewActions } from '../DockableContent';
-import { HistoryPopover } from '../HistoryPopover';
 import './RightPanel.css';
 
 const DOCK_MIME = 'application/lifeai-dock-item';
@@ -46,8 +45,6 @@ const RightPanel = () => {
   const [isResizing, setIsResizing] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
   const preMaximizeWidthRef = useRef(DEFAULT_WIDTH);
-  const historyBtnRef = useRef<HTMLButtonElement>(null);
-  const [historyOpen, setHistoryOpen] = useState(false);
 
   // ── tab 拖拽状态 ──
   const [draggingTabId, setDraggingTabId] = useState<string | null>(null);
@@ -270,29 +267,7 @@ const RightPanel = () => {
           {activeItemActions.length > 0 && (
             <>
               <div className="right-panel__actions-group">
-                <ExtensionViewActions
-                  actions={activeItemActions}
-                  renderAction={(action) => {
-                    if (action.command !== 'lifeAiCode.showHistory') return null;
-                    return (
-                      <span className="extension-view__action-popover-anchor">
-                        <button
-                          ref={historyBtnRef}
-                          className="extension-view__action-btn"
-                          title={action.tooltip || action.title || action.command}
-                          onClick={() => setHistoryOpen((v) => !v)}
-                        >
-                          <History size={14} strokeWidth={1.5} />
-                        </button>
-                        <HistoryPopover
-                          open={historyOpen}
-                          onClose={() => setHistoryOpen(false)}
-                          anchorRef={historyBtnRef}
-                        />
-                      </span>
-                    );
-                  }}
-                />
+                <ExtensionViewActions actions={activeItemActions} />
               </div>
               <div className="right-panel__actions-separator" />
             </>
@@ -324,14 +299,6 @@ const RightPanel = () => {
           <div className="right-panel__placeholder">{t('rightPanel.placeholder', { name: '' })}</div>
         )}
       </div>
-      {/* 历史记录弹出层打开时，覆盖右侧面板内容区域，捕获内部（含 iframe）点击以关闭弹窗 */}
-      {historyOpen && (
-        <div
-          className="right-panel__content-overlay"
-          aria-hidden="true"
-          onMouseDown={() => setHistoryOpen(false)}
-        />
-      )}
     </div>
   );
 };

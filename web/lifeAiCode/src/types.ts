@@ -203,6 +203,54 @@ export const PROVIDER_META: Record<ProviderType, {
   },
 };
 
+/* ─── §需求8：模型上下文窗口映射 ─── */
+// 按 provider 的默认窗口（找不到具体模型时回退使用）
+const PROVIDER_DEFAULT_CONTEXT_WINDOW: Partial<Record<ProviderType, number>> = {
+  openai: 128000,
+  anthropic: 200000,
+  deepseek: 64000,
+  qwen: 128000,
+  glm: 128000,
+  kimi: 32000,
+  MiniMax: 245000,
+  doubao: 32000,
+  ollama: 8192,
+  custom: 128000,
+};
+
+// 按模型名精确映射（key 为模型名，value 为 context window tokens）
+const MODEL_CONTEXT_WINDOW: Record<string, number> = {
+  // OpenAI
+  'gpt-4o': 128000, 'gpt-4o-mini': 128000, 'gpt-4-turbo': 128000,
+  'gpt-4': 8192, 'gpt-4-32k': 32768, 'gpt-3.5-turbo': 16385,
+  // Anthropic
+  'claude-3-opus-20240229': 200000, 'claude-3-sonnet-20240229': 200000,
+  'claude-3-haiku-20240307': 200000, 'claude-3-5-sonnet-20240620': 200000,
+  // DeepSeek
+  'deepseek-chat': 64000, 'deepseek-reasoner': 64000, 'deepseek-coder': 64000,
+  // Qwen
+  'qwen-max': 32768, 'qwen-plus': 131072, 'qwen-turbo': 1000000,
+  'qwen2.5-coder-32b-instruct': 131072, 'qwen2.5-72b-instruct': 131072,
+  // GLM
+  'glm-4.6': 131072, 'glm-4.5': 131072, 'glm-4-plus': 131072,
+  'glm-4-air': 131072, 'glm-4-flash': 131072, 'glm-4-long': 1000000,
+  // Kimi
+  'moonshot-v1-8k': 8192, 'moonshot-v1-32k': 32768, 'moonshot-v1-128k': 131072,
+  // MiniMax
+  'MiniMax-M3': 1000000, 'MiniMax-Text-01': 1000000,
+  'MiniMax-Text-01-32K': 32768, 'MiniMax-Text-01-128K': 131072,
+  'abab6.5s-chat': 8192, 'abab6.5-chat': 8192,
+  // Doubao（窗口在模型名中体现）
+  'doubao-lite-4k': 4096, 'doubao-lite-16k': 16384, 'doubao-lite-32k': 32768, 'doubao-lite-128k': 131072,
+  'doubao-pro-4k': 4096, 'doubao-pro-32k': 32768, 'doubao-pro-128k': 131072,
+};
+
+/** 查询模型的 context window（token 上限），用于 token 使用率显示与压缩阈值判断 */
+export function getModelContextWindow(provider: ProviderType, model: string): number {
+  if (MODEL_CONTEXT_WINDOW[model]) return MODEL_CONTEXT_WINDOW[model];
+  return PROVIDER_DEFAULT_CONTEXT_WINDOW[provider] ?? 128000;
+}
+
 export interface LlmConfig {
   id: string;
   name: string;
@@ -277,7 +325,9 @@ export type WebViewRequest =
   | { command: 'cancelAgent' }
   | { command: 'abortGeneration' }
   | { command: 'confirmAgentEdit'; editId: string }
-  | { command: 'rejectAgentEdit'; editId: string };
+  | { command: 'rejectAgentEdit'; editId: string }
+  // §需求8：手动压缩上下文 — 调 LLM 生成历史摘要替换早期消息
+  | { command: 'compactHistory'; messages: { role: 'user' | 'assistant'; content: string }[] };
 
 export type ExtensionMessage =
   | { type: 'chatResponse'; id: string; content: string; done: boolean }
@@ -299,6 +349,12 @@ export type ExtensionMessage =
   // Bug 21: extension.js / agentRuntime.js 会发送 step 进度消息，但原 ExtensionMessage
   // 联合类型未声明该类型，导致 ChatPanel 无法类型安全地处理。补充声明。
   | { type: 'step'; stepType: StepType; target?: string; params?: string; label?: string; status: StepStatus }
+  // §需求8：上下文压缩完成通知，前端据此替换 messages
+  | { type: 'historyCompacted'; summary: string; beforeTokens: number; afterTokens: number }
+  // §需求9：任务拆解 — Planner 生成计划后下发，前端渲染 checklist
+  | { type: 'planGenerated'; steps: Array<{ step: number; tool: string; args: Record<string, unknown>; reason: string }> }
+  // §需求9：计划步骤状态变更（pending/running/done/error/skipped）
+  | { type: 'planStepUpdate'; index: number; status: 'pending' | 'running' | 'done' | 'error' | 'skipped'; summary?: string }
   | { type: 'error'; message: string };
 
 /* ─── VSCode API 类型 ─── */

@@ -260,11 +260,7 @@ export function ContentBlocks({
 
   // 用户消息：直接渲染简洁气泡
   if (role === 'user') {
-    return (
-      <div className="user-bubble">
-        <MarkdownContent content={content} enableOptions={false} />
-      </div>
-    );
+    return <UserBubble content={content} />;
   }
 
   // 系统消息
@@ -310,6 +306,35 @@ export function ContentBlocks({
         );
       })}
     </MessageCard>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────── */
+/*  User Bubble (with copy action)                                    */
+/* ─────────────────────────────────────────────────────────────────── */
+
+function UserBubble({ content }: { content: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="user-bubble-wrap">
+      <div className="user-bubble">
+        <MarkdownContent content={content} enableOptions={false} />
+      </div>
+      <button
+        className={`user-bubble__copy ${copied ? 'user-bubble__copy--done' : ''}`}
+        title={copied ? '已复制' : '复制'}
+        onClick={async (e) => {
+          e.stopPropagation();
+          try {
+            await navigator.clipboard.writeText(content);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+          } catch { /* ignore */ }
+        }}
+      >
+        {copied ? <Check size={13} strokeWidth={2} /> : <Copy size={13} strokeWidth={1.8} />}
+      </button>
+    </div>
   );
 }
 
@@ -389,45 +414,47 @@ function MessageCard({
 
       {/* Body */}
       {!collapsed && (
-        <div className="ai-card__body">
-          {children}
+        <>
+          <div className="ai-card__body">
+            {children}
 
-          {/* Incomplete banner — only when done but truncated */}
-          {status !== 'running' && incomplete && (
-            <div className="ai-card__incomplete-banner" title={incompleteReasons?.join('、')}>
-              <AlertTriangle size={13} strokeWidth={2.2} />
-              <span>
-                回答可能不完整{Array.isArray(incompleteReasons) && incompleteReasons.length > 0
-                  ? `（${incompleteReasons.join('、')}）`
-                  : ''}
-              </span>
-              {onContinue && (
-                <button
-                  className="ai-card__continue-btn"
-                  onClick={(e) => { e.stopPropagation(); onContinue(); }}
-                  title="请求 LLM 继续完成回答"
-                >
-                  <RefreshCw size={11} strokeWidth={2.2} />
-                  继续生成
-                </button>
-              )}
-            </div>
-          )}
+            {/* Incomplete banner — only when done but truncated */}
+            {status !== 'running' && incomplete && (
+              <div className="ai-card__incomplete-banner" title={incompleteReasons?.join('、')}>
+                <AlertTriangle size={13} strokeWidth={2.2} />
+                <span>
+                  回答可能不完整{Array.isArray(incompleteReasons) && incompleteReasons.length > 0
+                    ? `（${incompleteReasons.join('、')}）`
+                    : ''}
+                </span>
+                {onContinue && (
+                  <button
+                    className="ai-card__continue-btn"
+                    onClick={(e) => { e.stopPropagation(); onContinue(); }}
+                    title="请求 LLM 继续完成回答"
+                  >
+                    <RefreshCw size={11} strokeWidth={2.2} />
+                    继续生成
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
 
-          {/* Action bar at bottom of card */}
+          {/* Action bar — 与 ai-card__body 并排（兄弟关系），对话完成时显示 */}
+          {/* 仅保留复制：主流大模型 API 无公开点赞/点踩反馈端点，故隐藏 */}
           {showActions && onCopy && (
-            <div className="ai-card__section ai-card__section--actions">
+            <div className="ai-card__actions">
               <button
-                className={`action-btn ${copied ? 'action-btn--active' : ''}`}
+                className={`ai-card__action-btn ${copied ? 'ai-card__action-btn--active' : ''}`}
                 onClick={(e) => { e.stopPropagation(); handleCopy(); }}
-                title="复制全文"
+                title={copied ? '已复制' : '复制'}
               >
-                {copied ? <Check size={13} strokeWidth={2} /> : <Copy size={13} strokeWidth={1.8} />}
-                {copied ? '已复制' : '复制'}
+                {copied ? <Check size={14} strokeWidth={2} /> : <Copy size={14} strokeWidth={1.8} />}
               </button>
             </div>
           )}
-        </div>
+        </>
       )}
     </div>
   );

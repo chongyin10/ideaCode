@@ -811,6 +811,62 @@ async function suggestRefactor(context) {
 }
 
 /**
+ * §需求8：压缩上下文 — 调 LLM 生成历史摘要，替换早期消息
+ * 策略：保留最近 2 轮对话（4 条消息），把更早的消息调 LLM 生成摘要
+ * 摘要作为首条 user 消息，下次发送时 history 即为压缩后的版本
+ */
+async function compactHistory() {
+  // 从最近一次 WebView 请求中获取 messages（前端 compactHistory 命令带上的 messages）
+  // 这里通过闭包变量获取，见 case 'compactHistory' 中对 message.messages 的处理
+  // 但 message 是 switch 内的局部变量，需要通过参数传入
+  // 实际上 compactHistory 在 switch 中调用，message 在闭包中可用
+  // 为保持函数纯净，改用闭包外的 lastCompactMessages
+  if (!llmClient) {
+    postToWebView({ type: 'notice', level: 'error', message: 'LLM 未配置，无法压缩' });
+    return;
+  }
+  const messages = compactHistory._pendingMessages;
+  if (!messages || messages.length <= 4) {
+    postToWebView({ type: 'notice', level: 'info', message: '消息太少，无需压缩' });
+    return;
+  }
+
+  // 保留最近 2 轮（4 条），更早的生成摘要
+  const toCompress = messages.slice(0, -4);
+  // §需求8-阶段2：复用 estimateTokens 统一估算逻辑
+  const { estimateTokens, estimateStringTokens } = require('./agent/modelContextWindow');
+  const beforeTokens = estimateTokens(toCompress);
+
+  // 构建摘要 prompt
+  const transcript = toCompress
+    .map((m) => `${m.role === 'user' ? '用户' : 'AI'}: ${m.content.slice(0, 800)}`)
+    .join('\n\n');
+  const summaryPrompt = [
+    { role: 'user', content: `请将以下对话历史压缩为简洁的摘要，保留关键信息（用户意图、已完成的操作、重要结论、涉及的文件/代码片段）。摘要应简洁但信息完整，便于后续对话继续。\n\n对话历史：\n${transcript}\n\n请直接输出摘要，不要添加额外说明：` }
+  ];
+
+  try {
+    postToWebView({ type: 'agentStatus', status: 'running', message: '正在压缩上下文…' });
+    const summary = await llmClient.chat(summaryPrompt);
+    const cleanSummary = String(summary || '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+    const afterTokens = estimateStringTokens(cleanSummary);
+
+    postToWebView({
+      type: 'historyCompacted',
+      summary: cleanSummary,
+      beforeTokens,
+      afterTokens,
+    });
+    postToWebView({ type: 'agentStatus', status: 'done', message: '上下文压缩完成' });
+    console.log(`[LifeAiCode] 上下文压缩完成: ${beforeTokens} → ${afterTokens} tokens`);
+  } catch (err) {
+    postToWebView({ type: 'agentStatus', status: 'error', message: '压缩失败' });
+    postToWebView({ type: 'notice', level: 'error', message: `压缩失败: ${err.message}` });
+    console.error('[LifeAiCode] 上下文压缩失败:', err.message);
+  }
+}
+
+/**
  * 接受建议 → 应用变更
  *
  * 这是唯一可以修改代码的地方。
@@ -962,6 +1018,18 @@ async function activate(context) {
     waitShellCompletion,
     registerPendingEdit: (editId, edit) => {
       pendingAgentEdits.set(editId, edit);
+    },
+    // §需求8-阶段2：动态读取当前激活配置的上下文窗口大小
+    // AgentRuntime 在 LLM 调用前用此值判断是否需要自动压缩
+    getContextWindow: () => {
+      try {
+        const cfg = configs.find((c) => c.id === activeConfigId) || configs[0];
+        if (!cfg) return 128000;
+        const { getModelContextWindow } = require('./agent/modelContextWindow');
+        return getModelContextWindow(cfg.provider, cfg.model);
+      } catch {
+        return 128000;
+      }
     },
   });
   // 设置 Agent 审计日志路径（多级兜底：扩展目录 → 用户家目录 → 临时目录）
@@ -1436,6 +1504,12 @@ async function activate(context) {
         case 'rejectAgentEdit': {
           pendingAgentEdits.delete(message.editId);
           postToWebView({ type: 'agentEditStatus', editId: message.editId, status: 'rejected' });
+          break;
+        }
+        case 'compactHistory': {
+          // §需求8：手动压缩上下文 — 调 LLM 生成历史摘要，替换早期消息
+          compactHistory._pendingMessages = message.messages || [];
+          await compactHistory();
           break;
         }
         default:

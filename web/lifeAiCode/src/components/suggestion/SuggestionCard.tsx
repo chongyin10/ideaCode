@@ -44,12 +44,30 @@ export function SuggestionCard({ suggestion, onAccept, onReject, onOpenDiffInEdi
           <span>{typeMeta.label}</span>
         </span>
         <span className="suggestion-card__title">{suggestion.title}</span>
-        <span className={`suggestion-card__status suggestion-card__status--${suggestion.status}`}>
-          {suggestion.status === 'pending' ? '待处理' :
-           suggestion.status === 'accepted' ? '已接受' :
-           suggestion.status === 'rejected' ? '已拒绝' :
-           suggestion.status === 'applied' ? '已应用' : '未知'}
-        </span>
+        {suggestion.status === 'pending' ? (
+          <div className="suggestion-card__actions" onClick={(e) => e.stopPropagation()}>
+            <button
+              className="action-btn action-btn--accept"
+              title="接受"
+              onClick={() => onAccept(suggestion.id)}
+            >
+              <Check size={14} strokeWidth={2.5} />
+            </button>
+            <button
+              className="action-btn action-btn--reject"
+              title="拒绝"
+              onClick={() => onReject(suggestion.id)}
+            >
+              <X size={14} strokeWidth={2.5} />
+            </button>
+          </div>
+        ) : (
+          <span className={`suggestion-card__status suggestion-card__status--${suggestion.status}`}>
+            {suggestion.status === 'accepted' ? '已接受' :
+             suggestion.status === 'rejected' ? '已拒绝' :
+             suggestion.status === 'applied' ? '已应用' : '未知'}
+          </span>
+        )}
       </div>
 
       {expanded && (
@@ -63,17 +81,6 @@ export function SuggestionCard({ suggestion, onAccept, onReject, onOpenDiffInEdi
           {suggestion.changes.map((change, idx) => (
             <DiffView key={idx} change={change} onOpenDiffInEditor={onOpenDiffInEditor} />
           ))}
-
-          {suggestion.status === 'pending' && (
-            <div className="suggestion-card__actions">
-              <button className="action-btn action-btn--accept" onClick={() => onAccept(suggestion.id)}>
-                <Check size={13} strokeWidth={2.5} /> 接受
-              </button>
-              <button className="action-btn action-btn--reject" onClick={() => onReject(suggestion.id)}>
-                <X size={13} strokeWidth={2.5} /> 拒绝
-              </button>
-            </div>
-          )}
         </div>
       )}
     </div>

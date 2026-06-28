@@ -19,9 +19,14 @@ const { ToolExecutor } = require('./toolExecutor');
 const { LlmAdapter } = require('./llmAdapter');
 const { Planner } = require('./planner');
 const { AuditLogger } = require('./auditLogger');
+const { estimateTokens, estimateStringTokens } = require('./modelContextWindow');
 
 const MAX_ROUNDS = 10;
 const DEFAULT_TIMEOUT = 5 * 60 * 1000; // 5 分钟
+// §需求8-阶段3：自动压缩阈值（占 contextWindow 的比例）
+const AUTO_COMPACT_THRESHOLD = 0.8;
+// §需求8-阶段3：压缩后保留的最近消息数（user/assistant 成对）
+const AUTO_COMPACT_KEEP_RECENT = 4;
 
 class AgentRuntime {
   /**
@@ -68,6 +73,8 @@ class AgentRuntime {
     this.isRunning = true;
     this.cancelled = false;
     this._abortController = new AbortController();
+    // §需求8-阶段3：每个新任务允许触发一次自动压缩
+    this._autoCompacted = false;
     try {
       const result = await this._runOne(next);
       next.resolve(result);
@@ -107,13 +114,28 @@ class AgentRuntime {
       ];
 
       // 可选：复杂任务先让 LLM 做计划
+      let planExecuted = false;
       if (this.planner.needsPlanning(userInput)) {
         this._notifyStep('think', '制定执行计划');
+        // §需求8-阶段3：plan 生成前也检查 token 占用
+        await this._maybeAutoCompact(messages, signal);
         const plan = await this._generatePlan(userInput, signal);
         if (plan && plan.length > 0) {
+          // §需求9：下发计划给前端渲染 checklist
+          this._notifyPlanGenerated(plan);
+          // §需求9：按 plan step 顺序强制执行（而非仅作为提示塞进 messages）
+          const planResults = await this._executePlan(plan, signal, onToolCall);
+          planExecuted = true;
+          // 把 plan 执行结果作为上下文塞进 messages，让 LLM 做最终总结
+          const resultsText = planResults.map((r, i) => {
+            const step = plan[i];
+            const status = r.error ? '失败' : '完成';
+            const summary = r.error ? r.error : (r.summary || '成功');
+            return `步骤 ${i + 1} [${step.tool}] ${status}: ${summary}`;
+          }).join('\n');
           messages.push({
             role: 'user',
-            content: `## 执行计划\n${JSON.stringify(plan, null, 2)}\n请按此计划调用工具完成任务。`,
+            content: `## 计划执行结果\n${resultsText}\n\n请根据以上执行结果，给出任务总结。若有步骤失败，请说明原因和建议。`,
           });
         }
       }
@@ -137,6 +159,9 @@ class AgentRuntime {
           finalResponse = '任务执行超时';
           break;
         }
+
+        // §需求8-阶段3：LLM 调用前检查 token 占用，超阈值自动压缩
+        await this._maybeAutoCompact(messages, signal);
 
         // 调用 LLM（带 AbortSignal，cancel() 时立即终止）
         let currentResponse = '';
@@ -275,6 +300,175 @@ class AgentRuntime {
       return this.planner.parsePlan(planContent);
     } catch {
       return [];
+    }
+  }
+
+  /**
+   * §需求9：下发计划给前端渲染 checklist
+   */
+  _notifyPlanGenerated(plan) {
+    if (typeof this.context.postToWebView === 'function') {
+      this.context.postToWebView({
+        type: 'planGenerated',
+        steps: plan.map((s, i) => ({
+          step: i + 1,
+          tool: s.tool,
+          args: s.args || {},
+          reason: s.reason || '',
+        })),
+      });
+    }
+  }
+
+  /**
+   * §需求9：按 plan step 顺序强制执行
+   * 每个 step 调用 executor.execute(tool, args)，发送状态变更给前端
+   * @returns {Promise<Array<{summary?: string, error?: string}>>} 每个 step 的结果
+   */
+  async _executePlan(plan, signal, onToolCall) {
+    const results = [];
+    for (let i = 0; i < plan.length; i++) {
+      const step = plan[i];
+      // 检查取消
+      if (this.cancelled || signal.aborted) {
+        this._notifyPlanStep(i, 'skipped');
+        results.push({ error: '任务已取消' });
+        continue;
+      }
+
+      // 通知前端：该步骤开始执行
+      this._notifyPlanStep(i, 'running');
+      this._notifyStep('think', `执行步骤 ${i + 1}/${plan.length}: ${step.tool}`);
+
+      // 通知 UI tool_call（复用现有 ToolCallCard）
+      if (typeof onToolCall === 'function') {
+        onToolCall({
+          name: step.tool,
+          arguments: step.args || {},
+        });
+      }
+
+      try {
+        const result = await this.executor.execute(step.tool, step.args || {});
+        if (signal.aborted || this.cancelled) {
+          this._notifyPlanStep(i, 'skipped');
+          results.push({ error: '任务已取消' });
+          continue;
+        }
+        // 提取结果摘要
+        const summary = typeof result === 'string'
+          ? result.slice(0, 200)
+          : (result && result.summary) || (result && JSON.stringify(result).slice(0, 200)) || '成功';
+        this._notifyPlanStep(i, 'done', summary);
+        results.push({ summary });
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        this._notifyPlanStep(i, 'error', errMsg);
+        results.push({ error: errMsg });
+      }
+    }
+    return results;
+  }
+
+  /**
+   * §需求9：通知前端某个 plan step 的状态变更
+   */
+  _notifyPlanStep(index, status, summary) {
+    if (typeof this.context.postToWebView === 'function') {
+      this.context.postToWebView({
+        type: 'planStepUpdate',
+        index,
+        status,
+        summary,
+      });
+    }
+  }
+
+  /**
+   * §需求8-阶段3：自动压缩检查
+   *
+   * 在每次 LLM 调用前调用：
+   * 1. 估算 messages 的 token 占用
+   * 2. 如果超过 contextWindow 的 80%，调 LLM 生成历史摘要
+   * 3. 用摘要 + 最近 N 条消息替换 messages 数组（in-place 修改）
+   * 4. 发 historyCompacted 消息通知前端同步替换
+   *
+   * 安全保证：
+   * - 同一任务内压缩只触发一次（避免循环压缩）
+   * - 压缩失败时不阻塞，继续用原 messages 调 LLM
+   * - 保留最近 N 条消息，避免丢失最近上下文
+   *
+   * @param {Array} messages 可变数组，压缩会就地修改
+   * @param {AbortSignal} signal
+   */
+  async _maybeAutoCompact(messages, signal) {
+    if (this._autoCompacted) return; // 同一任务只压缩一次
+    if (!messages || messages.length <= AUTO_COMPACT_KEEP_RECENT + 1) return;
+
+    const contextWindow = typeof this.context.getContextWindow === 'function'
+      ? this.context.getContextWindow()
+      : 128000;
+    const usedTokens = estimateTokens(messages);
+    if (usedTokens < contextWindow * AUTO_COMPACT_THRESHOLD) return;
+
+    if (!this.llmClient) return;
+    if (signal.aborted || this.cancelled) return;
+
+    this._autoCompacted = true;
+    const toCompress = messages.slice(0, -AUTO_COMPACT_KEEP_RECENT);
+    const recent = messages.slice(-AUTO_COMPACT_KEEP_RECENT);
+    const beforeTokens = estimateTokens(toCompress);
+
+    const transcript = toCompress
+      .map((m) => {
+        const role = m.role === 'assistant' ? 'AI' : '用户';
+        const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content || '');
+        return `${role}: ${content.slice(0, 1200)}`;
+      })
+      .join('\n\n');
+
+    const summaryPrompt = [{
+      role: 'user',
+      content: `请将以下对话历史压缩为简洁的摘要（保留关键事实、用户意图、已完成的工作、关键决策、文件路径、错误信息，省略寒暄和冗余代码）。
+
+对话历史：
+${transcript}
+
+请直接输出摘要，不要添加额外说明：`,
+    }];
+
+    try {
+      this._notifyStep('think', '上下文超阈值，自动压缩中…');
+      const summary = await this.llmClient.chat(summaryPrompt, { signal });
+      const cleanSummary = String(summary || '')
+        .replace(/<think>[\s\S]*?<\/think>/g, '')
+        .trim();
+
+      if (!cleanSummary) return;
+
+      // 用摘要 + 最近消息替换 messages 内容（in-place）
+      messages.length = 0;
+      messages.push({
+        role: 'user',
+        content: `[历史对话摘要]\n${cleanSummary}`,
+      }, ...recent);
+
+      const afterTokens = estimateTokens(messages);
+
+      // 通知前端替换 UI 中的消息
+      if (typeof this.context.postToWebView === 'function') {
+        this.context.postToWebView({
+          type: 'historyCompacted',
+          summary: cleanSummary,
+          beforeTokens,
+          afterTokens,
+        });
+      }
+
+      this._notifyStep('think', `上下文已自动压缩：${beforeTokens} → ${afterTokens} tokens`);
+    } catch (err) {
+      if (err && (err.isAbort || err.name === 'AbortError' || this.cancelled)) return;
+      console.warn('[AgentRuntime] 自动压缩失败:', err?.message || err);
     }
   }
 
