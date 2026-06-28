@@ -7,7 +7,7 @@ import { AgentModeToggle } from './agent/AgentModeToggle';
 import { AgentStatusBar } from './agent/AgentStatusBar';
 import { ToolCallLog } from './agent/ToolCallLog';
 import { DiffConfirmDialog } from './agent/DiffConfirmDialog';
-import { ShieldCheck, Brain, ArrowDown, User, Sparkles, Paperclip, Send, MessageSquare, Loader2, Check, Square, ChevronDown, X, GripVertical, Pencil } from 'lucide-react';
+import { ShieldCheck, Brain, ArrowDown, User, Sparkles, Paperclip, Send, MessageSquare, Loader2, Check, Square, ChevronDown, X, GripVertical, Pencil, MoreHorizontal } from 'lucide-react';
 
 /** 预处理：检测并补齐未闭合的 markdown 结构（供 chatResponse 处理时使用） */
 function groupConfigsByProviderOrder(configs: LlmConfig[]) {
@@ -156,7 +156,12 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
   const [userScrolledUp, setUserScrolledUp] = useState(false);
   const configPickerRef = useRef<HTMLDivElement>(null);
   const historyRef = useRef<HTMLDivElement>(null);
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  const actionOverflowRef = useRef<HTMLDivElement>(null);
   const vscode = getVsCodeApi();
+  // 响应式 input-actions：面板宽度不足时把次要按钮收进 ... 溢出菜单
+  const [compactActions, setCompactActions] = useState(false);
+  const [showActionOverflow, setShowActionOverflow] = useState(false);
 
   const activeMeta = activeConfig ? PROVIDER_META[activeConfig.provider] : null;
 
@@ -178,10 +183,26 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
       if (showHistory && historyRef.current && !historyRef.current.contains(e.target as Node)) {
         setShowHistory(false);
       }
+      if (showActionOverflow && actionOverflowRef.current && !actionOverflowRef.current.contains(e.target as Node)) {
+        setShowActionOverflow(false);
+      }
     };
     document.addEventListener('mousedown', close);
     return () => document.removeEventListener('mousedown', close);
-  }, [showConfigPicker, showHistory]);
+  }, [showConfigPicker, showHistory, showActionOverflow]);
+
+  // 响应式 input-actions：监测工具栏宽度，空间不足时启用紧凑模式
+  useEffect(() => {
+    const el = toolbarRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        setCompactActions(entry.contentRect.width < 400);
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   // WebView 失去焦点时（点击面板外部）关闭下拉
   useEffect(() => {
@@ -929,7 +950,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
             disabled={isProcessing}
             rows={1}
           />
-          <div className="input-toolbar">
+          <div className="input-toolbar" ref={toolbarRef}>
             <div className="input-tags">
               {fileName && (
                 <button className="input-tag" title={contextFile}>
@@ -999,32 +1020,75 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
             </div>
             <div className="input-actions">
               <AgentModeToggle enabled={agentMode} onToggle={() => setAgentMode(!agentMode)} />
-              <button
-                className={`input-icon-btn ${thinkingEnabled ? 'input-icon-btn--active' : ''}`}
-                title={thinkingEnabled ? '思考模式已开启' : '思考模式已关闭'}
-                onClick={() => setThinkingEnabled(!thinkingEnabled)}
-              >
-                <Brain size={15} strokeWidth={1.8} />
-              </button>
-              {/* §4.4: toggleEditMode 之前在前端无触发入口（死代码），AI 编辑模式只能由后端推送设置。
-                  这里补一个按钮，让用户能主动切换 编辑模式 ↔ 只读模式。
-                  仅发命令到 Extension Host，由后端走完整链路后回推 aiEditMode 消息同步回前端 state。 */}
-              <button
-                className={`input-icon-btn ${aiEditMode ? 'input-icon-btn--active' : ''}`}
-                title={aiEditMode ? '编辑模式已开启（AI 可直接修改代码）' : '只读模式已开启（AI 仅提供建议，不修改代码）'}
-                onClick={() => {
-                  vscode?.postMessage({ command: 'toggleEditMode' } as WebViewRequest);
-                }}
-              >
-                <Pencil size={15} strokeWidth={1.8} />
-              </button>
-              <button
-                className={`input-icon-btn ${autoAccept ? 'input-icon-btn--active' : ''}`}
-                title={autoAccept ? '自动接受已开启' : '自动接受已关闭'}
-                onClick={() => setAutoAccept(!autoAccept)}
-              >
-                <ShieldCheck size={15} strokeWidth={1.8} />
-              </button>
+              {!compactActions && (
+                <>
+                  <button
+                    className={`input-icon-btn ${thinkingEnabled ? 'input-icon-btn--active' : ''}`}
+                    title={thinkingEnabled ? '思考模式已开启' : '思考模式已关闭'}
+                    onClick={() => setThinkingEnabled(!thinkingEnabled)}
+                  >
+                    <Brain size={15} strokeWidth={1.8} />
+                  </button>
+                  {/* §4.4: toggleEditMode 之前在前端无触发入口（死代码），AI 编辑模式只能由后端推送设置。
+                      这里补一个按钮，让用户能主动切换 编辑模式 ↔ 只读模式。
+                      仅发命令到 Extension Host，由后端走完整链路后回推 aiEditMode 消息同步回前端 state。 */}
+                  <button
+                    className={`input-icon-btn ${aiEditMode ? 'input-icon-btn--active' : ''}`}
+                    title={aiEditMode ? '编辑模式已开启（AI 可直接修改代码）' : '只读模式已开启（AI 仅提供建议，不修改代码）'}
+                    onClick={() => {
+                      vscode?.postMessage({ command: 'toggleEditMode' } as WebViewRequest);
+                    }}
+                  >
+                    <Pencil size={15} strokeWidth={1.8} />
+                  </button>
+                  <button
+                    className={`input-icon-btn ${autoAccept ? 'input-icon-btn--active' : ''}`}
+                    title={autoAccept ? '自动接受已开启' : '自动接受已关闭'}
+                    onClick={() => setAutoAccept(!autoAccept)}
+                  >
+                    <ShieldCheck size={15} strokeWidth={1.8} />
+                  </button>
+                </>
+              )}
+              {compactActions && (
+                <div className="action-overflow" ref={actionOverflowRef} style={{ position: 'relative' }}>
+                  <button
+                    className={`input-icon-btn ${showActionOverflow ? 'input-icon-btn--active' : ''}`}
+                    title="更多操作"
+                    onClick={() => setShowActionOverflow(!showActionOverflow)}
+                  >
+                    <MoreHorizontal size={15} strokeWidth={1.8} />
+                  </button>
+                  {showActionOverflow && (
+                    <div className="action-overflow-menu">
+                      <button
+                        className={`action-overflow-menu__item ${thinkingEnabled ? 'action-overflow-menu__item--active' : ''}`}
+                        onClick={() => { setThinkingEnabled(!thinkingEnabled); }}
+                      >
+                        <Brain size={14} strokeWidth={1.8} />
+                        <span>思考模式</span>
+                        <span className="action-overflow-menu__state">{thinkingEnabled ? '开' : '关'}</span>
+                      </button>
+                      <button
+                        className={`action-overflow-menu__item ${aiEditMode ? 'action-overflow-menu__item--active' : ''}`}
+                        onClick={() => { vscode?.postMessage({ command: 'toggleEditMode' } as WebViewRequest); }}
+                      >
+                        <Pencil size={14} strokeWidth={1.8} />
+                        <span>编辑模式</span>
+                        <span className="action-overflow-menu__state">{aiEditMode ? '开' : '关'}</span>
+                      </button>
+                      <button
+                        className={`action-overflow-menu__item ${autoAccept ? 'action-overflow-menu__item--active' : ''}`}
+                        onClick={() => { setAutoAccept(!autoAccept); }}
+                      >
+                        <ShieldCheck size={14} strokeWidth={1.8} />
+                        <span>自动接受</span>
+                        <span className="action-overflow-menu__state">{autoAccept ? '开' : '关'}</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
               <button
                 className={`input-send ${isProcessing ? 'input-send--stop' : ''}`}
                 onClick={() => {

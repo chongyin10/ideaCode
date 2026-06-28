@@ -2414,6 +2414,27 @@ body {
   min-width: 0;
   flex: 1 1 auto;
 }
+/* kc-config-selector 在 flex 容器中必须设 min-width:0 才能收缩，
+   否则默认 min-width:auto 会以内容宽度为下限阻止压缩，导致与 input-actions 重叠 */
+.kc-config-selector {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+}
+/* 文件名标签在空间不足时截断 */
+.input-tag:not(.input-tag--model) {
+  max-width: 160px;
+  min-width: 0;
+  flex-shrink: 1;
+  overflow: hidden;
+}
+.input-tag:not(.input-tag--model) > span:not(.kc-config-indicator) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .input-tag {
   display: inline-flex;
@@ -2435,8 +2456,16 @@ body {
   color: var(--accent-400);
   background: rgba(59, 130, 246, 0.08);
   border-color: rgba(59, 130, 246, 0.22);
-  max-width: 100%;
+  max-width: 200px;
+  min-width: 0;
+  flex-shrink: 1;
   overflow: hidden;
+}
+/* 模型标签的文字部分也允许截断 */
+.input-tag--model .kc-config-selector__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .input-actions {
@@ -2496,6 +2525,63 @@ body {
 .input-send--stop:hover {
   background: var(--error-600, #dc2626);
   box-shadow: 0 4px 12px rgba(239, 68, 68, 0.35);
+}
+
+/* ─── 响应式 input-actions 溢出菜单 ─── */
+/* 面板宽度不足时，次要按钮（思考/编辑/自动接受）收进 ... 下拉菜单 */
+.action-overflow-menu {
+  position: absolute;
+  top: auto;
+  bottom: 100%;
+  right: 0;
+  margin-bottom: 6px;
+  min-width: 160px;
+  padding: 4px;
+  background: var(--surface-1, #1e1e1e);
+  border: 1px solid var(--border-default, #333);
+  border-radius: var(--radius-md, 6px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  z-index: 1000;
+}
+.action-overflow-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary, #999);
+  font-size: 12px;
+  font-family: var(--font-sans);
+  text-align: left;
+  border-radius: var(--radius-sm, 4px);
+  cursor: pointer;
+  transition: all var(--duration-fast, 0.1s);
+}
+.action-overflow-menu__item:hover {
+  background: var(--surface-3, #2a2a2a);
+  color: var(--text-primary, #fff);
+}
+.action-overflow-menu__item--active {
+  color: var(--accent-400, #60a5fa);
+}
+.action-overflow-menu__item--active:hover {
+  color: var(--accent-300, #93c5fd);
+}
+.action-overflow-menu__item > span:first-of-type {
+  flex: 1;
+}
+.action-overflow-menu__state {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: var(--radius-full, 999px);
+  background: var(--surface-4, #333);
+  color: var(--text-muted, #666);
+}
+.action-overflow-menu__item--active .action-overflow-menu__state {
+  background: rgba(59, 130, 246, 0.15);
+  color: var(--accent-400, #60a5fa);
 }
 
 /* ════════════════════════════════════════════════════════════════ */
