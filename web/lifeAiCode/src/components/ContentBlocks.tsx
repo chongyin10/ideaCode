@@ -396,16 +396,6 @@ function MessageCard({
         <div className="ai-card__body">
           {children}
 
-          {/* Streaming indicator (only when running) */}
-          {status === 'running' && (
-            <div className="ai-card__streaming">
-              <span className="ai-card__streaming-label">正在生成</span>
-              <span className="ai-card__streaming-dots">
-                <span /><span /><span />
-              </span>
-            </div>
-          )}
-
           {/* Incomplete banner — only when done but truncated */}
           {status !== 'running' && incomplete && (
             <div className="ai-card__incomplete-banner" title={incompleteReasons?.join('、')}>

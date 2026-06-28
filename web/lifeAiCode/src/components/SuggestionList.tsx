@@ -1,5 +1,5 @@
 import type { Suggestion, SuggestionChange } from '../types';
-import { SuggestionCard } from './SuggestionCard';
+import { SuggestionCard } from './suggestion';
 
 interface SuggestionListProps {
   suggestions: Suggestion[];

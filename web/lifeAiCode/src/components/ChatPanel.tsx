@@ -1168,18 +1168,17 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
 /**
  * 动态状态卡片：根据 agentStatus 的 stepType/message 智能匹配当前状态，
  * 显示对应的图标、文案和动画。
- * 状态类型：思考中、读取文件、编辑、执行命令、分配工作、恢复中断、回答中、准备回复
+ * 状态类型：思考中、读取文件、编辑、执行命令、分配工作、恢复中断、回复中、任务完成
  */
 const STATUS_VARIANTS = {
-  thinking:  { Icon: Brain,       text: '正在思考',       variant: 'thinking'  },
-  reading:   { Icon: FileText,    text: '正在读取文件',    variant: 'reading'   },
-  editing:   { Icon: Pencil,      text: '正在编辑',       variant: 'editing'   },
-  running:   { Icon: Terminal,    text: '正在执行命令',    variant: 'running'   },
-  planning:  { Icon: Network,     text: '正在分配工作',    variant: 'planning'  },
-  recovering:{ Icon: RefreshCw,   text: '正在尝试恢复中断', variant: 'recovering' },
-  answering: { Icon: MessageSquare,text: '正在回答',       variant: 'answering' },
+  thinking:  { Icon: Brain,       text: '思考中',       variant: 'thinking'  },
+  reading:   { Icon: FileText,    text: '读取文件',    variant: 'reading'   },
+  editing:   { Icon: Pencil,      text: '编辑中',       variant: 'editing'   },
+  running:   { Icon: Terminal,    text: '执行命令',    variant: 'running'   },
+  planning:  { Icon: Network,     text: '分配工作',    variant: 'planning'  },
+  recovering:{ Icon: RefreshCw,   text: '尝试恢复中断', variant: 'recovering' },
   done:      { Icon: Check,       text: '任务完成',       variant: 'done'      },
-  default:   { Icon: Lightbulb,   text: '正在准备回复',    variant: 'default'   },
+  default:   { Icon: Lightbulb,   text: '回复中',    variant: 'default'   },
 } as const;
 
 function resolveStatusVariant(stepType?: string, message?: string) {
@@ -1192,7 +1191,7 @@ function resolveStatusVariant(stepType?: string, message?: string) {
   if (stepType === 'run' || /执行|命令/.test(msg)) return STATUS_VARIANTS.running;
   if (stepType === 'agent' || /分配|工具/.test(msg)) return STATUS_VARIANTS.planning;
   if (/恢复|中断/.test(msg)) return STATUS_VARIANTS.recovering;
-  if (/回答|回复/.test(msg)) return STATUS_VARIANTS.answering;
+  if (/回答|回复/.test(msg)) return STATUS_VARIANTS.default;
   return STATUS_VARIANTS.default;
 }
 
