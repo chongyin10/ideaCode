@@ -100,19 +100,23 @@ function getShellState(ctx: CodeBlockSkillContext): { execId?: string; outputCol
   return (ctx.getSkillState('shell') || {}) as { execId?: string; outputCollapsed?: boolean };
 }
 
-/** 计算执行状态文本与样式 class */
+/** 计算执行状态文本与样式 class
+ * longRunning: 后端识别为长驻进程（dev server / watch / tail -f 等）时为 true，
+ * 已脱离 Agent 同步等待，仅节流推送日志到 UI，不会塞进 LLM 上下文。
+ */
 function computeStatus(execId: string | undefined, shellOutputs?: ShellOutputsMap) {
   const shellResult = execId && shellOutputs ? shellOutputs[execId] : null;
   const isWaiting = !!execId && !shellResult;
   const isRunning = shellResult?.status === 'running' || isWaiting;
+  const isLongRunning = shellResult?.longRunning === true;
   const htmlOutput = shellResult?.output ? ansiToHtml(shellResult.output) : '';
   const statusText = isWaiting ? '连接中…' :
-    shellResult?.status === 'running' ? '执行中…' :
+    shellResult?.status === 'running' ? (isLongRunning ? '长驻进程中（不阻塞）' : '执行中…') :
     shellResult?.status === 'success' ? '完成' :
     shellResult?.status === 'error' ? '失败' :
     shellResult?.status === 'killed' ? '已停止' : '';
   const statusClass = isWaiting ? 'running' : (shellResult?.status || 'running');
-  return { shellResult, isWaiting, isRunning, htmlOutput, statusText, statusClass };
+  return { shellResult, isWaiting, isRunning, isLongRunning, htmlOutput, statusText, statusClass };
 }
 
 export const ShellSkill: CodeBlockSkill = {
@@ -129,7 +133,7 @@ export const ShellSkill: CodeBlockSkill = {
   renderActions(ctx: CodeBlockSkillContext) {
     const { code, onExecuteShell, onKillShell, shellOutputs, setSkillState } = ctx;
     const { execId } = getShellState(ctx);
-    const { shellResult, isWaiting, isRunning, statusText, statusClass } = computeStatus(execId, shellOutputs);
+    const { shellResult, isWaiting, isRunning, isLongRunning, statusText, statusClass } = computeStatus(execId, shellOutputs);
 
     const shellCmd = extractShellCommand(code);
     if (!shellCmd || !onExecuteShell) return null;
@@ -143,17 +147,20 @@ export const ShellSkill: CodeBlockSkill = {
       if (execId && onKillShell) onKillShell(execId);
     };
 
+    const runTitle = isWaiting ? '连接中…' :
+      shellResult?.status === 'running' ? (isLongRunning ? '长驻进程中（点击 ◼ 可停止）' : '执行中…') :
+      shellResult?.status === 'success' ? '已完成' :
+      shellResult?.status === 'error' ? '失败' :
+      shellResult?.status === 'killed' ? '已停止' : '执行';
+
     return (
       <>
         <button
-          className={`codeblock-run-btn codeblock-run-btn--icon ${execId ? `codeblock-run-btn--${statusClass}` : ''}`}
+          className={`codeblock-run-btn codeblock-run-btn--icon ${execId ? `codeblock-run-btn--${statusClass}` : ''} ${isLongRunning ? 'codeblock-run-btn--long-running' : ''}`}
           onClick={handleRun}
-          title={isWaiting ? '连接中…' :
-            shellResult?.status === 'running' ? '执行中…' :
-            shellResult?.status === 'success' ? '已完成' :
-            shellResult?.status === 'error' ? '失败' :
-            shellResult?.status === 'killed' ? '已停止' : '执行'}
+          title={runTitle}
           disabled={isRunning}
+          data-long-running={isLongRunning ? 'true' : undefined}
         >
           {isWaiting ? <Loader2 size={12} className="codeblock-icon-spin" /> :
            shellResult?.status === 'running' ? <Loader2 size={12} className="codeblock-icon-spin" /> :
@@ -180,12 +187,13 @@ export const ShellSkill: CodeBlockSkill = {
     const { execId, outputCollapsed } = getShellState(ctx);
     if (!execId) return null;
 
-    const { htmlOutput, statusText, statusClass } = computeStatus(execId, shellOutputs);
+    const { htmlOutput, statusText, statusClass, isLongRunning } = computeStatus(execId, shellOutputs);
 
     return (
       <div
         id={execId}
-        className={`codeblock-shell-output codeblock-shell-output--${statusClass} ${outputCollapsed ? 'codeblock-shell-output--collapsed' : ''}`}
+        className={`codeblock-shell-output codeblock-shell-output--${statusClass} ${outputCollapsed ? 'codeblock-shell-output--collapsed' : ''} ${isLongRunning ? 'codeblock-shell-output--long-running' : ''}`}
+        data-long-running={isLongRunning ? 'true' : undefined}
       >
         <button
           className="codeblock-shell-output__header"
@@ -197,6 +205,11 @@ export const ShellSkill: CodeBlockSkill = {
           </span>
           <span className="codeblock-shell-output__prompt">$</span>
           <span className="codeblock-shell-output__label">终端输出</span>
+          {isLongRunning && (
+            <span className="codeblock-shell-output__badge codeblock-shell-output__badge--long-running" title="长驻进程：spawn 后已脱离 Agent 同步等待，日志节流（5s）推送，不会发送到 LLM">
+              长驻进程
+            </span>
+          )}
           <span className="codeblock-shell-output__status">{statusText}</span>
         </button>
         {!outputCollapsed && htmlOutput && (

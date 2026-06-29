@@ -10,6 +10,11 @@
 const fs = require('fs').promises;
 const path = require('path');
 
+// Agent 编辑场景单文件大小上限。超大文件（minified bundle、生成代码、大日志）
+// 不适合 Agent 直接查找替换，且 readFile + indexOf 循环 + replaceAll 会消耗大量内存。
+// 超过上限直接拒绝，防止 Invalid string length。
+const MAX_EDIT_FILE_SIZE = 32 * 1024 * 1024; // 32MB
+
 /**
  * 规范化字符串：去掉前后空白 + 把任意连续空白折叠成单个空格
  * 用于对 LLM 输出的"original"做容错匹配
@@ -92,6 +97,14 @@ async function applyEdit(args, context) {
   // 读取当前文件内容以验证 original 是否存在
   let currentContent = '';
   try {
+    // 大文件保护：超大文件不适合 Agent 查找替换，拒绝操作防止 Invalid string length
+    const stat = await fs.stat(targetPath);
+    if (stat.size > MAX_EDIT_FILE_SIZE) {
+      return {
+        success: false,
+        error: `文件过大（${(stat.size / 1024 / 1024).toFixed(1)}MB），超过 ${MAX_EDIT_FILE_SIZE / 1024 / 1024}MB 编辑上限。请手动修改该文件。`,
+      };
+    }
     currentContent = await fs.readFile(targetPath, 'utf-8');
   } catch (err) {
     return { success: false, error: `无法读取文件: ${err.message}` };

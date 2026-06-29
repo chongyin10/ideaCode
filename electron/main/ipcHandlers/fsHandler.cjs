@@ -68,7 +68,15 @@ function registerFsHandlers() {
   });
 
   /* ── 读取文件 ── */
+  // 大文件保护：V8 字符串上限约 256MB 字符，超大文件（source map、minified bundle、
+  // 大日志）在 readFile + toString + IPC 序列化阶段会触发 RangeError: Invalid string length。
+  // 超过 MAX_READ_SIZE 的文件直接拒绝，由渲染层提示用户文件过大。
+  const MAX_READ_SIZE = 128 * 1024 * 1024; // 128MB
   ipcMain.handle(Channels.FS_READ_FILE, async (_event, filePath) => {
+    const stat = await fs.stat(filePath);
+    if (stat.size > MAX_READ_SIZE) {
+      throw new Error(`文件过大（${(stat.size / 1024 / 1024).toFixed(1)}MB），超过 ${MAX_READ_SIZE / 1024 / 1024}MB 读取上限`);
+    }
     return fs.readFile(filePath, 'utf-8');
   });
 

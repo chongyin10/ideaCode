@@ -132,6 +132,79 @@ const MAX_OUTPUT_BYTES = 64 * 1024; // 单次 shellUpdate 推送的最大字节�
 const MAX_LINE_BUFFER = 2000;        // 累积超过 N 行就 flush
 const FLUSH_INTERVAL_MS = 200;       // 实时推送的节流间隔
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 分钟兜底超时
+// fullOutput 累积上限（字符数）。V8 字符串上限约 2^28-16 ≈ 256MB，
+// 这里远低于该值，避免 `yes`/`cat 大文件`/`npm run dev` 等长输出命令
+// 在累加 `fullOutput += text` 时触发 RangeError: Invalid string length。
+// 超过上限后保留尾部（最近的输出对 Agent 判断更 relevant），并标记 truncated。
+const MAX_FULL_OUTPUT_CHARS = 8 * 1024 * 1024; // 8MB 字符
+// LLM 流式响应累积上限（字符数）。正常 LLM 响应受 max_tokens 限制远低于此，
+// 但推理模型（DeepSeek-R1 等）+ 多次 continue 续写场景可能持续累积。
+// 设为 16MB（远低于 V8 上限 256MB），仅在极端情况下截断防止 Invalid string length。
+const MAX_LLM_RESPONSE_CHARS = 16 * 1024 * 1024; // 16MB 字符
+// 长驻进程判定阈值：探测到以下关键字的 shell 命令视为长驻进程（dev server / watch / tail -f 等）
+// 长驻进程会按后台处理：节流 UI 输出、不阻塞 Agent 同步等待、避免 vite/tail 的滚动输出塞爆 LLM 上下文。
+const LONG_RUNNING_COMMAND_PATTERNS = [
+  // 包管理器的 dev/build/watch/serve 子命令
+  /\b(npm|pnpm|yarn|bun)\s+run\s+(dev|start|serve|watch|build:watch|dev:.*|start:.*)\b/,
+  // 常见 dev server / 构建工具
+  /\b(vite|next(?:\s+dev)?|nuxt(?:\s+dev)?|webpack(?:\s+serve)?|rollup\s+-w|tsc\s+-w|tsc\s+--watch)\b/,
+  // 热重载/守护进程
+  /\b(nodemon|ts-node-dev|pm2|forever)\b/,
+  // 持续输出
+  /\btail\s+-f\b/,
+  /\bwatch\s+/,
+  // 交互式 shell
+  /\b(bash|zsh|sh|fish)\b(?!\s+-c)/, // 裸启动 shell（不带 -c）属于交互
+];
+const LONG_RUNNING_FLUSH_INTERVAL_MS = 5_000; // 长驻进程 webview 推送间隔（5s）— 避免 UI 過于频繁刷新
+const LONG_RUNNING_OUTPUT_TAIL_CHARS = 16 * 1024; // 长驻进程只保留最新 16KB 输出（fullOutput 中）
+
+/**
+ * 检测 shell 命令是否为长驻进程（dev server / watch / tail -f / 交互式 shell）。
+ * 命中后 executeShellCommand 会后台处理：节流 webview 输出、不阻塞 Agent 等待、
+ * 只向 LLM 推送启动状态而非持续 stdout（避免 vite HMR/编译日志塞爆上下文）。
+ * @param {string} command
+ * @returns {boolean}
+ */
+function detectLongRunningCommand(command) {
+  if (!command || typeof command !== 'string') return false;
+  const trimmed = command.trim();
+  if (!trimmed) return false;
+  for (const pattern of LONG_RUNNING_COMMAND_PATTERNS) {
+    if (pattern.test(trimmed)) return true;
+  }
+  return false;
+}
+
+/**
+ * 安全地向 entry.fullOutput 追加文本，防止超过 V8 字符串上限。
+ * 超过 MAX_FULL_OUTPUT_CHARS 后保留尾部（最近的输出对 Agent 更 relevant），
+ * 并标记 entry.outputTruncated = true，让最终返回结果带上截断标记。
+ */
+function appendToFullOutput(entry, text) {
+  if (!text) return;
+  const limit = entry.maxFullOutputChars || MAX_FULL_OUTPUT_CHARS;
+  // 已截断过就不再追加（避免无意义的字符串拼接开销）
+  if (entry.outputTruncated) {
+    // 仅保留尾部最新内容，维持滑动窗口
+    const keep = Math.min(text.length, limit);
+    entry.fullOutput = text.slice(-keep);
+    return;
+  }
+  const nextLen = entry.fullOutput.length + text.length;
+  if (nextLen <= limit) {
+    entry.fullOutput += text;
+    return;
+  }
+  // 超限：保留尾部 limit 字符，标记截断
+  entry.outputTruncated = true;
+  const overflow = nextLen - limit;
+  entry.fullOutput = '…(输出过长，已截断前部分)…\n' + entry.fullOutput.slice(overflow) + text;
+  // 再次超限（极端情况）则硬截断
+  if (entry.fullOutput.length > limit) {
+    entry.fullOutput = entry.fullOutput.slice(-limit);
+  }
+}
 
 // 维护当前活跃的子进程，用于中止/重置
 const activeProcs = new Map(); // id -> { proc, finished, cwd }
@@ -210,19 +283,37 @@ async function executeShellCommand(id, shellCommand, cwd) {
     return;
   }
 
-  // 立刻推送 "running" 启动事件（确保 webview 立即有反应）
+  // 立即推送 "running" 启动事件（确保 webview 立即有反应）
   console.log('[LifeAiCode][executeShellCommand] posting initial running event');
+  // 长驻进程检测：包管理器 dev server / watch / tail -f / 交互式 shell 等
+  // 命中后走后台处理路径：节流 webview flush、限制 fullOutput 累积、
+  // 立即给 Agent waiter 返回 "已启动"（不阻塞同步等待）。
+  const isLongRunning = detectLongRunningCommand(shellCommand);
+  const initialOutput = isLongRunning
+    ? `$ ${shellCommand}\n[工作目录] ${workingDir}\n\n[长驻进程] 已在后台启动。日志节流推送（每 5s），不会发送到 LLM。点击 ◼ 可手动停止。\n\n`
+    : `$ ${shellCommand}\n[工作目录] ${workingDir}\n\n`;
   postToWebView({
     type: 'shellUpdate',
     id, shellCommand,
-    output: `$ ${shellCommand}\n[工作目录] ${workingDir}\n\n`,
+    output: initialOutput,
     status: 'running',
+    longRunning: isLongRunning,
   });
-  console.log('[LifeAiCode][executeShellCommand] initial event posted');
+  console.log('[LifeAiCode][executeShellCommand] initial event posted, longRunning:', isLongRunning);
 
   // Bug 1: 新增 fullOutput 字段，累积完整输出（flush 不会清空它），
   // waiter resolve 时使用 fullOutput 而非会被 flush 清空的 buffers
-  const entry = { proc, finished: false, cwd: workingDir, buffers: { stdout: '', stderr: '' }, fullOutput: '', result: null };
+  // outputTruncated: fullOutput 超过 MAX_FULL_OUTPUT_CHARS 后标记，防止 Invalid string length
+  const entry = {
+    proc,
+    finished: false,
+    cwd: workingDir,
+    buffers: { stdout: '', stderr: '' },
+    fullOutput: '',
+    outputTruncated: false,
+    result: null,
+    isLongRunning,
+  };
   activeProcs.set(id, entry);
 
   // 注：原代码在此处又推送了一次完全相同的 running 事件，导致 webview 收到两条
@@ -240,35 +331,41 @@ async function executeShellCommand(id, shellCommand, cwd) {
     if (combined.length > MAX_OUTPUT_BYTES) {
       combined = '…(输出过长，已截断)…\n' + combined.slice(-MAX_OUTPUT_BYTES);
     }
-    postToWebView({ type: 'shellUpdate', id, shellCommand, output: combined, status });
+    postToWebView({ type: 'shellUpdate', id, shellCommand, output: combined, status, longRunning: isLongRunning });
     entry.buffers.stdout = '';
     entry.buffers.stderr = '';
   };
 
+  // 长驻进程：使用更长间隔（5s）减少 UI 频繁刷新；短命令：保持 200ms 实时性
+  const flushIntervalMs = isLongRunning ? LONG_RUNNING_FLUSH_INTERVAL_MS : FLUSH_INTERVAL_MS;
   const flushTimer = setInterval(() => {
     if (!entry.finished) flush('running');
-  }, FLUSH_INTERVAL_MS);
+  }, flushIntervalMs);
   // 存储 timer 引用，便于 killShellCommand 清理，防止进程结束后 timer 仍空转
   entry.flushTimer = flushTimer;
+
+  // 长驻进程：fullOutput 截断上限改为 16KB（避免 vite HMR 日志无限累积）
+  // 短命令：保持原 MAX_FULL_OUTPUT_CHARS（8MB）
+  if (isLongRunning) entry.maxFullOutputChars = LONG_RUNNING_OUTPUT_TAIL_CHARS;
 
   proc.stdout.on('data', (chunk) => {
     const text = chunk.toString('utf8');
     entry.buffers.stdout += text;
-    entry.fullOutput += text;
+    appendToFullOutput(entry, text);
     if (entry.buffers.stdout.length > MAX_LINE_BUFFER) flush('running');
   });
 
   proc.stderr.on('data', (chunk) => {
     const text = chunk.toString('utf8');
     entry.buffers.stderr += text;
-    entry.fullOutput += text;
+    appendToFullOutput(entry, text);
     if (entry.buffers.stderr.length > MAX_LINE_BUFFER) flush('running');
   });
 
   proc.on('error', (err) => {
     const text = `\n[进程错误] ${err.message}\n`;
     entry.buffers.stdout += text;
-    entry.fullOutput += text;
+    appendToFullOutput(entry, text);
   });
 
   proc.on('close', (code, signal) => {
@@ -286,6 +383,7 @@ async function executeShellCommand(id, shellCommand, cwd) {
       status,
       exitCode: code ?? undefined,
       signal: signal ?? undefined,
+      longRunning: isLongRunning,
     });
     // 唤醒在等结果的人（Agent tool）
     // Bug 1: 使用 fullOutput（完整累积），不用会被 flush 清空的 buffers
@@ -294,6 +392,7 @@ async function executeShellCommand(id, shellCommand, cwd) {
       exitCode: code ?? undefined,
       signal: signal ?? undefined,
       output: entry.fullOutput.trim(),
+      truncated: entry.outputTruncated === true,
     };
     entry.result = result;
     const waiter = pendingShellWaits.get(id);
@@ -397,6 +496,7 @@ function killShellCommand(id) {
     error: '命令已被用户终止',
     signal: 'SIGTERM',
     output: entry.fullOutput ? entry.fullOutput.trim() + '\n[已终止]' : '[已终止]',
+    truncated: entry.outputTruncated === true,
   };
   entry.result = result;
   const waiter = pendingShellWaits.get(id);
@@ -425,6 +525,21 @@ function waitShellCompletion(id, timeoutMs = 60_000) {
   if (entry && entry.finished && entry.result) {
     activeProcs.delete(id);
     return Promise.resolve(entry.result);
+  }
+  // 长驻进程（dev server / watch / tail -f 等）：spawn 后立即返回 success，
+  // 让 Agent tool 拿到"已在后台启动"的确认，不阻塞后续步骤。
+  // 后续 stdout/stderr 仅节流推送到 webview（5s/次）且不进入 LLM 上下文。
+  // 真正停止时由 killShellCommand 触发 close → pendingShellWaits 清理。
+  if (entry && entry.isLongRunning && !entry.finished && entry.proc && entry.proc.pid) {
+    console.log('[LifeAiCode][waitShellCompletion] long-running detected, returning immediately for id:', id, 'pid:', entry.proc.pid);
+    return Promise.resolve({
+      success: true,
+      status: 'running',
+      longRunning: true,
+      pid: entry.proc.pid,
+      message: '长驻进程已在后台启动，已脱离同步等待。日志节流推送至 UI，可通过 ◼ 停止。',
+      output: '',
+    });
   }
   // 进程已结束 → 没有 waiter 注册，构造一个同步的 resolved
   if (!activeProcs.has(id) && !pendingShellWaits.has(id)) {
@@ -583,7 +698,16 @@ async function processMessage(text, context, options = {}) {
       // Bug 2: 使用单独变量累积续写 delta，避免每个 token 覆盖之前的内容
       // 原代码 fullResponse = continueFromContent + token 会丢失之前所有 delta
       let continuedContent = '';
+      let responseTruncated = false;
       tokenListener = (token) => {
+        // 防止 LLM 超长响应（推理模型 + 多次续写）触发 Invalid string length
+        if (responseTruncated) return;
+        if (fullResponse.length + (token?.length || 0) > MAX_LLM_RESPONSE_CHARS) {
+          responseTruncated = true;
+          fullResponse += '\n\n> ⚠️ 响应过长，已停止累积（防止超出字符串长度上限）';
+          postToWebView({ type: 'chatResponse', id: msgId, content: fullResponse, done: false });
+          return;
+        }
         if (continueFromContent) {
           continuedContent += token;
           fullResponse = continueFromContent + continuedContent;
@@ -711,10 +835,22 @@ async function runAgentTask(text, context, options = {}) {
       .trim();
 
     let streamedContent = '';
+    let agentStreamTruncated = false;
     const finalResponse = await agentRuntime.run(text, context, {
       history,
       onToken: (token) => {
         // 实时推送内容到 WebView，过滤 prompt-based 模式下可能混入的 <tool_call> 标签
+        // 防止超长 Agent 响应触发 Invalid string length
+        if (agentStreamTruncated) return;
+        if (streamedContent.length + (token?.length || 0) > MAX_LLM_RESPONSE_CHARS) {
+          agentStreamTruncated = true;
+          streamedContent += '\n\n> ⚠️ 响应过长，已停止累积（防止超出字符串长度上限）';
+          const displayContent = cleanToolCallTags(streamedContent);
+          if (displayContent) {
+            postToWebView({ type: 'chatResponse', id: msgId, content: displayContent, done: false });
+          }
+          return;
+        }
         streamedContent += token;
         const displayContent = cleanToolCallTags(streamedContent);
         if (displayContent) {
@@ -1647,5 +1783,9 @@ function deactivate() {
   contextBuilder = null;
   suggestionGenerator = null;
 }
+
+module.exports = { activate, deactivate };
+
+module.exports = { activate, deactivate };
 
 module.exports = { activate, deactivate };

@@ -295,23 +295,25 @@ export function SuggestionCard({ suggestion, onAccept, onReject, onOpenDiffInEdi
         )}
       </div>
 
-      {/* §需求3：body 始终渲染（含所有 DiffView）。
-          各 DiffView 的可见性由受控 collapsed prop 决定。
-          §需求：description 已移到 header 之上，body 仅含 DiffView 列表。 */}
-      <div className="suggestion-card__body">
-        {suggestion.changes.map((change, idx) => (
-          <div
-            key={idx}
-            data-diff-index={`${suggestion.id}-${idx}`}
-            className="suggestion-card__diff-wrapper"
-          >
-            <DiffView
-              change={change}
-              collapsed={!diffExpanded}
-            />
-          </div>
-        ))}
-      </div>
+      {/* §需求3：折叠状态下整个 body 不渲染——之前即使 DiffView 不渲染任何内容，
+          .diff-view 的 border/margin + .suggestion-card__body 的 padding 仍占约 37px
+          空白（红色区域）。折叠时彻底不渲染 body，留白归零。 */}
+      {diffExpanded && (
+        <div className="suggestion-card__body">
+          {suggestion.changes.map((change, idx) => (
+            <div
+              key={idx}
+              data-diff-index={`${suggestion.id}-${idx}`}
+              className="suggestion-card__diff-wrapper"
+            >
+              <DiffView
+                change={change}
+                collapsed={!diffExpanded}
+              />
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

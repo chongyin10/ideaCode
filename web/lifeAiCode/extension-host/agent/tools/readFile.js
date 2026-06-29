@@ -38,13 +38,26 @@ async function readFile(args, context) {
     // 限制大文件读取
     const MAX_SIZE = 500 * 1024; // 500KB
     if (stat.size > MAX_SIZE) {
-      const content = await fs.promises.readFile(targetPath, 'utf-8');
+      // Bug 修复：原代码先 readFile 整个文件再 slice，超大文件（如 minified bundle、
+      // source map、大日志）会在 readFile 阶段触发 RangeError: Invalid string length。
+      // 改用 createReadStream 只读取前 MAX_SIZE 字节，避免读取整个大文件。
+      const head = await new Promise((resolve, reject) => {
+        const stream = fs.createReadStream(targetPath, {
+          start: 0,
+          end: MAX_SIZE - 1,
+          encoding: 'utf8',
+        });
+        const parts = [];
+        stream.on('data', (chunk) => parts.push(chunk));
+        stream.on('end', () => resolve(parts.join('')));
+        stream.on('error', reject);
+      });
       return {
         success: true,
         path: filePathInput,
         size: stat.size,
         truncated: true,
-        content: content.slice(0, MAX_SIZE) + '\n\n...（文件过大，已截断）...',
+        content: head + '\n\n...（文件过大，已截断）...',
       };
     }
 

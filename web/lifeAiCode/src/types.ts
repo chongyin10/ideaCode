@@ -357,7 +357,7 @@ export type ExtensionMessage =
   | { type: 'newChat' }
   | { type: 'openConfig' }
   | { type: 'showHistory' }
-  | { type: 'shellUpdate'; id: string; shellCommand: string; output: string; status: 'running' | 'success' | 'error' | 'killed'; exitCode?: number; signal?: string }
+  | { type: 'shellUpdate'; id: string; shellCommand: string; output: string; status: 'running' | 'success' | 'error' | 'killed'; exitCode?: number; signal?: string; longRunning?: boolean }
   | { type: 'notice'; level: 'info' | 'success' | 'warning' | 'error'; message: string; suggestionId?: string }
   | { type: 'toolCall'; tool: string; args: Record<string, unknown>; status: 'running' | 'success' | 'error'; duration?: number; summary?: string; result?: Record<string, unknown> }
   | { type: 'agentStatus'; status: 'running' | 'done' | 'error' | 'cancelled'; message: string }

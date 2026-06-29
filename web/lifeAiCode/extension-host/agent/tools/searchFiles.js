@@ -20,6 +20,8 @@ const IGNORED_EXTS = new Set([
 ]);
 const MAX_FILES = 100;
 const MAX_MATCHES = 50;
+// 搜索场景单文件大小上限：跳过超大文件，防止 readFile 触发 Invalid string length
+const MAX_SEARCH_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
 async function searchFiles(args, context) {
   const { pattern, glob } = args || {};
@@ -81,6 +83,10 @@ async function searchFiles(args, context) {
 
         scannedFiles++;
         try {
+          // 大文件保护：跳过超大文件，防止 readFile 触发 Invalid string length
+          const stat = await fs.promises.stat(fullPath);
+          if (stat.size > MAX_SEARCH_FILE_SIZE) continue;
+
           const content = await fs.promises.readFile(fullPath, 'utf-8');
           const lines = content.split('\n');
           for (let i = 0; i < lines.length; i++) {

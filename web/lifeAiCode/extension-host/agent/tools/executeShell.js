@@ -15,6 +15,10 @@ const { spawn } = require('child_process');
 const path = require('path');
 const { isShellCommand } = require('../../shellDetect.cjs');
 const MAX_OUTPUT_BYTES = 64 * 1024; // 与 Extension.js 内的 MAX_OUTPUT_BYTES 一致
+// 累积过程上限（字符数）。truncateOutput 只在返回前截断到 64KB，
+// 但累积 `stdout += chunk` 过程中可能先触发 V8 字符串上限（约 256MB）。
+// 设 8MB 上限，超限后停止追加，防止 RangeError: Invalid string length。
+const MAX_ACCUM_CHARS = 8 * 1024 * 1024;
 
 async function executeShell(args, context) {
   const { command, cwd, timeout = 60000 } = args || {};
@@ -136,6 +140,8 @@ function runInternal(command, workingDir, timeout) {
 
     let stdout = '';
     let stderr = '';
+    let stdoutCapped = false;
+    let stderrCapped = false;
     const killTimer = setTimeout(() => {
       try { proc.kill('SIGTERM'); } catch { /* ignore */ }
       setTimeout(() => {
@@ -143,8 +149,26 @@ function runInternal(command, workingDir, timeout) {
       }, 2000);
     }, timeout);
 
-    proc.stdout.on('data', (chunk) => { stdout += chunk.toString('utf8'); });
-    proc.stderr.on('data', (chunk) => { stderr += chunk.toString('utf8'); });
+    proc.stdout.on('data', (chunk) => {
+      if (stdoutCapped) return;
+      const text = chunk.toString('utf8');
+      if (stdout.length + text.length > MAX_ACCUM_CHARS) {
+        stdoutCapped = true;
+        stdout += '\n…(stdout 输出过长，已停止累积)\n';
+        return;
+      }
+      stdout += text;
+    });
+    proc.stderr.on('data', (chunk) => {
+      if (stderrCapped) return;
+      const text = chunk.toString('utf8');
+      if (stderr.length + text.length > MAX_ACCUM_CHARS) {
+        stderrCapped = true;
+        stderr += '\n…(stderr 输出过长，已停止累积)\n';
+        return;
+      }
+      stderr += text;
+    });
 
     proc.on('error', (err) => {
       clearTimeout(killTimer);

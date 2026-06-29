@@ -13,7 +13,12 @@ export type ShellStatus = 'running' | 'success' | 'error' | 'killed';
 /** shellOutputs map：以 execId 为 key 存储每个执行实例的输出 */
 export type ShellOutputsMap = Record<
   string,
-  { output: string; status: ShellStatus }
+  {
+    output: string;
+    status: ShellStatus;
+    /** 长驻进程（dev server / watch / tail -f 等）：spawn 后已脱离 Agent 同步等待，仅节流推送日志 */
+    longRunning?: boolean;
+  }
 >;
 
 /**

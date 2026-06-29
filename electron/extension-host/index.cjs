@@ -643,6 +643,9 @@ rpc.on('fs.search', async (params) => {
   const { rootPath, query, maxResults = 100 } = params;
   const results = [];
   let count = 0;
+  // 搜索场景单文件大小上限：跳过超大文件（生成产物/大日志），
+  // 防止 readFile 触发 Invalid string length
+  const MAX_SEARCH_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
   const excludeDirs = new Set([
     'node_modules', '.git', 'dist', 'build', '.next', 'coverage', '.vscode',
@@ -660,6 +663,10 @@ rpc.on('fs.search', async (params) => {
         continue;
       }
       try {
+        // 大文件保护：跳过超大文件
+        const stat = await fsp.stat(fullPath);
+        if (stat.size > MAX_SEARCH_FILE_SIZE) continue;
+
         const content = await fsp.readFile(fullPath, 'utf-8');
         const lines = content.split('\n');
         for (let i = 0; i < lines.length; i++) {

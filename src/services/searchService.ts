@@ -291,6 +291,10 @@ export async function findFileReferences(
         return;
       }
 
+      // 大文件保护：跳过超大文件，避免 findInFile 的 substring/split 在大 content
+      // 上内存翻倍触发 Invalid string length（主进程 IPC 已限 128MB，这里进一步收窄到 10MB）。
+      if (content.length > 10 * 1024 * 1024) return;
+
       // 使用整词匹配，避免 BottomPanel 命中 toggleBottomPanel 等子串
       const seen = new Set<number>();
       const matches: FindResult[] = [];

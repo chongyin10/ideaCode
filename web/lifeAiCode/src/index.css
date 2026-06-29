@@ -3197,6 +3197,17 @@ body {
   border-color: rgba(156, 163, 175, 0.3);
   color: var(--text-tertiary);
 }
+/* 长驻进程（dev server / watch / tail -f 等）：紫色徽标，区别于 running 的蓝色，
+   提示用户该命令已脱离 Agent 同步等待，日志仅节流推送至 UI，不会发送到 LLM */
+.codeblock-run-btn--long-running {
+  background: rgba(168, 85, 247, 0.15);
+  border-color: rgba(168, 85, 247, 0.4);
+  color: #c084fc;
+}
+.codeblock-run-btn--long-running:hover {
+  background: rgba(168, 85, 247, 0.25);
+  border-color: rgba(168, 85, 247, 0.55);
+}
 /* 停止按钮：终止长期运行命令（npm run dev 等），释放子进程资源 */
 .codeblock-kill-btn {
   appearance: none;
@@ -3283,7 +3294,27 @@ body {
 .codeblock-shell-output--success { border-top-color: rgba(34, 197, 94, 0.3); }
 .codeblock-shell-output--error { border-top-color: rgba(239, 68, 68, 0.3); }
 .codeblock-shell-output--killed { border-top-color: rgba(156, 163, 175, 0.3); }
+/* 长驻进程：紫色边框，视觉上明显区别于 running 的蓝色 */
+.codeblock-shell-output--long-running { border-top-color: rgba(168, 85, 247, 0.45); }
 .codeblock-shell-output--collapsed .codeblock-shell-output__body { display: none; }
+
+/* 长驻进程徽标：紫色背景，提示用户此为后台运行命令 */
+.codeblock-shell-output__badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  user-select: none;
+}
+.codeblock-shell-output__badge--long-running {
+  background: rgba(168, 85, 247, 0.18);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.35);
+}
 @keyframes shellOutputIn {
   from { opacity: 0; max-height: 0; }
   to { opacity: 1; max-height: 400px; }

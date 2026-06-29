@@ -288,8 +288,20 @@ input:focus, textarea:focus {
 }
 
 .git-branch-item.current {
-  opacity: 0.7;
+  /* 修复：去除原先的 opacity: 0.7（造成字体模糊、颜色变浅），
+     改用轻量背景 + 字体加粗 区分 current 分支。颜色保持 inherit，
+     与其他分支一致，避免被误解为"颜色不一致"。 */
+  background: var(--vscode-list-activeSelectionBackground, rgba(0, 122, 204, 0.15));
   cursor: default;
+}
+
+.git-branch-item.current .git-branch-item__name {
+  font-weight: 600;
+  /* 显式声明 color: inherit，防止外部主题仅给 current 项设了 opacity 时
+     子元素字体继续衰减（个别主题下子元素会再继承 opacity 进一步变淡）。 */
+  color: inherit;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 .git-branch-item > svg {

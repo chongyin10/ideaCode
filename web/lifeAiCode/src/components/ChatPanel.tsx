@@ -149,7 +149,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
   const [currentHistoryId, setCurrentHistoryId] = useState<string | null>(null);
   const [historyDragId, setHistoryDragId] = useState<string | null>(null);
   const [historyDropTarget, setHistoryDropTarget] = useState<{ id: string; after: boolean } | null>(null);
-  const [shellOutputs, setShellOutputs] = useState<Record<string, { output: string; status: 'running' | 'success' | 'error' | 'killed' }>>({});
+  const [shellOutputs, setShellOutputs] = useState<Record<string, { output: string; status: 'running' | 'success' | 'error' | 'killed'; longRunning?: boolean }>>({});
   const [notice, setNotice] = useState<{ level: 'info' | 'success' | 'warning' | 'error'; message: string; id: number } | null>(null);
   const [agentMode, setAgentMode] = useState(false);
   const [agentStatus, setAgentStatus] = useState<{ status: string; message: string; stepType?: string } | null>(null);
@@ -578,7 +578,13 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
             const newOutput = prevOutput + (msg.output || '');
             return {
               ...prev,
-              [msg.id]: { output: newOutput, status: msg.status },
+              [msg.id]: {
+                output: newOutput,
+                status: msg.status,
+                // 长驻进程标识：后端 extension.js 在 spawn 后会带 longRunning=true，
+                // 一次确认后保留（避免 close 事件不带 longRunning 时丢失标识）。
+                longRunning: existing?.longRunning === true || msg.longRunning === true,
+              },
             };
           });
           // Bug 16: shell 结束后延迟清理对应条目，避免 shellOutputs 无限累积导致内存增长。

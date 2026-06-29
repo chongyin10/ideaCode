@@ -217,7 +217,7 @@ function stepLabel(stepType: StepType): string {
 interface ContentBlocksProps {
   content: string;
   role?: 'user' | 'assistant' | 'system';
-  shellOutputs?: Record<string, { output: string; status: 'running' | 'success' | 'error' | 'killed' }>;
+  shellOutputs?: Record<string, { output: string; status: 'running' | 'success' | 'error' | 'killed'; longRunning?: boolean }>;
   onExecuteShell?: (id: string, command: string) => void;
   onKillShell?: (id: string) => void;
   onOptionClick?: (text: string) => void;
@@ -466,7 +466,7 @@ function MessageCard({
 
 interface BlockRendererProps {
   block: ContentBlockType;
-  shellOutputs: Record<string, { output: string; status: 'running' | 'success' | 'error' | 'killed' }>;
+  shellOutputs: Record<string, { output: string; status: 'running' | 'success' | 'error' | 'killed'; longRunning?: boolean }>;
   onExecuteShell?: (id: string, command: string) => void;
   onKillShell?: (id: string) => void;
   onOptionClick?: (text: string) => void;
@@ -578,7 +578,7 @@ function ToolCall({
   command: string;
   output?: string;
   status?: 'running' | 'success' | 'error' | 'killed';
-  shellOutputs: Record<string, { output: string; status: 'running' | 'success' | 'error' | 'killed' }>;
+  shellOutputs: Record<string, { output: string; status: 'running' | 'success' | 'error' | 'killed'; longRunning?: boolean }>;
   onExecuteShell?: (id: string, command: string) => void;
   onKillShell?: (id: string) => void;
 }) {

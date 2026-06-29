@@ -78,6 +78,11 @@ let msgId = 0;
 let initRequestId = null;
 let semanticTokensLegend = null;
 const pendingRequests = new Map();
+// LSP 单条消息 body 上限。tsserver 正常响应远低于此值，
+// 但 semanticTokens/full 对超大文件可能返回较大数据。
+// 超过上限的 body 在 toString('utf8') + JSON.parse 阶段可能触发
+// Invalid string length，因此对异常大的 Content-Length 做防御性丢弃。
+const MAX_LSP_BODY_BYTES = 64 * 1024 * 1024; // 64MB
 
 /* ─── JSON-RPC 消息编解码 ─── */
 
@@ -98,6 +103,13 @@ function parseMessages(chunk) {
     const lenMatch = header.match(/Content-Length: (\d+)/);
     if (!lenMatch) { buffer = Buffer.alloc(0); break; }
     const contentLen = parseInt(lenMatch[1], 10);
+    // 大消息保护：异常大的 Content-Length 会导致 toString + JSON.parse 触发
+    // Invalid string length。丢弃该消息并重置 buffer，防止内存耗尽。
+    if (contentLen > MAX_LSP_BODY_BYTES || !Number.isFinite(contentLen) || contentLen < 0) {
+      console.error(`[tsserver] 拒绝异常大的 LSP 消息: Content-Length=${contentLen}，丢弃并重置 buffer`);
+      buffer = Buffer.alloc(0);
+      break;
+    }
     const bodyStart = headerEnd + 4;
     if (buffer.length < bodyStart + contentLen) break;
     const body = buffer.slice(bodyStart, bodyStart + contentLen).toString('utf8');
