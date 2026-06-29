@@ -805,3 +805,44 @@ console.log('[ExtensionHost] 扩展宿主已启动，等待连接...');
 
 // 发送 host.ready 通知
 rpc.notify('host.ready', { timestamp: Date.now() });
+
+/* ────────────────────────────────────────────── */
+/*  优雅退出：处理 SIGTERM / SIGINT 信号            */
+/* ────────────────────────────────────────────── */
+// 主进程在热重启（_killAndRestart）或强制停止（stop 兜底）时会发 SIGTERM。
+// 原先子进程无信号处理器，SIGTERM 走 Node 默认行为 = 立即终止，
+// 扩展的 deactivate() 不会被执行，子进程（如 shell 命令）可能残留。
+// 这里注册处理器，确保扩展有机会清理资源后再退出。
+let _shuttingDown = false;
+async function gracefulShutdown(signal) {
+  if (_shuttingDown) return; // 防止重复触发
+  _shuttingDown = true;
+  console.log(`[ExtensionHost] 收到 ${signal}，开始优雅退出...`);
+
+  // 停用所有已激活的扩展（带 800ms 超时，避免卡住）
+  try {
+    const activeExts = Array.from(manager.extensions.values()).filter((e) => e.active);
+    if (activeExts.length > 0) {
+      console.log(`[ExtensionHost] 停用 ${activeExts.length} 个扩展...`);
+      const deactivateAll = Promise.race([
+        Promise.all(activeExts.map((ext) =>
+          manager.deactivateExtension(ext.manifest.name).catch((err) =>
+            console.error(`[ExtensionHost] 停用扩展失败 ${ext.manifest.name}:`, err.message)
+          )
+        )),
+        new Promise((resolve) => setTimeout(resolve, 800)),
+      ]);
+      await deactivateAll;
+    }
+  } catch (err) {
+    console.error('[ExtensionHost] 优雅退出出错:', err.message);
+  }
+
+  console.log('[ExtensionHost] 退出');
+  process.exit(0);
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+// SIGHUP 通常在父进程终端关闭时收到，也走优雅退出
+process.on('SIGHUP', () => gracefulShutdown('SIGHUP'));

@@ -16,8 +16,12 @@ async function start() {
 
   // 启动 Electron
   // 强制取消 ELECTRON_RUN_AS_NODE，避免 Electron 以 Node 模式运行导致 app 等 API 不可用
+  // macOS：设置 OS_ACTIVITY_MODE=disable 抑制 IMK/TSM 等系统级 NSLog 噪音
   const electronEnv = { ...process.env, VITE_DEV_SERVER_URL: localUrl };
   delete electronEnv.ELECTRON_RUN_AS_NODE;
+  if (process.platform === 'darwin' && !electronEnv.OS_ACTIVITY_MODE) {
+    electronEnv.OS_ACTIVITY_MODE = 'disable';
+  }
   const electronProcess = spawn('npx', ['electron', 'electron/main.cjs'], {
     env: electronEnv,
     stdio: 'inherit',

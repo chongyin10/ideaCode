@@ -4,12 +4,10 @@
 /*  从 SuggestionCard.tsx 拆出，可独立复用。
  *  包含：行级 diff 计算、语言推断、双栏渲染、行号、语法高亮。       */
 
-import { useState, useMemo } from 'react';
+import { useMemo } from 'react';
 import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import { GitCompare, FileText } from 'lucide-react';
 import type { SuggestionChange } from '../../types';
-import { MarkdownContent } from '../MarkdownContent';
 
 /** 根据文件路径推断语言 */
 function inferLanguage(filePath: string): string {
@@ -148,76 +146,26 @@ function DiffRow({ line, side, isHighlight, isMuted, language }: {
   );
 }
 
-export function DiffView({ change, onOpenDiffInEditor, collapsed: collapsedProp, onToggleCollapsed }: {
+export function DiffView({ change, collapsed = false }: {
   change: SuggestionChange;
-  onOpenDiffInEditor: (change: SuggestionChange) => void;
   /**
-   * §需求3：受控模式——父组件（SuggestionCard）传入折叠状态。
-   * - 传 undefined 时使用组件内部状态（保持 DiffView 独立可用）
-   * - 传 boolean 时使用外部状态（让 SuggestionCard header「展开」按钮
-   *   与每个 DiffView 自己的「展开」按钮做同一件事）
+   * §需求：受控模式——父组件（SuggestionCard）传入折叠状态。
+   * 默认为 false（展开），由 SuggestionCard header 的「展开」按钮统一控制。
    */
   collapsed?: boolean;
-  /** §需求3：用户点击 DiffView 自身的「展开」按钮时通知父组件 */
-  onToggleCollapsed?: () => void;
 }) {
-  // §需求3：独立使用时（无受控 prop）保留默认折叠
-  const [internalCollapsed, setInternalCollapsed] = useState(true);
-  const collapsed = collapsedProp ?? internalCollapsed;
-  const handleToggle = () => {
-    if (onToggleCollapsed) onToggleCollapsed();
-    else setInternalCollapsed(!internalCollapsed);
-  };
   const language = useMemo(() => inferLanguage(change.filePath), [change.filePath]);
   const diffLines = useMemo(
     () => computeLineDiff(change.original, change.modified),
     [change.original, change.modified]
   );
 
-  const addedCount = diffLines.filter((l) => l.type === 'added').length;
-  const removedCount = diffLines.filter((l) => l.type === 'removed').length;
-
   return (
     <div className="diff-view">
-      <div className="diff-view__file-header">
-        <div className="diff-view__file-info">
-          <FileText size={12} strokeWidth={1.8} />
-          <span className="diff-view__file-path">{change.filePath}</span>
-          <span className="diff-view__lang-badge">{formatLangBadge(language)}</span>
-        </div>
-        <div className="diff-view__stats">
-          {removedCount > 0 && <span className="diff-view__stat diff-view__stat--removed">−{removedCount}</span>}
-          {addedCount > 0 && <span className="diff-view__stat diff-view__stat--added">+{addedCount}</span>}
-          <button
-            className="diff-view__compare-btn"
-            onClick={() => onOpenDiffInEditor(change)}
-            title="在编辑器中对比"
-          >
-            <GitCompare size={12} strokeWidth={1.8} />
-            <span>对比</span>
-          </button>
-          <button
-            className="diff-view__toggle"
-            onClick={handleToggle}
-            title={collapsed ? '展开差异' : '折叠差异'}
-          >
-            {collapsed ? '展开' : '折叠'}
-          </button>
-        </div>
-      </div>
-
-      {change.explanation && (
-        <div className="diff-view__explanation">
-          {/* §需求：传入 change.filePath 作为 fileHint，让每个 diff 的解释文本里
-              LLM 输出的裸代码能优先用文件后缀推断语言。 */}
-          <MarkdownContent
-            content={change.explanation}
-            enableOptions={false}
-            fileHint={change.filePath}
-          />
-        </div>
-      )}
-
+      {/* §需求：本轮移除 file-header 和 explanation——与 SuggestionCard 头部
+          （文件信息/stats/展开按钮）和 SuggestionCard 整体 description 重复。
+          只保留核心 diff body（变更前/变更后代码对比）。
+          折叠状态统一由 SuggestionCard header 的「展开」按钮控制。 */}
       {!collapsed && (
         <div className="diff-view__body">
           <div className="diff-view__code-header">

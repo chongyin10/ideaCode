@@ -1375,11 +1375,14 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
 
                   {/* Suggestions */}
                   {msg.suggestions && msg.suggestions.length > 0 && (
+                    // §需求：传入工作区根路径让 SuggestionList 能把相对路径
+                    // （./vite.config.ts / vite.config.ts）解析为绝对路径做去重。
                     <SuggestionList
                       suggestions={msg.suggestions}
                       onAccept={handleAcceptSuggestion}
                       onReject={handleRejectSuggestion}
                       onOpenDiffInEditor={handleOpenDiffInEditor}
+                      workspaceRoot={context?.workspaceRoot}
                     />
                   )}
                 </div>

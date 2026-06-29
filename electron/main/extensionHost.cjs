@@ -48,6 +48,11 @@ class ExtensionHostManager {
     this.pendingRendererRequests = new Map();
     /** 是否在用户主动停止时（避免热重启循环） */
     this.stopping = false;
+    /** 是否正在热重启（文件变化/异常触发的 kill→restart）。
+     *  与 stopping 区分：stopping 表示用户主动永久停止，不应再启动；
+     *  _hotRestarting 表示为热重启而 kill，exit 后需要立即 start()。
+     *  原先用 stopping 复用会导致 exit 处理器跳过重启，使热重启变成永久停止。 */
+    this._hotRestarting = false;
     /** 文件监听器（dev 模式用） */
     this.fileWatcher = null;
     /** 文件变化防抖定时器 */
@@ -93,8 +98,10 @@ class ExtensionHostManager {
 
     this.hostProcess.on('exit', (code, signal) => {
       console.log(`[ExtensionHost] 进程退出，代码: ${code} signal: ${signal || 'none'}`);
+      const wasHotRestarting = this._hotRestarting;
       this.isRunning = false;
       this.hostProcess = null;
+      this._hotRestarting = false;
       // 通知所有渲染进程扩展宿主已停止
       this.windowManager.broadcast(Channels.EXTENSION_HOST_MESSAGE, {
         type: 'hostStopped',
@@ -102,14 +109,21 @@ class ExtensionHostManager {
       });
 
       // 主动停止时（用户调用 stop）不再自启
-      // 非主动退出 → 自动重启（dev 模式开发体验）
-      if (!this.stopping) {
+      if (this.stopping) return;
+
+      if (wasHotRestarting) {
+        // 热重启：立即拉起新进程（_killAndRestart 已设置好上下文）
+        console.log('[ExtensionHost] 热重启：立即重新启动');
+        this.start();
+      } else {
+        // 非主动退出 → 自动重启（dev 模式开发体验）
         this.scheduleRestart(800, 'unexpected-exit');
       }
     });
 
     this.isRunning = true;
     this.stopping = false;
+    this._hotRestarting = false;
     console.log('[ExtensionHost] 扩展宿主进程已启动');
 
     // 启动 dev 模式文件监视
@@ -208,6 +222,9 @@ class ExtensionHostManager {
    */
   scheduleRestart(delayMs, reason) {
     if (this.stopping) return;
+    // 正在热重启（已发 SIGTERM，等 exit 事件拉起新进程）时，忽略新的重启请求，
+    // 避免 exit 前重复 kill / 重复 start。
+    if (this._hotRestarting) return;
     if (this.restartTimer) {
       clearTimeout(this.restartTimer);
     }
@@ -228,14 +245,16 @@ class ExtensionHostManager {
       this.start();
       return;
     }
-    this.stopping = true;
+    // 标记热重启（而非用户主动停止），exit 事件会据此立即拉起新进程。
+    // 不能复用 this.stopping：那会导致 exit 处理器跳过重启，热重启变成永久停止。
+    this._hotRestarting = true;
     const proc = this.hostProcess;
     try { proc.kill('SIGTERM'); } catch { /* ignore */ }
     // 兜底：2 秒后强杀
     setTimeout(() => {
       try { if (!proc.killed) proc.kill('SIGKILL'); } catch { /* ignore */ }
     }, 2000);
-    // exit 事件会自动清理 isRunning/hostProcess
+    // exit 事件会自动清理 isRunning/hostProcess 并触发 start()
   }
 
   /**
@@ -245,6 +264,8 @@ class ExtensionHostManager {
     if (!this.hostProcess) return;
 
     this.stopping = true;
+    // 清理热重启标志：用户主动停止时，exit 不应再触发重启
+    this._hotRestarting = false;
     if (this.restartTimer) {
       clearTimeout(this.restartTimer);
       this.restartTimer = null;

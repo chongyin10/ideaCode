@@ -912,12 +912,45 @@ async function acceptAndApplySuggestion(suggestionId) {
         // 原代码把所有 changes（含被跳过的）都发给主进程，导致主进程尝试替换不存在的片段。
         const appliedChanges = [];
         for (const change of changes) {
+          // 防御：单条变更内容过大（>1MB）极易触发 V8 的
+          // RangeError: Invalid string length（来自 replaceAll 内部缓冲
+          // 或 process.send 序列化）。遇到时直接跳过并给出可读原因，
+          // 不再让上层 catch 弹出一个莫名其妙的"Invalid string length"。
+          const origLen = change.original ? change.original.length : 0;
+          const modLen = change.modified ? change.modified.length : 0;
+          const MAX_CHANGE_LEN = 1 * 1024 * 1024; // 1MB
+          if (origLen > MAX_CHANGE_LEN || modLen > MAX_CHANGE_LEN) {
+            console.warn(
+              '[LifeAiCode] 单条变更内容过大，已跳过:',
+              filePath,
+              'original.length=',
+              origLen,
+              'modified.length=',
+              modLen,
+            );
+            continue;
+          }
           if (!newContent.includes(change.original)) {
             console.warn('[LifeAiCode] 原始代码未找到，跳过:', filePath);
             continue;
           }
           // Bug 7: 用 replaceAll 替换所有匹配项，避免 String.replace 只替换首个。
-          newContent = newContent.replaceAll(change.original, change.modified);
+          // 大字符串 replaceAll 在 Node V8 下可能抛 RangeError: Invalid string length
+          // （结果是缓冲超过 2^31-1 长度），单独 try/catch 让上层能定位到具体文件。
+          try {
+            newContent = newContent.replaceAll(change.original, change.modified);
+          } catch (replaceErr) {
+            console.error(
+              '[LifeAiCode] replaceAll 失败，跳过该变更:',
+              filePath,
+              'original.length=',
+              origLen,
+              'modified.length=',
+              modLen,
+              replaceErr.message,
+            );
+            continue;
+          }
           appliedChanges.push(change);
         }
 
@@ -929,15 +962,26 @@ async function acceptAndApplySuggestion(suggestionId) {
         console.log('[LifeAiCode] 应用变更到:', filePath);
         if (typeof process !== 'undefined' && process.send) {
           // 由 applyChanges 负责读取当前文件、安全替换并写入磁盘 + 刷新编辑器
-          process.send({
-            jsonrpc: '2.0',
-            method: 'lifeAiCode.applyChanges',
-            params: {
-              filePath,
-              original: appliedChanges.map((c) => c.original),
-              modified: appliedChanges.map((c) => c.modified),
-            },
-          });
+          // IPC 通道内部默认走 JSON 序列化，超长字符串（>~256MB）会抛
+          // RangeError: Invalid string length，单独 try/catch 以便上层定位。
+          try {
+            process.send({
+              jsonrpc: '2.0',
+              method: 'lifeAiCode.applyChanges',
+              params: {
+                filePath,
+                original: appliedChanges.map((c) => c.original),
+                modified: appliedChanges.map((c) => c.modified),
+              },
+            });
+          } catch (ipcErr) {
+            throw new Error(
+              `IPC 发送失败 (filePath=${filePath}, ` +
+                `original.total=${appliedChanges.reduce((s, c) => s + c.original.length, 0)}, ` +
+                `modified.total=${appliedChanges.reduce((s, c) => s + c.modified.length, 0)}): ` +
+                ipcErr.message,
+            );
+          }
         } else {
           // B3: process.send 不可用时抛错，让外层 catch 捕获，
           // 避免继续执行 markApplied 误报"已应用"
@@ -955,7 +999,9 @@ async function acceptAndApplySuggestion(suggestionId) {
         suggestionId,
       });
     } catch (err) {
+      // 打印完整堆栈便于定位 "Invalid string length" 等 V8 RangeError 的真正抛出点
       console.error('[LifeAiCode] 应用建议失败:', err.message);
+      console.error('[LifeAiCode] 应用建议失败 stack:', err.stack);
       vscode.window.showErrorMessage(`LifeAiCode: 应用建议失败 - ${err.message}`);
     }
   }

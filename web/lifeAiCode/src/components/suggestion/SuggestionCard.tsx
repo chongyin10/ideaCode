@@ -8,12 +8,17 @@
  *    [文件类型 badge] [相对路径] [变更] [-N 红色] [+N 绿色] [展开] [已应用]
  *    例子：JS  /src/Test.tsx  变更  [-1]  [+1]  展开  已应用
  *    - 去掉 FileText icon，不再区分类型
- *    - "变更" 多文件时可点击弹出 dropdown 列出所有变更
- *    - "展开" 是 DiffView 自己的「展开/折叠」按钮——切换所有 diff body
+ *    - "变更" 按钮统一用于在编辑器中打开 diff 对比：
+ *      · 单文件：点击直接调用 onOpenDiffInEditor(firstChange)
+ *      · 多文件：点击弹出 dropdown 列出所有变更，选择某项后调用
+ *        onOpenDiffInEditor(对应 change)
+ *    - "展开" 是 SuggestionCard header 唯一的展开/折叠按钮，控制所有
+ *      DiffView body 的可见性（DiffView 内部不再有重复的展开按钮）
  *
  *  DiffView 已拆为独立组件，可复用。                              */
 
 import { useState, useMemo, useRef, useEffect } from 'react';
+import type { MouseEvent as ReactMouseEvent } from 'react';
 import { Check, X, ChevronDown, FileText, GitCompare } from 'lucide-react';
 import type { Suggestion, SuggestionChange } from '../../types';
 import { MarkdownContent } from '../MarkdownContent';
@@ -78,6 +83,7 @@ interface SuggestionCardProps {
   suggestion: Suggestion;
   onAccept: (id: string) => void;
   onReject: (id: string) => void;
+  /** §需求：本轮将 header 上的「变更」按钮复用为「在编辑器中打开 diff 对比」入口 */
   onOpenDiffInEditor: (change: SuggestionChange) => void;
   loading?: boolean;
 }
@@ -124,21 +130,39 @@ export function SuggestionCard({ suggestion, onAccept, onReject, onOpenDiffInEdi
     return () => document.removeEventListener('mousedown', handler);
   }, [dropdownOpen]);
 
-  // §需求2：点击 dropdown item 时滚动到对应 DiffView，并展开所有 diff
-  const handleDropdownItemClick = (idx: number) => {
-    setDiffExpanded(true);
+  // §需求：本轮改为「在编辑器中打开 diff 对比」
+  //   - 单文件：直接调用 onOpenDiffInEditor(firstChange)
+  //   - 多文件：dropdown item 点击时调用 onOpenDiffInEditor(对应 change)
+  const handleChangeTriggerClick = (e: ReactMouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation();
+    if (hasMultipleChanges) {
+      setDropdownOpen(!dropdownOpen);
+    } else if (firstChange) {
+      onOpenDiffInEditor(firstChange);
+    }
+  };
+  const handleDropdownItemClick = (change: SuggestionChange) => {
     setDropdownOpen(false);
-    // §滚动到对应的 DiffView（用 rAF 等 DOM 更新完成）
-    requestAnimationFrame(() => {
-      const el = document.querySelector(`[data-diff-index="${CSS.escape(suggestion.id)}-${idx}"]`);
-      if (el && 'scrollIntoView' in el) {
-        (el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      }
-    });
+    onOpenDiffInEditor(change);
   };
 
   return (
     <div className={`suggestion-card ${suggestion.status !== 'pending' ? 'suggestion-card--resolved' : ''}`}>
+      {/* §需求：把 description 提到 header 之上，作为卡片最顶部内容。
+          渲染顺序：description → header → body（含所有 DiffView）。 */}
+      {suggestion.description && (
+        <div className="suggestion-card__description">
+          {/* §需求：传入 firstChange.filePath 作为 fileHint，让 description
+              里 LLM 输出的裸代码（未加 ``` 围栏 / 被双引号+<br> 包裹）
+              能优先用文件后缀推断语言而不是靠 detectCodeLanguage 猜测。 */}
+          <MarkdownContent
+            content={suggestion.description}
+            enableOptions={false}
+            fileHint={firstChange?.filePath}
+          />
+        </div>
+      )}
+
       <div
         className="suggestion-card__header"
         style={{ cursor: 'pointer' }}
@@ -174,21 +198,30 @@ export function SuggestionCard({ suggestion, onAccept, onReject, onOpenDiffInEdi
             - 多文件：button + 下拉箭头，弹出 dropdown 列出所有变更
         */}
         <div className="suggestion-card__change-wrapper" ref={changeLabelRef}>
-          {hasMultipleChanges ? (
-            <button
-              type="button"
-              className={`suggestion-card__change-trigger ${dropdownOpen ? 'suggestion-card__change-trigger--open' : ''}`}
-              onClick={(e) => { e.stopPropagation(); setDropdownOpen(!dropdownOpen); }}
-              title={`查看 ${suggestion.changes.length} 个文件变更`}
-            >
-              <span className="suggestion-card__change-trigger-text">变更</span>
-              <span className="suggestion-card__change-trigger-count">{suggestion.changes.length}</span>
-              <ChevronDown size={11} strokeWidth={2} className="suggestion-card__change-trigger-icon" />
-            </button>
-          ) : (
-            <span className="suggestion-card__change-label">变更</span>
-          )}
-          {/* §需求2：dropdown 列表，格式同底部 DiffView 的 file-header */}
+          {/* §需求：本轮统一为可点击 button——
+              单文件点击调用 onOpenDiffInEditor，多文件点击弹出 dropdown。
+              用 button + 统一的 GitCompare icon 表明该操作是「在编辑器中打开 diff 对比」。
+              多文件时附带 ChevronDown 表明点击后还有下拉选项。 */}
+          <button
+            type="button"
+            className={`suggestion-card__change-trigger ${dropdownOpen ? 'suggestion-card__change-trigger--open' : ''}`}
+            onClick={handleChangeTriggerClick}
+            title={
+              hasMultipleChanges
+                ? `在编辑器中对比 ${suggestion.changes.length} 个文件变更`
+                : '在编辑器中对比'
+            }
+          >
+            <GitCompare size={11} strokeWidth={2} className="suggestion-card__change-trigger-icon" />
+            <span className="suggestion-card__change-trigger-text">变更</span>
+            {hasMultipleChanges && (
+              <>
+                <span className="suggestion-card__change-trigger-count">{suggestion.changes.length}</span>
+                <ChevronDown size={11} strokeWidth={2} className="suggestion-card__change-trigger-caret" />
+              </>
+            )}
+          </button>
+          {/* §需求：dropdown 列表，多文件时点击某项后调用 onOpenDiffInEditor 对比对应文件 */}
           {hasMultipleChanges && dropdownOpen && (
             <div className="suggestion-card__dropdown" role="menu">
               {suggestion.changes.map((change, idx) => {
@@ -200,7 +233,7 @@ export function SuggestionCard({ suggestion, onAccept, onReject, onOpenDiffInEdi
                     type="button"
                     className="suggestion-card__dropdown-item"
                     role="menuitem"
-                    onClick={(e) => { e.stopPropagation(); handleDropdownItemClick(idx); }}
+                    onClick={(e) => { e.stopPropagation(); handleDropdownItemClick(change); }}
                   >
                     <FileText size={12} strokeWidth={1.8} className="suggestion-card__dropdown-icon" />
                     <span className="diff-view__file-path">{change.filePath}</span>
@@ -262,22 +295,10 @@ export function SuggestionCard({ suggestion, onAccept, onReject, onOpenDiffInEdi
         )}
       </div>
 
-      {/* §需求3：body 始终渲染（含 description + 所有 DiffView）。
-          各 DiffView 的可见性由受控 collapsed prop 决定。 */}
+      {/* §需求3：body 始终渲染（含所有 DiffView）。
+          各 DiffView 的可见性由受控 collapsed prop 决定。
+          §需求：description 已移到 header 之上，body 仅含 DiffView 列表。 */}
       <div className="suggestion-card__body">
-        {suggestion.description && (
-          <div className="suggestion-card__description">
-            {/* §需求：传入 firstChange.filePath 作为 fileHint，让 description
-                里 LLM 输出的裸代码（未加 ``` 围栏 / 被双引号+<br> 包裹）
-                能优先用文件后缀推断语言而不是靠 detectCodeLanguage 猜测。 */}
-            <MarkdownContent
-              content={suggestion.description}
-              enableOptions={false}
-              fileHint={firstChange?.filePath}
-            />
-          </div>
-        )}
-
         {suggestion.changes.map((change, idx) => (
           <div
             key={idx}
@@ -286,9 +307,7 @@ export function SuggestionCard({ suggestion, onAccept, onReject, onOpenDiffInEdi
           >
             <DiffView
               change={change}
-              onOpenDiffInEditor={onOpenDiffInEditor}
               collapsed={!diffExpanded}
-              onToggleCollapsed={() => setDiffExpanded(!diffExpanded)}
             />
           </div>
         ))}

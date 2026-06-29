@@ -13,6 +13,14 @@ try { fs.mkdirSync(v8CacheDir, { recursive: true }); } catch { /* ignore */ }
 process.env.V8_COMPILE_CACHE_CACHE_DIR = v8CacheDir;
 require('v8-compile-cache');
 
+// macOS：抑制系统级 NSLog 噪音（IMKCFRunLoopWakeUpReliable / TSM AdjustCapsLockLED 等）。
+// 这些是 NSApplication 初始化文本输入系统（IMK/TSM）时的系统活动日志，无害但刷屏。
+// 必须在 require('electron')（触发 NSApplication 初始化）之前设置才有效。
+// OS_ACTIVITY_MODE=disable 只影响 macOS 系统活动日志，不影响 Electron/Node 的 console 输出。
+if (process.platform === 'darwin' && !process.env.OS_ACTIVITY_MODE) {
+  process.env.OS_ACTIVITY_MODE = 'disable';
+}
+
 const { app } = require('electron');
 const { fixPath } = require('./main/utils/env.cjs');
 

@@ -2665,6 +2665,14 @@ body {
   transition: background var(--duration-fast);
 }
 .suggestion-card__header:hover { background: var(--surface-2); }
+/* §需求：header 下画一条分隔线，与 description（header 之上）与 body（header 之下）都切开。
+   之前用 `.suggestion-card__header + .suggestion-card__body` 仅在 header 与 body 紧邻时起作用，
+   现在 description 在 header 之上后该选择器仍可用（header 仍紧邻 body），所以保留。 */
+/* §需求：description（header 之上）与 header 之间用 header 顶上的 border-bottom 来分隔。
+   当 description 存在时给 header 加上可见边框，否则保持透明。 */
+.suggestion-card__description + .suggestion-card__header {
+  border-top: 1px solid var(--border-subtle);
+}
 /* §body 折叠时不显示分隔线，展开时才出现 */
 .suggestion-card__header + .suggestion-card__body { border-top: 1px solid var(--border-subtle); }
 
@@ -2931,10 +2939,19 @@ body {
 }
 .suggestion-card__body:empty { display: none; }
 
+/* §需求：description 现在是卡片最顶部元素，不再嵌入 body 里。
+   · padding：原来是 body 提供的 10px 12px，现在 description 自己加上相同 padding，避免贴边。
+   · margin-bottom 取消：原来在 body 内用 margin-bottom 与下方 DiffView 隔开，现在改用
+     header 顶上的 border-top 作为 description 与 header 之间的分隔线。
+   · 加顶部圆角：之前 body 有 border-bottom-radius，现在 description 需对齐顶部圆角。
+   · overflow:hidden：让描述内容的边缘被卡片圆角裁剪，与原 body 行为一致。 */
 .suggestion-card__description {
   color: var(--text-secondary);
   line-height: 1.6;
-  margin-bottom: 8px;
+  padding: 10px 12px;
+  overflow: hidden;
+  border-top-left-radius: var(--radius-md);
+  border-top-right-radius: var(--radius-md);
 }
 .suggestion-card__description p { margin: 4px 0; }
 .suggestion-card__description p:first-child { margin-top: 0; }
