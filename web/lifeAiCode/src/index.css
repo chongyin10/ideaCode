@@ -199,6 +199,46 @@ body {
   margin: 0 auto;
   padding: 0 8px 2px;
   box-sizing: border-box;
+  /* §需求4：row 布局——左侧 PreparingPlaceholder 占据剩余空间，右侧回复时间固定宽度。
+     使用 flex 让 time-label 能以最右边的位置被推开。 */
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* §需求4：让 PreparingPlaceholder 在 flex row 中占满剩余宽度，弹窗 absolute 定位仍以它为参考点。 */
+.status-indicator-zone > .status-card {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* §需求4：回复耗时标签 — 等宽字体 + 小字号 + 淡色背景 + 数字表格对齐。
+   固定在最右边，使用 flex-shrink: 0 避免被压缩。 */
+.status-indicator-zone__response-time {
+  flex-shrink: 0;
+  font-family: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace);
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--vscode-descriptionForeground, rgba(127, 127, 127, 0.95));
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: var(--vscode-badge-background, rgba(127, 127, 127, 0.12));
+  white-space: nowrap;
+  user-select: none;
+  cursor: default;
+  font-variant-numeric: tabular-nums;
+}
+
+/* §需求4：等待回复中——强调色 + 轻微呼吸动画提示用户。 */
+.status-indicator-zone__response-time--active {
+  color: var(--vscode-textLink-foreground, #3794ff);
+  background: var(--vscode-textLink-activeForeground, rgba(55, 148, 255, 0.12));
+  animation: response-time-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes response-time-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
 }
 
 /* ════════════════════════════════════════════════════════════════ */
@@ -210,7 +250,10 @@ body {
   top: 8px;
   right: 8px;
   width: 320px;
-  max-height: calc(100vh - 24px);
+  /* §需求3：固定最大高度 300px——避免历史会话很多时下拉菜单撑爆屏幕。
+     原值 calc(100vh - 24px) 在长会话列表中会把下拉拉到全屏高度，使用体验差。
+     300px 大约可容纳 6-8 条历史项（每条 ~40px），超出的部分由 .history-list 滚动。 */
+  max-height: 300px;
   background: var(--surface-1);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
@@ -662,7 +705,20 @@ body {
 .ai-card__chevron--collapsed { transform: rotate(-90deg); }
 
 /* Card Body */
+/* §需求2：body 与 actions 的 row 容器——两者并排布局。
+   - body 占主宽度（flex: 1, min-width: 0 防止长内容溢出撑开）
+   - actions 紧贴右侧（flex-shrink: 0），垂直对齐到顶部让按钮对齐到内容顶端
+   - 整个 row 也用 padding 留出与卡片边缘的间距 */
+.ai-card__body-row {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 0 4px 0 12px;
+}
 .ai-card__body {
+  flex: 1 1 auto;
+  min-width: 0; /* 防止 md-content 长内容/代码块撑开 flex 容器 */
   padding: 4px 0 0 0;
   animation: cardExpand var(--duration-slow) var(--ease-out);
 }
@@ -699,6 +755,12 @@ body {
   align-items: center;
   gap: 2px;
   padding: 4px 8px 6px 8px;
+  flex-shrink: 0;
+  /* §需求2：垂直贴顶部——与 body 第一个 block（通常是文字或工具栏）顶端对齐，
+     这样复制按钮看起来是「贴着内容」而不是「飘在中间」 */
+  align-self: flex-start;
+  position: sticky;
+  top: 4px;
 }
 .ai-card__action-btn {
   display: inline-flex;
@@ -780,6 +842,7 @@ body {
   color: var(--purple-400);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+  font-size: 12px;
 }
 
 /* 嵌套列表 — 视觉层次缩进 */
@@ -2652,9 +2715,9 @@ body {
    而不是"文件变更"。整体高度约为 Card 的 60%，更克制。 */
 .suggestion-advice {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
-  padding: 6px 10px 6px 12px;
+  padding: 8px 10px 8px 12px;
   border-radius: var(--radius-sm);
   background: transparent;
   border-left: 2px solid var(--border-default);
@@ -2667,6 +2730,15 @@ body {
 .suggestion-advice--resolved { opacity: 0.65; }
 .suggestion-advice--resolved:hover { opacity: 0.85; }
 
+/* 主内容区：左侧 icon + 右侧 title/description 垂直栈 */
+.suggestion-advice__main {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+
 /* 左侧 💡 icon —— 黄色调暗示这是"灵机一动"，与卡片的紫色 lang-badge 区分 */
 .suggestion-advice__icon {
   display: inline-flex;
@@ -2674,16 +2746,24 @@ body {
   justify-content: center;
   width: 18px;
   height: 18px;
+  margin-top: 1px;
   border-radius: var(--radius-full);
   background: rgba(251, 191, 36, 0.10);
   color: var(--warning-400, #fbbf24);
   flex-shrink: 0;
 }
 
-/* 中间建议文字：italic + secondary，单行省略 */
-.suggestion-advice__text {
+/* 右侧文字栈：title + description 垂直排列 */
+.suggestion-advice__content {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* 主标题：italic + secondary，单行省略 */
+.suggestion-advice__text {
   font-size: 12.5px;
   color: var(--text-secondary);
   font-style: italic;
@@ -2693,12 +2773,31 @@ body {
   line-height: 1.4;
 }
 
+/* §需求1：详情小字（多行折行，最多 3 行）——
+   不能丢掉 description，那是建议的详细内容。
+   用更小的字号 + tertiary 颜色 + 行夹紧，避免 抢走 title 的视觉重点。 */
+.suggestion-advice__description {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  line-height: 1.5;
+  word-break: break-word;
+  white-space: pre-wrap;
+  /* 去掉 italic —— description 是补充说明，正式语气 */
+  font-style: normal;
+}
+
 /* 右侧操作区：pending 显按动钮，resolved 显状态徽标 */
 .suggestion-advice__actions {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
+  margin-top: 1px;
 }
 
 /* 状态徽标——复用卡片里 .suggestion-card__status 的语义，尺寸略小 */
@@ -3197,7 +3296,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 12px 8px 14px;
+  padding: 2px 12px;
   background: var(--code-header);
   border-bottom: 1px solid var(--code-border);
   user-select: none;
@@ -5283,6 +5382,43 @@ body {
   flex-shrink: 0;
   color: rgba(255, 255, 255, 0.45);
   font-size: 10px;
+}
+
+/* 文件操作状态图标（每行末尾） */
+.read-file-group__status-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.read-file-group__status-icon--running {
+  color: rgba(59, 130, 246, 0.9);
+}
+
+.read-file-group__status-icon--success {
+  color: rgba(34, 197, 94, 0.9);
+}
+
+.read-file-group__status-icon--error {
+  color: rgba(239, 68, 68, 0.9);
+}
+
+.read-file-group__status-icon--pending {
+  color: rgba(245, 158, 11, 0.9);
+}
+
+.read-file-group__status-icon--spinner {
+  animation: read-file-spin 0.8s linear infinite;
+}
+
+@keyframes read-file-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .agent-edit-dialog {

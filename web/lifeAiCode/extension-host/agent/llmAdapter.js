@@ -52,6 +52,12 @@ class LlmAdapter {
 5. 需要顺序通读大文件 → read_file_chunks 逐块读取
 注意：read_file 返回 largeFile 标记时，说明文件过大已切换为大纲模式，不要重复调用 read_file，改用上述分片工具。
 
+## 文件修改策略
+1. 创建新文件或全量覆盖 → write_file（不会立即落盘，生成建议供用户确认）
+2. 修改文件局部内容 → apply_edit（先 read_file 读取当前内容，再 apply_edit 生成建议）
+3. 删除文件 → delete_file（不可逆操作，生成建议供用户确认）
+注意：所有修改/删除操作都不会立即落盘，需用户在 UI 中确认后才真正应用。
+
 ## 步骤可视化
 在分析过程中可以使用以下标签让 IDE 实时显示进度：
 - 读取文件：<step type="read" target="path/to/file.ts">读取</step>
@@ -77,6 +83,12 @@ class LlmAdapter {
 4. 知道要找的内容但不知道行号 → search_in_file
 5. 需要顺序通读大文件 → read_file_chunks 逐块读取
 注意：read_file 返回 largeFile 标记时，说明文件过大已切换为大纲模式，不要重复调用 read_file，改用上述分片工具。
+
+## 文件修改策略
+1. 创建新文件或全量覆盖 → write_file（不会立即落盘，生成建议供用户确认）
+2. 修改文件局部内容 → apply_edit（先 read_file 读取当前内容，再 apply_edit 生成建议）
+3. 删除文件 → delete_file（不可逆操作，生成建议供用户确认）
+注意：所有修改/删除操作都不会立即落盘，需用户在 UI 中确认后才真正应用。
 
 ## 可用工具
 ${toolSchemas}

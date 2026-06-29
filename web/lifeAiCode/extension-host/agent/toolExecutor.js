@@ -176,6 +176,7 @@ class ToolExecutor {
       else if (result.content !== undefined) summary = `共 ${result.content.length} 字符`;
       else if (result.tree !== undefined) summary = `共 ${result.fileCount || 0} 个文件/目录`;
       else if (result.output !== undefined) summary = result.output.slice(0, 200);
+      else if (result.pending) summary = '待确认';
       else if (result.message) summary = result.message;
     }
 

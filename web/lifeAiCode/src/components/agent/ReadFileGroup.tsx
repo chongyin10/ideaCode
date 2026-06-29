@@ -1,6 +1,9 @@
 import { useState } from 'react';
 import type { ToolCallInfo } from '../../types';
-import { FileText, ChevronDown, Check, Loader2, X, Search, List, Layers } from 'lucide-react';
+import {
+  FileText, ChevronDown, Check, Loader2, X, Search, List, Layers,
+  FilePlus, Edit3, Trash2, Clock,
+} from 'lucide-react';
 
 interface ReadFileGroupProps {
   calls: ToolCallInfo[];
@@ -11,7 +14,7 @@ function getFileName(call: ToolCallInfo) {
   return path.split('/').pop() || path;
 }
 
-/** 工具中文名称 */
+/** 工具中文名称（操作类型） */
 function getToolLabel(tool: string): string {
   switch (tool) {
     case 'read_file': return '读取';
@@ -19,16 +22,22 @@ function getToolLabel(tool: string): string {
     case 'read_file_lines': return '行范围';
     case 'search_in_file': return '搜索';
     case 'read_file_chunks': return '分块';
+    case 'write_file': return '生成';
+    case 'apply_edit': return '编辑';
+    case 'delete_file': return '删除';
     default: return tool;
   }
 }
 
-/** 工具图标 */
+/** 操作类型图标 */
 function getToolIcon(tool: string) {
   switch (tool) {
     case 'search_in_file': return <Search size={11} strokeWidth={2} />;
     case 'read_file_outline': return <List size={11} strokeWidth={2} />;
     case 'read_file_chunks': return <Layers size={11} strokeWidth={2} />;
+    case 'write_file': return <FilePlus size={11} strokeWidth={2} />;
+    case 'apply_edit': return <Edit3 size={11} strokeWidth={2} />;
+    case 'delete_file': return <Trash2 size={11} strokeWidth={2} />;
     default: return <FileText size={11} strokeWidth={2} />;
   }
 }
@@ -53,9 +62,45 @@ function getToolDetail(call: ToolCallInfo): string {
       const idx = call.args.chunkIndex;
       return idx !== undefined ? `块 ${idx}` : '';
     }
+    case 'write_file':
+      return '';
+    case 'apply_edit':
+      return '';
+    case 'delete_file':
+      return '';
     default:
       return '';
   }
+}
+
+/**
+ * 文件操作状态图标：
+ * - running → Loader2 旋转
+ * - error → X
+ * - success + pending（等待用户确认） → Clock
+ * - success（已确认/已完成） → Check
+ */
+function getStatusIcon(call: ToolCallInfo) {
+  if (call.status === 'running') {
+    return <Loader2 size={11} strokeWidth={2.5} className="read-file-group__status-icon--spinner" />;
+  }
+  if (call.status === 'error') {
+    return <X size={11} strokeWidth={2.5} />;
+  }
+  // success 状态下区分 pending 和已确认
+  const isPending = call.result && typeof call.result === 'object' && 'pending' in call.result && call.result.pending === true;
+  if (isPending) {
+    return <Clock size={11} strokeWidth={2} />;
+  }
+  return <Check size={11} strokeWidth={2.5} />;
+}
+
+function getStatusClass(call: ToolCallInfo): string {
+  if (call.status === 'running') return 'read-file-group__status-icon--running';
+  if (call.status === 'error') return 'read-file-group__status-icon--error';
+  const isPending = call.result && typeof call.result === 'object' && 'pending' in call.result && call.result.pending === true;
+  if (isPending) return 'read-file-group__status-icon--pending';
+  return 'read-file-group__status-icon--success';
 }
 
 export function ReadFileGroup({ calls }: ReadFileGroupProps) {
@@ -65,6 +110,10 @@ export function ReadFileGroup({ calls }: ReadFileGroupProps) {
 
   const runningCount = calls.filter((c) => c.status === 'running').length;
   const errorCount = calls.filter((c) => c.status === 'error').length;
+  const pendingCount = calls.filter((c) => {
+    return c.status === 'success' && c.result && typeof c.result === 'object' &&
+      'pending' in c.result && c.result.pending === true;
+  }).length;
 
   // 当前正在执行或最后执行的操作，用于折叠态预览
   const currentCall = calls.find((c) => c.status === 'running') || calls[calls.length - 1];
@@ -80,6 +129,11 @@ export function ReadFileGroup({ calls }: ReadFileGroupProps) {
     statusIcon = <X size={12} strokeWidth={2.5} />;
     statusClass = 'read-file-group__status--error';
   }
+
+  let statusText = '完成';
+  if (runningCount > 0) statusText = '执行中';
+  else if (errorCount > 0) statusText = '部分失败';
+  else if (pendingCount > 0) statusText = '待确认';
 
   return (
     <div className="tool-call-card read-file-group">
@@ -103,7 +157,7 @@ export function ReadFileGroup({ calls }: ReadFileGroupProps) {
         )}
         <span className={`read-file-group__status ${statusClass}`}>
           {statusIcon}
-          {runningCount > 0 ? '执行中' : errorCount > 0 ? '部分失败' : '完成'}
+          {statusText}
         </span>
         <span className={`read-file-group__chevron ${expanded ? 'read-file-group__chevron--open' : ''}`}>
           <ChevronDown size={14} strokeWidth={2} />
@@ -133,6 +187,13 @@ export function ReadFileGroup({ calls }: ReadFileGroupProps) {
                 {call.summary && (
                   <span className="read-file-group__meta">{call.summary}</span>
                 )}
+                <span className={`read-file-group__status-icon ${getStatusClass(call)}`} title={
+                  call.status === 'running' ? '执行中' :
+                  call.status === 'error' ? '失败' :
+                  (call.result && typeof call.result === 'object' && 'pending' in call.result && call.result.pending === true) ? '等待确认' : '完成'
+                }>
+                  {getStatusIcon(call)}
+                </span>
               </div>
             );
           })}

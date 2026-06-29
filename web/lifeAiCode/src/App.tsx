@@ -99,9 +99,12 @@ function App() {
     );
   }
 
+  // 使用 CSS display 切换视图而非条件渲染，避免 ChatPanel 在切换到配置页时被卸载，
+  // 从而保留会话状态（messages、currentHistoryId、toolCalls 等）。
+  // 从配置页返回时，ChatPanel 仍保持挂载，会话内容不会丢失。
   return (
     <div className="lifeAiCode-root">
-      {view === 'chat' ? (
+      <div className="lifeAiCode-view" style={{ display: view === 'chat' ? 'flex' : 'none', flexDirection: 'column', height: '100%' }}>
         <ChatPanel
           initialContext={initialContext}
           isPopup={!!initialContext}
@@ -109,7 +112,8 @@ function App() {
           configs={configs}
           onOpenConfig={() => setView('config')}
         />
-      ) : (
+      </div>
+      <div className="lifeAiCode-view" style={{ display: view === 'config' ? 'flex' : 'none', flexDirection: 'column', height: '100%' }}>
         <ConfigPanel
           configs={configs}
           activeConfigId={activeConfigId}
@@ -117,7 +121,7 @@ function App() {
           onSwitchConfig={handleSwitchConfig}
           onBack={() => setView('chat')}
         />
-      )}
+      </div>
     </div>
   );
 }

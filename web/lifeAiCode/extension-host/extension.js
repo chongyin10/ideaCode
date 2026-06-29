@@ -1662,17 +1662,28 @@ async function activate(context) {
             postToWebView({ type: 'error', message: '未找到待确认的编辑' });
             break;
           }
-          const params = edit.mode === 'write'
-            ? { filePath: edit.filePath, content: edit.modified }
-            : { filePath: edit.filePath, original: [edit.original], modified: [edit.modified] };
+          // 根据编辑模式选择 RPC 方法和参数：
+          // - write: 全量写入 → lifeAiCode.applyChanges { filePath, content }
+          // - delete: 删除文件 → lifeAiCode.deleteFile { filePath }
+          // - replace(默认): 查找替换 → lifeAiCode.applyChanges { filePath, original, modified }
+          let rpcMethod = 'lifeAiCode.applyChanges';
+          let rpcParams;
+          if (edit.mode === 'write') {
+            rpcParams = { filePath: edit.filePath, content: edit.modified };
+          } else if (edit.mode === 'delete') {
+            rpcMethod = 'lifeAiCode.deleteFile';
+            rpcParams = { filePath: edit.filePath };
+          } else {
+            rpcParams = { filePath: edit.filePath, original: [edit.original], modified: [edit.modified] };
+          }
           // B3: 原 if (process.send) 条件不成立时静默跳过，导致 pendingAgentEdit 永远挂起、
           // 前端 DiffConfirmDialog 永远收不到 agentEditStatus 反馈（用户点"接受"无反应）。
           // 改为：process.send 不可用时也清理 pending 并回 error，让前端能关闭弹窗。
           if (typeof process !== 'undefined' && process.send) {
             process.send({
               jsonrpc: '2.0',
-              method: 'lifeAiCode.applyChanges',
-              params,
+              method: rpcMethod,
+              params: rpcParams,
             });
             pendingAgentEdits.delete(message.editId);
             postToWebView({ type: 'agentEditStatus', editId: message.editId, status: 'applied' });

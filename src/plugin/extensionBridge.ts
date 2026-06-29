@@ -17,7 +17,7 @@
 
 import type { Store } from '@reduxjs/toolkit';
 import type { RootState, AppDispatch } from '../store';
-import { openFile, openVirtualFile, addWorkspaceFolder, removeWorkspaceFolder, setFileContent, markFileSaved, toggleAiEditMode, setGitStatus, setGitBranch, setExternalFileChange, reloadFilesFromDisk } from '../store/slices/workspaceSlice';
+import { openFile, openVirtualFile, addWorkspaceFolder, removeWorkspaceFolder, setFileContent, markFileSaved, toggleAiEditMode, setGitStatus, setGitBranch, setExternalFileChange, reloadFilesFromDisk, closeFile } from '../store/slices/workspaceSlice';
 import { addPanelToOrder, removePanelFromOrder, registerDockableItem, unregisterDockableItem, switchRightItem, setDockableItemBadge } from '../store/slices/layoutSlice';
 import { readFile as fsReadFile, writeFile as fsWriteFile, isPath } from '../services/fileService';
 import { getMonacoEditorActions } from '../services/monacoEditorBridge';
@@ -819,6 +819,67 @@ export class ExtensionBridge {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error('[LifeAiCode] 写入文件失败:', msg);
+        return { success: false, error: msg };
+      }
+    });
+
+    /**
+     * lifeAiCode.deleteFile — 用户确认 AI 删除建议后，执行文件删除
+     *
+     * 安全措施：
+     * - 路径必须在工作区内
+     * - 使用 window.electronAPI.fs.delete（主进程执行）
+     * - 删除后从编辑器关闭该文件标签（如已打开）
+     */
+    this.rpcHandlers.set('lifeAiCode.deleteFile', async (params) => {
+      const { filePath } = params as { filePath: string };
+
+      if (!filePath) {
+        console.error('[LifeAiCode] deleteFile: 缺少 filePath');
+        return { success: false, error: '缺少 filePath' };
+      }
+
+      const workspaceRoot = this.store.getState().workspace.rootSource;
+      if (!workspaceRoot || !isPath(workspaceRoot)) {
+        console.error('[LifeAiCode] deleteFile: 没有打开工作区或工作区路径无效', filePath);
+        return { success: false, error: '没有打开工作区' };
+      }
+
+      const looksAbsolute = /^[a-zA-Z]:[\\/]/.test(filePath) || filePath.startsWith('/');
+      const resolvedFilePath = looksAbsolute
+        ? filePath
+        : `${workspaceRoot.replace(/[/\\]+$/, '')}/${filePath.replace(/^[/\\]+/, '')}`;
+      const normalizedTarget = normalizePathForCompare(resolvedFilePath);
+      const normalizedRoot = normalizePathForCompare(workspaceRoot);
+      if (!normalizedTarget.startsWith(normalizedRoot)) {
+        console.error('[LifeAiCode] deleteFile: 拒绝删除工作区外文件', filePath);
+        return { success: false, error: '拒绝删除工作区外文件' };
+      }
+
+      try {
+        if (!window.electronAPI?.fs?.delete) {
+          return { success: false, error: '当前环境不支持删除文件' };
+        }
+        const ok = await window.electronAPI.fs.delete(resolvedFilePath);
+        if (!ok) {
+          return { success: false, error: '删除文件失败（文件可能不存在或无权限）' };
+        }
+
+        // 从编辑器关闭该文件标签（如已打开）
+        const state = this.store.getState().workspace;
+        const openedFile = state.openedFiles.find((f) => {
+          const src = typeof f.source === 'string' ? f.source : '';
+          return src === resolvedFilePath || src === filePath;
+        });
+        if (openedFile) {
+          this.store.dispatch(closeFile(openedFile.id));
+        }
+
+        console.log('[LifeAiCode] 已删除文件:', filePath, '→', resolvedFilePath);
+        return { success: true };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error('[LifeAiCode] 删除文件失败:', msg);
         return { success: false, error: msg };
       }
     });

@@ -415,45 +415,51 @@ function MessageCard({
       {/* Body */}
       {!collapsed && (
         <>
-          <div className="ai-card__body">
-            {children}
+          {/* §需求2：body 与 actions 并排的 row 容器——
+              之前是上下排列（body 在上、actions 独占下一行）。
+              现在让两者并排：body 占主宽度，actions 紧贴右侧（不另起一行），
+              复制按钮与正文内容在同一行布局中呈现。 */}
+          <div className="ai-card__body-row">
+            <div className="ai-card__body">
+              {children}
 
-            {/* Incomplete banner — only when done but truncated */}
-            {status !== 'running' && incomplete && (
-              <div className="ai-card__incomplete-banner" title={incompleteReasons?.join('、')}>
-                <AlertTriangle size={13} strokeWidth={2.2} />
-                <span>
-                  回答可能不完整{Array.isArray(incompleteReasons) && incompleteReasons.length > 0
-                    ? `（${incompleteReasons.join('、')}）`
-                    : ''}
-                </span>
-                {onContinue && (
-                  <button
-                    className="ai-card__continue-btn"
-                    onClick={(e) => { e.stopPropagation(); onContinue(); }}
-                    title="请求 LLM 继续完成回答"
-                  >
-                    <RefreshCw size={11} strokeWidth={2.2} />
-                    继续生成
-                  </button>
-                )}
+              {/* Incomplete banner — only when done but truncated */}
+              {status !== 'running' && incomplete && (
+                <div className="ai-card__incomplete-banner" title={incompleteReasons?.join('、')}>
+                  <AlertTriangle size={13} strokeWidth={2.2} />
+                  <span>
+                    回答可能不完整{Array.isArray(incompleteReasons) && incompleteReasons.length > 0
+                      ? `（${incompleteReasons.join('、')}）`
+                      : ''}
+                  </span>
+                  {onContinue && (
+                    <button
+                      className="ai-card__continue-btn"
+                      onClick={(e) => { e.stopPropagation(); onContinue(); }}
+                      title="请求 LLM 继续完成回答"
+                    >
+                      <RefreshCw size={11} strokeWidth={2.2} />
+                      继续生成
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Action bar — 与 ai-card__body 并排（同一个 row 容器内），对话完成时显示 */}
+            {/* 仅保留复制：主流大模型 API 无公开点赞/点踩反馈端点，故隐藏 */}
+            {showActions && onCopy && (
+              <div className="ai-card__actions">
+                <button
+                  className={`ai-card__action-btn ${copied ? 'ai-card__action-btn--active' : ''}`}
+                  onClick={(e) => { e.stopPropagation(); handleCopy(); }}
+                  title={copied ? '已复制' : '复制'}
+                >
+                  {copied ? <Check size={14} strokeWidth={2} /> : <Copy size={14} strokeWidth={1.8} />}
+                </button>
               </div>
             )}
           </div>
-
-          {/* Action bar — 与 ai-card__body 并排（兄弟关系），对话完成时显示 */}
-          {/* 仅保留复制：主流大模型 API 无公开点赞/点踩反馈端点，故隐藏 */}
-          {showActions && onCopy && (
-            <div className="ai-card__actions">
-              <button
-                className={`ai-card__action-btn ${copied ? 'ai-card__action-btn--active' : ''}`}
-                onClick={(e) => { e.stopPropagation(); handleCopy(); }}
-                title={copied ? '已复制' : '复制'}
-              >
-                {copied ? <Check size={14} strokeWidth={2} /> : <Copy size={14} strokeWidth={1.8} />}
-              </button>
-            </div>
-          )}
         </>
       )}
     </div>

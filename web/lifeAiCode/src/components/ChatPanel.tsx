@@ -72,6 +72,24 @@ function generateId(): string {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+/**
+ * §需求4：将毫秒格式化为 "3h12m32s" / "12m32s" / "32s" 形式。
+ * - < 1s 显示 "<1s"
+ * - < 1m 显示 "Ns"
+ * - < 1h 显示 "NmSs"
+ * - ≥ 1h 显示 "NhMmSs"
+ */
+function formatDuration(ms: number): string {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  if (totalSec < 1) return '<1s';
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}h${m}m${s}s`;
+  if (m > 0) return `${m}m${s}s`;
+  return `${s}s`;
+}
+
 function finalizeSteps(content: string): string {
   // 对话结束时，把仍在运行或未写 status 的步骤标记为完成，防止 spinner 一直转
   return content
@@ -208,6 +226,57 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
   const abortedRef = useRef<boolean>(false);
   const isProcessingRef = useRef<boolean>(false);
   isProcessingRef.current = isProcessing;
+  // §需求4：回复计时——
+  //  - questionStartTimeRef：用户发出问题的时间戳（毫秒）。
+  //    设为 ref 而不是 state，避免在每次 send 时触发额外渲染；
+  //    同时 LLM 长回复中不会被 React 状态批处理逻辑影响。
+  //  - lastResponseDuration：上一次回复的耗时（毫秒），用于在 status-indicator-zone
+  //    右侧渲染如 "3h12m32s" 的字符串。
+  //  - isResponseTimerActive：当前回复是否仍在计时（用户已发问但未结束）。
+  //    用于在等待中显示动态时间（每秒更新）。
+  const questionStartTimeRef = useRef<number | null>(null);
+  const [lastResponseDuration, setLastResponseDuration] = useState<number | null>(null);
+  const [isResponseTimerActive, setIsResponseTimerActive] = useState(false);
+
+  // §需求4：动态计时器——
+  // 当 isResponseTimerActive=true（即用户已发问、LLM 正在回复中）时，
+  // 每秒更新 lastResponseDuration，让 status-indicator-zone 右侧的时间实时跳动。
+  // 这样用户在等待 LLM 回复时能看到当前耗时（与最终耗时不同：等待中未结束）。
+  useEffect(() => {
+    if (!isResponseTimerActive) return;
+    const tick = () => {
+      const start = questionStartTimeRef.current;
+      if (start != null) {
+        setLastResponseDuration(Date.now() - start);
+      }
+    };
+    tick(); // 立即触发一次，避免首帧空白
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [isResponseTimerActive]);
+
+  // §需求4：回复计时器辅助函数——
+  //  - finalizeResponseTimer：对话自然结束（chatResponse done / suggestions / agentStatus done）时调用，
+  //    固化最终耗时并停掉动态 tick。
+  //  - clearResponseTimer：新建会话 / 切换历史时调用，清空所有计时器状态。
+  //  - stopResponseTimerOnError：错误 / 手动中止时调用，仅停掉动态 tick 不再记录耗时。
+  const finalizeResponseTimer = useCallback(() => {
+    const start = questionStartTimeRef.current;
+    if (start != null) {
+      setLastResponseDuration(Date.now() - start);
+    }
+    setIsResponseTimerActive(false);
+  }, []);
+
+  const stopResponseTimerOnError = useCallback(() => {
+    setIsResponseTimerActive(false);
+  }, []);
+
+  const clearResponseTimer = useCallback(() => {
+    questionStartTimeRef.current = null;
+    setIsResponseTimerActive(false);
+    setLastResponseDuration(null);
+  }, []);
 
   // 点击外部关闭下拉面板
   useEffect(() => {
@@ -444,6 +513,8 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
           if (msg.done) {
             // 对话结束：保留状态栏，显示"任务完成"
             setAgentStatus({ status: 'done', message: '任务完成', stepType: 'done' });
+            // §需求4：固化最终耗时并停掉动态 tick（chatResponse 是最常见的"完成"路径）
+            finalizeResponseTimer();
           }
           break;
         }
@@ -471,6 +542,8 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
           setIsProcessing(false);
           // 建议返回也视为对话结束，显示"任务完成"
           setAgentStatus({ status: 'done', message: '任务完成', stepType: 'done' });
+          // §需求4：固化最终耗时并停掉动态 tick
+          finalizeResponseTimer();
           break;
         }
         case 'suggestionStatus': {
@@ -510,6 +583,8 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
           setMessages((prev) => prev.filter((m) => !m.placeholder));
           setError(msg.message);
           setIsProcessing(false);
+          // §需求4：错误时停掉计时器（保留上次耗时，不覆盖为"无耗时"）
+          stopResponseTimerOnError();
           // 错误不显示完成状态，清空状态栏
           setAgentStatus(null);
           break;
@@ -558,6 +633,8 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
           setToolCalls([]);
           setPendingAgentEdits([]);
           setError(null);
+          // §需求4：新建会话时清空回复计时器与耗时显示
+          clearResponseTimer();
           break;
         }
         case 'openConfig': {
@@ -632,6 +709,8 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
             // Agent 任务完成：保留状态栏显示"任务完成"
             setAgentStatus({ status: 'done', message: msg.message || '任务完成', stepType: 'done' });
             setIsProcessing(false);
+            // §需求4：固化最终耗时并停掉动态 tick
+            finalizeResponseTimer();
           } else if (msg.status === 'error' || msg.status === 'cancelled') {
             // 错误/取消：不显示完成状态，清空状态栏
             setAgentStatus(null);
@@ -795,6 +874,8 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
     setPlanSteps([]);
     setPendingAgentEdits([]);
     setError(null);
+    // §需求4：切换历史会话时清空回复计时器与耗时显示
+    clearResponseTimer();
     setShowHistory(false);
   }, []);
 
@@ -896,6 +977,11 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
     setMessages((prev) => [...prev, userMsg, placeholderMsg]);
     setInput('');
     setIsProcessing(true);
+    // §需求4：用户发问时启动回复计时器——记录起点时间、激活动态 tick、清空上次结果。
+    // 这里在 setIsProcessing(true) 之后立即同步写入，确保 useEffect 调度时拿到一致状态。
+    questionStartTimeRef.current = Date.now();
+    setIsResponseTimerActive(true);
+    setLastResponseDuration(null);
     // 新对话开始时清空上一次的完成状态与执行记录，避免显示到新的占位消息上
     setAgentStatus(null);
     if (agentMode) {
@@ -1423,6 +1509,17 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
             userQuestions={userQuestions}
             onLocateMessage={handleLocateMessage}
           />
+          {/* §需求4：status-indicator-zone 右侧显示回复耗时——
+              等待中（isResponseTimerActive=true）实时跳动；已结束时显示最终耗时；
+              未发问时不渲染。 */}
+          {lastResponseDuration != null && (
+            <span
+              className={`status-indicator-zone__response-time ${isResponseTimerActive ? 'status-indicator-zone__response-time--active' : ''}`}
+              title={isResponseTimerActive ? '本次回复已运行时间' : '上次回复耗时'}
+            >
+              {formatDuration(lastResponseDuration)}
+            </span>
+          )}
         </div>
       )}
 

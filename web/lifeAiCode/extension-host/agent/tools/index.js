@@ -8,6 +8,7 @@ const searchFiles = require('./searchFiles');
 const executeShell = require('./executeShell');
 const applyEdit = require('./applyEdit');
 const writeFile = require('./writeFile');
+const deleteFile = require('./deleteFile');
 const readFileOutline = require('./readFileOutline');
 const readFileLines = require('./readFileLines');
 const searchInFile = require('./searchInFile');
@@ -20,6 +21,7 @@ module.exports = {
   execute_shell: executeShell,
   apply_edit: applyEdit,
   write_file: writeFile,
+  delete_file: deleteFile,
   read_file_outline: readFileOutline,
   read_file_lines: readFileLines,
   search_in_file: searchInFile,

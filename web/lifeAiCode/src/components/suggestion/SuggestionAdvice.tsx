@@ -24,6 +24,10 @@ interface SuggestionAdviceProps {
 export function SuggestionAdvice({ suggestion, onAccept, onReject }: SuggestionAdviceProps) {
   // §建议文字优先级：title 优先（LLM 总结的简短说明），缺失则用 description
   const text = (suggestion.title && suggestion.title.trim()) || suggestion.description || '代码建议';
+  // §需求1：description 是建议的详细内容，不能丢失——
+  // 当 description 与 title 不同（说明有详情），就小字体在 title 下方展示
+  const description = (suggestion.description || '').trim();
+  const showDescription = description && description !== text;
   const isResolved = suggestion.status !== 'pending';
 
   const handleAccept = (e: ReactMouseEvent<HTMLButtonElement>) => {
@@ -37,12 +41,24 @@ export function SuggestionAdvice({ suggestion, onAccept, onReject }: SuggestionA
 
   return (
     <div className={`suggestion-advice ${isResolved ? 'suggestion-advice--resolved' : ''}`}>
-      <span className="suggestion-advice__icon" aria-hidden>
-        <Lightbulb size={13} strokeWidth={2} />
-      </span>
-      <span className="suggestion-advice__text" title={text}>
-        {text}
-      </span>
+      <div className="suggestion-advice__main">
+        <span className="suggestion-advice__icon" aria-hidden>
+          <Lightbulb size={13} strokeWidth={2} />
+        </span>
+        <div className="suggestion-advice__content">
+          <span className="suggestion-advice__text" title={text}>
+            {text}
+          </span>
+          {/* §需求1：详情小字（最多 3 行折行，超出省略），用于补充说明 title
+              这里使用纯文本展示，description 若是 markdown 也只拿纯文本部分
+              （避免在此行内渲染复杂格式，与 SuggestionCard 的 DiffView 设计保持不同） */}
+          {showDescription && (
+            <span className="suggestion-advice__description" title={description}>
+              {description}
+            </span>
+          )}
+        </div>
+      </div>
       {suggestion.status === 'pending' ? (
         <div className="suggestion-advice__actions">
           <button

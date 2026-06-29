@@ -122,6 +122,20 @@ const TOOL_SCHEMAS = [
     },
   },
   {
+    name: 'delete_file',
+    description: '删除指定文件。删除不可逆，不会立即落盘，会先生成删除建议供用户确认。仅用于删除工作区内的文件。',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description: '要删除的文件路径',
+        },
+      },
+      required: ['path'],
+    },
+  },
+  {
     name: 'read_file_outline',
     description: '提取文件的结构大纲（函数/类/方法签名、import/export 列表），流式扫描可安全处理任意大小文件。当文件过大或不确定大小时，应优先使用此工具了解文件结构，再决定读取哪些行。',
     parameters: {
