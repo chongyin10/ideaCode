@@ -6,15 +6,24 @@ interface ToolCallLogProps {
   toolCalls: ToolCallInfo[];
 }
 
+// 文件读取类工具集合，这些工具的调用会聚合成组展示
+const FILE_READ_TOOLS = new Set([
+  'read_file',
+  'read_file_outline',
+  'read_file_lines',
+  'search_in_file',
+  'read_file_chunks',
+]);
+
 export function ToolCallLog({ toolCalls }: ToolCallLogProps) {
   if (toolCalls.length === 0) return null;
 
-  // 将连续的 read_file 调用聚合成组，减少界面占用
+  // 将连续的文件读取类调用聚合成组，减少界面占用
   const rows: Array<{ type: 'readGroup'; calls: ToolCallInfo[] } | { type: 'card'; call: ToolCallInfo }> = [];
   let currentReadGroup: ToolCallInfo[] = [];
 
   for (const call of toolCalls) {
-    if (call.tool === 'read_file') {
+    if (FILE_READ_TOOLS.has(call.tool)) {
       currentReadGroup.push(call);
       continue;
     }

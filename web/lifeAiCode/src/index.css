@@ -2638,8 +2638,91 @@ body {
 .suggestions-container {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  /* §需求：本轮从 10px 改为 6px——
+     - 完整卡片之间 6px 仍可辨；
+     - 而 advice 行（轻量建议）之间 6px 看起来更紧凑，不显得稀疏。
+     如果后续要回归卡片之间的更宽间距，可加 .suggestion-card + .suggestion-card 单独调整。 */
+  gap: 6px;
   margin-top: 8px;
+}
+
+/* ─── Suggestion Advice（轻量建议行，无具体文件位置时使用）─── */
+/* §需求：没有 filePath 的"建议"不走完整 SuggestionCard 卡片样式。
+   这里用单行布局 + 左侧强调线 + 💡 icon 让用户一眼分辨这是"建议"
+   而不是"文件变更"。整体高度约为 Card 的 60%，更克制。 */
+.suggestion-advice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px 6px 12px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border-left: 2px solid var(--border-default);
+  transition: background var(--duration-fast), border-color var(--duration-fast);
+}
+.suggestion-advice:hover {
+  background: var(--surface-1);
+  border-left-color: var(--accent-400, #60a5fa);
+}
+.suggestion-advice--resolved { opacity: 0.65; }
+.suggestion-advice--resolved:hover { opacity: 0.85; }
+
+/* 左侧 💡 icon —— 黄色调暗示这是"灵机一动"，与卡片的紫色 lang-badge 区分 */
+.suggestion-advice__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-full);
+  background: rgba(251, 191, 36, 0.10);
+  color: var(--warning-400, #fbbf24);
+  flex-shrink: 0;
+}
+
+/* 中间建议文字：italic + secondary，单行省略 */
+.suggestion-advice__text {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  font-style: italic;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+
+/* 右侧操作区：pending 显按动钮，resolved 显状态徽标 */
+.suggestion-advice__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+/* 状态徽标——复用卡片里 .suggestion-card__status 的语义，尺寸略小 */
+.suggestion-advice__status {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  flex-shrink: 0;
+}
+.suggestion-advice__status--accepted {
+  color: var(--accent-400);
+  background: rgba(59, 130, 246, 0.12);
+}
+.suggestion-advice__status--rejected {
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.04);
+  text-decoration: line-through;
+}
+.suggestion-advice__status--applied {
+  color: var(--success-400);
+  background: rgba(34, 197, 94, 0.12);
 }
 
 .suggestion-card {
@@ -5145,6 +5228,37 @@ body {
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.25);
   flex-shrink: 0;
+}
+
+.read-file-group__tool-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.5);
+  flex-shrink: 0;
+}
+
+.read-file-group__tool-label {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 500;
+  background: rgba(59, 130, 246, 0.12);
+  color: rgba(147, 197, 253, 0.9);
+  white-space: nowrap;
+}
+
+.read-file-group__detail {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-family: 'JetBrains Mono', monospace;
+  color: rgba(255, 255, 255, 0.45);
+  white-space: nowrap;
 }
 
 .read-file-group__path {

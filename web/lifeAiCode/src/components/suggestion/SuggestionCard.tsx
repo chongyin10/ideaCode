@@ -21,7 +21,6 @@ import { useState, useMemo, useRef, useEffect } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import { Check, X, ChevronDown, FileText, GitCompare } from 'lucide-react';
 import type { Suggestion, SuggestionChange } from '../../types';
-import { MarkdownContent } from '../MarkdownContent';
 import { DiffView } from './DiffView';
 
 /** 根据文件路径推断语言（与 DiffView.inferLanguage 保持一致） */
@@ -148,20 +147,11 @@ export function SuggestionCard({ suggestion, onAccept, onReject, onOpenDiffInEdi
 
   return (
     <div className={`suggestion-card ${suggestion.status !== 'pending' ? 'suggestion-card--resolved' : ''}`}>
-      {/* §需求：把 description 提到 header 之上，作为卡片最顶部内容。
-          渲染顺序：description → header → body（含所有 DiffView）。 */}
-      {suggestion.description && (
-        <div className="suggestion-card__description">
-          {/* §需求：传入 firstChange.filePath 作为 fileHint，让 description
-              里 LLM 输出的裸代码（未加 ``` 围栏 / 被双引号+<br> 包裹）
-              能优先用文件后缀推断语言而不是靠 detectCodeLanguage 猜测。 */}
-          <MarkdownContent
-            content={suggestion.description}
-            enableOptions={false}
-            fileHint={firstChange?.filePath}
-          />
-        </div>
-      )}
+      {/* §需求：取消 suggestion-card__description 的显示——卡片顶部不再展示 LLM 的说明性文本。
+          · 后端会把 description 内容（如 JSON 代码片段）自动拼接为 SuggestionChange
+            并归属到具体文件路径（见 suggestionGenerator._buildSuggestion + recentReadFiles），
+            因此 description 内容已折叠到 DiffView 的变更内容里，不再需要重复展示。
+          · description 字段仍保留在数据中（向后兼容），仅 UI 不再渲染。 */}
 
       <div
         className="suggestion-card__header"
@@ -177,7 +167,11 @@ export function SuggestionCard({ suggestion, onAccept, onReject, onOpenDiffInEdi
             §本轮调整：把「变更 + stats + 展开」包进 .suggestion-card__cluster 容器
             ，组内使用更小的 gap（4px）让三者看起来是一个紧凑 cluster，与左侧文件信息
             之间通过 spacer + 父级 gap(8px) 隔开。
-        */}
+
+            §分流说明：本组件仅在 suggestion.changes[0]?.filePath 存在时被 SuggestionList
+            调用（见 SuggestionList.tsx 路由）。无 filePath 的"建议"会走 SuggestionAdvice
+            （轻量建议行）。下面仍保留 firstChange 为空的 fallback（灰色 title）是防御性
+            写法，防止 SuggestionList 分流逻辑被误改后该组件完全崩在页面上。            */}
         {firstChange ? (
           <>
             <span className="suggestion-card__lang-badge">{formatLangBadge(language)}</span>

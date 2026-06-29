@@ -121,6 +121,94 @@ const TOOL_SCHEMAS = [
       required: ['path', 'content'],
     },
   },
+  {
+    name: 'read_file_outline',
+    description: '提取文件的结构大纲（函数/类/方法签名、import/export 列表），流式扫描可安全处理任意大小文件。当文件过大或不确定大小时，应优先使用此工具了解文件结构，再决定读取哪些行。',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description: '文件路径',
+        },
+      },
+      required: ['path'],
+    },
+  },
+  {
+    name: 'read_file_lines',
+    description: '读取文件中指定行范围的内容（1-based 行号）。流式读取，可安全处理超大文件的局部读取。单次最多 500 行。典型用法：先用 read_file_outline 获取结构找到目标行号，再用本工具精读。',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description: '文件路径',
+        },
+        startLine: {
+          type: 'number',
+          description: '起始行号（≥1）',
+        },
+        endLine: {
+          type: 'number',
+          description: '结束行号（≥startLine，含本行，单次不超过 500 行）',
+        },
+      },
+      required: ['path', 'startLine', 'endLine'],
+    },
+  },
+  {
+    name: 'search_in_file',
+    description: '在单个文件内搜索匹配内容（grep 语义），返回匹配行+行号+上下文。流式扫描可安全搜索超大文件。适合在大文件中定位特定内容。与 search_files 的区别：search_files 递归搜索多个文件，本工具深入搜索单个文件并返回上下文。',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description: '文件路径',
+        },
+        pattern: {
+          type: 'string',
+          description: '搜索模式（字符串或正则表达式）',
+        },
+        isRegex: {
+          type: 'boolean',
+          description: '是否为正则表达式，默认 true',
+        },
+        caseSensitive: {
+          type: 'boolean',
+          description: '是否区分大小写，默认 true',
+        },
+        maxMatches: {
+          type: 'number',
+          description: '最大返回匹配数，默认 50，最大 200',
+        },
+      },
+      required: ['path', 'pattern'],
+    },
+  },
+  {
+    name: 'read_file_chunks',
+    description: '将文件按固定行数分块，按 chunkIndex 读取指定块（从 0 开始）。适合顺序遍历大文件。默认每块 200 行，最多 500 行。',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description: '文件路径',
+        },
+        chunkIndex: {
+          type: 'number',
+          description: '块索引（从 0 开始）',
+        },
+        chunkSize: {
+          type: 'number',
+          description: '每块行数，默认 200，最大 500',
+        },
+      },
+      required: ['path', 'chunkIndex'],
+    },
+  },
 ];
 
 /**

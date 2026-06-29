@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import type { Suggestion, SuggestionChange } from '../types';
-import { SuggestionCard } from './suggestion';
+import { SuggestionCard, SuggestionAdvice } from './suggestion';
 import { toAbsolutePathKey } from '../utils/pathNormalize';
 
 interface SuggestionListProps {
@@ -64,16 +64,35 @@ export function SuggestionList({ suggestions, onAccept, onReject, onOpenDiffInEd
 
   return (
     <div className="suggestions-container">
-      {deduped.map((s) => (
-        <SuggestionCard
-          key={s.id}
-          suggestion={s}
-          onAccept={onAccept}
-          onReject={onReject}
-          onOpenDiffInEditor={onOpenDiffInEditor}
-          loading={s.status === 'pending'}
-        />
-      ))}
+      {deduped.map((s) => {
+        // §需求：按"是否有具体文件位置"分流渲染
+        //  - 有 filePath：走 SuggestionCard（完整卡片，带变更/展开/状态）
+        //  - 无 filePath：走 SuggestionAdvice（轻量建议行，无变更/展开）
+        // 双重判断：先看 changes[0]?.filePath，再看 description（兜底，防御 LLM
+        // 把建议文字塞到 description 而 changes 为空的情况）
+        const hasFilePath = !!(s.changes?.[0]?.filePath && s.changes[0].filePath.trim());
+        if (hasFilePath) {
+          return (
+            <SuggestionCard
+              key={s.id}
+              suggestion={s}
+              onAccept={onAccept}
+              onReject={onReject}
+              onOpenDiffInEditor={onOpenDiffInEditor}
+              loading={s.status === 'pending'}
+            />
+          );
+        }
+        return (
+          <SuggestionAdvice
+            key={s.id}
+            suggestion={s}
+            onAccept={onAccept}
+            onReject={onReject}
+            loading={s.status === 'pending'}
+          />
+        );
+      })}
     </div>
   );
 }

@@ -43,6 +43,15 @@ class LlmAdapter {
 - 你只能访问工作区内的文件和目录。
 - 当你认为任务完成时，输出最终总结。
 
+## 文件读取策略
+根据文件大小和目的选择合适的工具：
+1. 小文件（已知较小）或需读取完整文件 → read_file
+2. 不确定文件大小或文件较大 → 先调 read_file_outline 获取结构大纲
+3. 知道行号范围 → read_file_lines（单次≤500行）
+4. 知道要找的内容但不知道行号 → search_in_file
+5. 需要顺序通读大文件 → read_file_chunks 逐块读取
+注意：read_file 返回 largeFile 标记时，说明文件过大已切换为大纲模式，不要重复调用 read_file，改用上述分片工具。
+
 ## 步骤可视化
 在分析过程中可以使用以下标签让 IDE 实时显示进度：
 - 读取文件：<step type="read" target="path/to/file.ts">读取</step>
@@ -59,6 +68,15 @@ class LlmAdapter {
 - 修改文件前必须先调用 read_file 读取当前内容，再调用 apply_edit 生成建议。
 - 对于批量修改，先 search_files，再 read_file，再 apply_edit。
 - 你只能访问工作区内的文件和目录。
+
+## 文件读取策略
+根据文件大小和目的选择合适的工具：
+1. 小文件（已知较小）或需读取完整文件 → read_file
+2. 不确定文件大小或文件较大 → 先调 read_file_outline 获取结构大纲
+3. 知道行号范围 → read_file_lines（单次≤500行）
+4. 知道要找的内容但不知道行号 → search_in_file
+5. 需要顺序通读大文件 → read_file_chunks 逐块读取
+注意：read_file 返回 largeFile 标记时，说明文件过大已切换为大纲模式，不要重复调用 read_file，改用上述分片工具。
 
 ## 可用工具
 ${toolSchemas}

@@ -7,6 +7,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const SafeFileReader = require('../safeFileReader.cjs');
 
 async function readFile(args, context) {
   const { path: filePathInput } = args || {};
@@ -35,29 +36,26 @@ async function readFile(args, context) {
       return { success: false, error: `路径不是文件: ${filePathInput}` };
     }
 
-    // 限制大文件读取
+    // 大文件智能路由：超过 500KB 时不返回截断内容，
+    // 而是返回文件结构大纲 + 使用建议，让大模型自适应选择分片读取工具
     const MAX_SIZE = 500 * 1024; // 500KB
     if (stat.size > MAX_SIZE) {
-      // Bug 修复：原代码先 readFile 整个文件再 slice，超大文件（如 minified bundle、
-      // source map、大日志）会在 readFile 阶段触发 RangeError: Invalid string length。
-      // 改用 createReadStream 只读取前 MAX_SIZE 字节，避免读取整个大文件。
-      const head = await new Promise((resolve, reject) => {
-        const stream = fs.createReadStream(targetPath, {
-          start: 0,
-          end: MAX_SIZE - 1,
-          encoding: 'utf8',
-        });
-        const parts = [];
-        stream.on('data', (chunk) => parts.push(chunk));
-        stream.on('end', () => resolve(parts.join('')));
-        stream.on('error', reject);
-      });
+      const language = SafeFileReader.detectLanguage(targetPath);
+      const outline = await SafeFileReader.extractOutline(targetPath, language);
+      const sizeKB = (stat.size / 1024).toFixed(1);
       return {
         success: true,
         path: filePathInput,
         size: stat.size,
+        language,
+        totalLines: outline.totalLines,
+        largeFile: true,
         truncated: true,
-        content: head + '\n\n...（文件过大，已截断）...',
+        content: '',
+        outline: outline.symbols,
+        imports: outline.imports,
+        exports: outline.exports,
+        suggestion: `文件较大（${sizeKB}KB / ${outline.totalLines} 行），已返回结构大纲而非全文。请使用 read_file_lines(path, startLine, endLine) 读取感兴趣的行范围（单次≤500行），或使用 search_in_file(path, pattern) 搜索特定内容。`,
       };
     }
 

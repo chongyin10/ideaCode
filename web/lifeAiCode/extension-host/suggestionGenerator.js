@@ -35,6 +35,39 @@ class SuggestionGenerator {
   }
 
   /**
+   * §需求：上下文中的「最近读取文件」列表，用于在 LLM 输出的 suggestion 块
+   * 缺少 `// 文件名:` 时自动推断 filePath，避免出现无法定位文件的卡片。
+   *
+   * 来源优先级（从高到低）：
+   * 1. context.recentReadFiles —— toolExecutor 跟踪的 Agent 读取类工具历史（最近 10 个）
+   * 2. context.activeFile.filePath —— IDE 当前打开的文件（普通 LLM 模式下的 fallback）
+   * 3. context.relatedFiles[*].filePath —— IDE 上下文中的相关文件
+   *
+   * 语义：返回数组第一个元素 = 最近一次读取的文件路径。
+   */
+  _getRecentReadFiles(context) {
+    if (!context) return [];
+    const seen = new Set();
+    const out = [];
+    const push = (p) => {
+      if (typeof p !== 'string' || !p) return;
+      if (seen.has(p)) return;
+      seen.add(p);
+      out.push(p);
+    };
+    if (Array.isArray(context.recentReadFiles)) {
+      for (const p of context.recentReadFiles) push(p);
+    }
+    if (context.activeFile && context.activeFile.filePath) push(context.activeFile.filePath);
+    if (Array.isArray(context.relatedFiles)) {
+      for (const f of context.relatedFiles) {
+        if (f && f.filePath) push(f.filePath);
+      }
+    }
+    return out;
+  }
+
+  /**
    * 创建新的建议
    */
   createSuggestion(params) {
@@ -194,6 +227,35 @@ class SuggestionGenerator {
         startLine: 0,
         endLine: 0,
       });
+    }
+
+    // §需求：当 LLM 经历了「读取文件 -> 变更文件」的流程，但 suggestion 块
+    // 没有明确指定 `// 文件名:` 或未生成 diff 行时，自动从上下文推断 filePath，
+    // 避免出现无法定位到具体文件的 SuggestionCard。
+    const recentReadFiles = this._getRecentReadFiles(context);
+    const fallbackFile = recentReadFiles[0] || '';
+    if (fallbackFile) {
+      for (const c of changes) {
+        if (!c.filePath) c.filePath = fallbackFile;
+      }
+    }
+
+    // §需求：description-only 场景——LLM 输出里只有说明性文本（包含 JSON 代码片段），
+    // 未生成任何 diff 变更行。自动拼接一个 change，让前端可以渲染出定位到
+    // 最近读取文件的 SuggestionCard。original=空 + modified=description，
+    // DiffView 会按全新增处理，用户在卡片中能看到对应的文件路径。
+    if (changes.length === 0 && description.trim() && fallbackFile) {
+      const descText = description.trim();
+      changes.push({
+        filePath: fallbackFile,
+        original: '',
+        modified: descText,
+        explanation: (title && title !== '代码建议') ? title : descText.slice(0, 80),
+        startLine: 0,
+        endLine: 0,
+      });
+      // 已合并到 change，避免重复展示
+      description = '';
     }
 
     if (changes.length === 0 && !description) return null;

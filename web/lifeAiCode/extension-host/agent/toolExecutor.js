@@ -24,12 +24,51 @@ class ToolExecutor {
    * @param {object} args 工具参数
    * @returns {Promise<object>} { success, ...result }
    */
+  /**
+   * §需求：读取类工具名单——执行这类工具时会把 args.path 记入 context.recentReadFiles，
+   * suggestionGenerator 用它做 filePath 兑底推断。
+   */
+  static get READ_FILE_TOOLS() {
+    return new Set([
+      'read_file',
+      'read_file_outline',
+      'read_file_lines',
+      'read_file_chunks',
+      'search_in_file',
+    ]);
+  }
+
+  /**
+   * §需求：记录读取类工具调用过的路径，供 suggestionGenerator 推断 filePath。
+   * - 保序、去重、保留最近 10 个。
+   * - 若同一路径连续多次读取，只保留一次。
+   */
+  _trackRecentReadFile(tool, args) {
+    if (!ToolExecutor.READ_FILE_TOOLS.has(tool)) return;
+    if (!args || typeof args.path !== 'string' || !args.path) return;
+    const filePath = args.path;
+    if (!this.context.recentReadFiles || !Array.isArray(this.context.recentReadFiles)) {
+      this.context.recentReadFiles = [];
+    }
+    const list = this.context.recentReadFiles;
+    // 移除已存在的同路径（保持“最近”语义）
+    const idx = list.indexOf(filePath);
+    if (idx !== -1) list.splice(idx, 1);
+    // 推入头部
+    list.unshift(filePath);
+    // 保留最近 10 个
+    if (list.length > 10) list.length = 10;
+  }
+
   async execute(name, args) {
     const startTime = Date.now();
     const tool = this.registry.get(name);
 
     // 通知 WebView 开始执行
     this._notifyToolCall(name, args, 'running');
+
+    // §需求：跟踪读取类工具的路径，以便后续 suggestion 兑底推断 filePath
+    this._trackRecentReadFile(name, args);
 
     if (!tool) {
       const error = `未知工具: ${name}`;
@@ -129,9 +168,13 @@ class ToolExecutor {
     let summary = '';
     if (result) {
       if (result.error) summary = result.error;
+      else if (result.largeFile) summary = `大文件模式: ${result.symbols?.length || 0} 符号, ${result.totalLines || 0} 行`;
+      else if (result.outline !== undefined) summary = `大纲: ${result.symbols?.length || 0} 符号, ${result.totalLines || 0} 行`;
+      else if (result.content !== undefined && result.startLine !== undefined) summary = `L${result.startLine}-L${result.endLine}, ${result.content.length} 字符`;
+      else if (result.content !== undefined && result.chunkIndex !== undefined) summary = `块 ${result.chunkIndex}/${Math.max(0, (result.totalChunks || 1) - 1)}, ${result.content.length} 字符`;
+      else if (result.matches !== undefined) summary = `找到 ${result.matchCount || result.totalMatches || 0} 处匹配`;
       else if (result.content !== undefined) summary = `共 ${result.content.length} 字符`;
       else if (result.tree !== undefined) summary = `共 ${result.fileCount || 0} 个文件/目录`;
-      else if (result.matches !== undefined) summary = `找到 ${result.matchCount || 0} 处匹配`;
       else if (result.output !== undefined) summary = result.output.slice(0, 200);
       else if (result.message) summary = result.message;
     }
@@ -155,7 +198,7 @@ class ToolExecutor {
     const clone = { ...result };
     // 大字段保留但限制长度/数量，避免推给 WebView 的消息过大导致渲染卡顿
     // matches（searchFiles 返回）可能包含大量匹配项，单独处理数组截断
-    for (const key of ['content', 'output', 'tree', 'matches']) {
+    for (const key of ['content', 'output', 'tree', 'matches', 'outline', 'symbols', 'imports', 'exports']) {
       const v = clone[key];
       if (typeof v === 'string' && v.length > 1000) {
         clone[key] = v.slice(0, 1000) + '\n...（已截断）...';

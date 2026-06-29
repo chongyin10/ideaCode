@@ -518,7 +518,7 @@ function ReasoningBlock({ content }: { content: string }) {
   }, [content]);
 
   return (
-    <div className="reasoning" style={{ padding: '14px 20px' }}>
+    <div className="reasoning" style={{ padding: '6px 10px' }}>
       <button
         className="reasoning-header"
         onClick={() => setOpen(!open)}

@@ -35,10 +35,12 @@ class AgentRuntime {
    */
   constructor(llmClient, context = {}) {
     this.llmClient = llmClient;
-    this.context = context;
+    // §需求：初始化 recentReadFiles —— toolExecutor 在调用读取类工具时会向该数组推入路径，
+    // suggestionGenerator 用它兑底推断 suggestion.changes[i].filePath。
+    this.context = { ...context, recentReadFiles: Array.isArray(context.recentReadFiles) ? context.recentReadFiles : [] };
     this.registry = new ToolRegistry();
     this.auditLogger = new AuditLogger();
-    this.executor = new ToolExecutor(this.registry, context, this.auditLogger);
+    this.executor = new ToolExecutor(this.registry, this.context, this.auditLogger);
     this.adapter = new LlmAdapter(llmClient);
     this.planner = new Planner();
     this.isRunning = false;
