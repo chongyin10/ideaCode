@@ -21,6 +21,15 @@ import { ShellContext } from './ShellContext';
 import { REGISTERED_LANGUAGES, LANGUAGE_DISPLAY_NAMES, detectCodeLanguage } from './languages';
 import { getMatchingSkills } from './skills/registry';
 import type { CodeBlockSkillContext } from './skills/types';
+import { isShellCommand } from './shellDetect';
+
+/* shell 系列语言集合——当 markdown fence 标了其中之一，但代码本体并不是
+* shell 命令（被 isShellCommand 否决）时，就回退到 detectCodeLanguage
+* 重新识别为真实语言（如 typescript / javascript / python 等）。
+* 这样可以避免 LLM 把 JS/TS 代码误标为 ```bash 时，仍然显示 bash 高亮
+* + 错误语言标签。ShellSkill.canActivate 已经在按钮层做了同样判断，这里
+* 把"语言显示/语法高亮"层也对齐，保证 UI 与执行风险判断一致。      */
+const SHELL_LANGUAGE_SET = new Set(['bash', 'shell', 'sh', 'zsh', 'fish']);
 
 interface CodeBlockProps {
   language: string;
@@ -28,7 +37,7 @@ interface CodeBlockProps {
 }
 
 export function CodeBlock({ language, children }: CodeBlockProps) {
-  // 从 ShellContext 获取 shell 执行能力（绕过 ReactMarkdown prop 链）
+  // 从 ShellContext 获取 shell 执行能力（绕过自定义 hast 渲染的 prop 链）
   const { shellOutputs, onExecuteShell, onKillShell } = useContext(ShellContext);
   const code = String(children).replace(/\n$/, '');
   const [copied, setCopied] = useState(false);
@@ -43,13 +52,32 @@ export function CodeBlock({ language, children }: CodeBlockProps) {
     } catch { /* ignore */ }
   };
 
-  // 语言归一化：已注册用原值，未注册尝试自动检测，最后回退 text
-  const isKnownLang = language && REGISTERED_LANGUAGES.has(language);
-  const detectedLang = !isKnownLang ? detectCodeLanguage(code) : undefined;
-  const resolvedLang = isKnownLang ? language : (detectedLang || 'text');
-  const displayLang = isKnownLang
-    ? (LANGUAGE_DISPLAY_NAMES[language] || language)
-    : (detectedLang ? (LANGUAGE_DISPLAY_NAMES[detectedLang] || detectedLang) : '');
+  // 语言归一化：已注册用原值，未注册尝试自动检测，最后回退 text。
+  // 关键：shell 系列语言（bash/shell/sh/zsh/fish）必须通过 isShellCommand
+  // 强确认；否则 LLM 把 JS/TS 错标为 ```bash 时，仍会渲染为 bash 高亮
+  // + 显示 bash 标签（虽然 ShellSkill 会否决执行按钮，但视觉上已经误导用户）。
+  const isKnownLang = !!(language && REGISTERED_LANGUAGES.has(language));
+  const isShellLang = isKnownLang && SHELL_LANGUAGE_SET.has(language);
+  const actuallyShell = isShellLang ? isShellCommand(code) : true;
+
+  let resolvedLang: string;
+  if (isShellLang && !actuallyShell) {
+    // 显式 shell 语言但代码本体不是 shell → 重新识别，避免误显示 bash
+    const detected = detectCodeLanguage(code);
+    // 二次保险：detectCodeLanguage 偶尔也会把 import 错判成 bash，
+    // 这里再剥掉一次 shell 系列结果，强制回到非 shell 语言
+    resolvedLang = detected && !SHELL_LANGUAGE_SET.has(detected)
+      ? detected
+      : 'text';
+  } else if (isKnownLang) {
+    resolvedLang = language!;
+  } else {
+    resolvedLang = detectCodeLanguage(code) || 'text';
+  }
+
+  const displayLang = resolvedLang && resolvedLang !== 'text'
+    ? (LANGUAGE_DISPLAY_NAMES[resolvedLang] || resolvedLang)
+    : '';
 
   // 构造 Skill 上下文
   const skillCtx: CodeBlockSkillContext = {

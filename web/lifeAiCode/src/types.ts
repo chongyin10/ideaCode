@@ -18,6 +18,16 @@ export interface ChatMessage {
 
 export type FileStatus = 'modified' | 'created' | 'deleted';
 
+/** §变更文件列表中的状态标签
+ * - completed: 已完成（AI 已应用修改，默认态）
+ * - applied:   已应用（用户在弹窗里点击了"接受"，明确确认改动保留）
+ * - reverted:  已撤销（用户主动撤销改动，文件已恢复到 original）
+ * - reading:   读写中（正在写入/读取磁盘，带脉动动画）
+ * - queued:    排队中（等待依赖前置文件先完成）
+ * - failed:    失败（磁盘写入失败或权限错误等）
+ */
+export type FileChangeStatus = 'completed' | 'applied' | 'reverted' | 'reading' | 'queued' | 'failed';
+
 export type StepStatus = 'running' | 'done' | 'error';
 export type StepType = 'read' | 'think' | 'agent' | 'edit' | 'run';
 
@@ -57,6 +67,11 @@ export interface SuggestionChange {
   explanation: string;
   startLine: number;
   endLine: number;
+  /** §变更文件状态标签：用于状态栏"变更文件"列表右侧色块展示
+   *  可选；缺省时由 ChatPanel 兜底推断（已完成） */
+  status?: FileChangeStatus;
+  /** §失败原因（仅 status === 'failed' 时使用），显示在 tag 的 title 上 */
+  errorMessage?: string;
 }
 
 export interface CodeContext {

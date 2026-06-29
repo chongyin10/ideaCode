@@ -739,8 +739,17 @@ export class ExtensionBridge {
         return { success: false, error: '没有打开工作区' };
       }
 
-      // 浏览器环境不能用 Node 的 path.resolve，用 normalizePathForCompare 规范化后比较
-      const normalizedTarget = normalizePathForCompare(filePath);
+      // §需求：AI 修改文件时 extension-host 传入的 filePath 可能是相对路径
+      // （如 "src/pages/Home.tsx"），与绝对工作区根路径拼接后做前缀校验。
+      // 注意：浏览器环境不能用 Node 的 path.resolve，用 normalizePathForCompare
+      // 规范化后比较。
+      // 先用 startsWith('/' | '\\\\') 粗略判断"是否已经是绝对路径"（兼容 Windows 盘符），
+      // 不复用 isPath() 类型守卫——它对 string 类型推断为 never，会报类型错误。
+      const looksAbsolute = /^[a-zA-Z]:[\\\\/]/.test(filePath) || filePath.startsWith('/');
+      const resolvedFilePath = looksAbsolute
+        ? filePath
+        : `${workspaceRoot.replace(/[/\\]+$/, '')}/${filePath.replace(/^[/\\]+/, '')}`;
+      const normalizedTarget = normalizePathForCompare(resolvedFilePath);
       const normalizedRoot = normalizePathForCompare(workspaceRoot);
       if (!normalizedTarget.startsWith(normalizedRoot)) {
         console.error('[LifeAiCode] applyChanges: 拒绝写入工作区外', filePath);
@@ -764,7 +773,8 @@ export class ExtensionBridge {
 
           let currentContent = '';
           try {
-            currentContent = await fsReadFile(filePath);
+            // §使用 resolve 后的绝对路径读取文件，避免后续 fsService 拒绝相对路径
+            currentContent = await fsReadFile(resolvedFilePath);
           } catch (readErr) {
             const msg = readErr instanceof Error ? readErr.message : String(readErr);
             console.error('[LifeAiCode] applyChanges: 读取文件失败', msg);
@@ -789,14 +799,14 @@ export class ExtensionBridge {
           }
         }
 
-        // 使用文件服务写入文件
-        await fsWriteFile(filePath, newContent);
+        // 使用文件服务写入文件（用 resolve 后的绝对路径，避免 fsService 拒绝相对路径）
+        await fsWriteFile(resolvedFilePath, newContent);
 
-        // 更新 Redux 状态
+        // 更新 Redux 状态：openedFile.source 存的是绝对路径，用 resolvedFilePath 匹配
         const state = this.store.getState().workspace;
         const openedFile = state.openedFiles.find((f) => {
           const src = typeof f.source === 'string' ? f.source : '';
-          return src === filePath;
+          return src === resolvedFilePath || src === filePath;
         });
 
         if (openedFile) {
@@ -804,7 +814,7 @@ export class ExtensionBridge {
           this.store.dispatch(markFileSaved(openedFile.id));
         }
 
-        console.log('[LifeAiCode] 已应用变更到:', filePath);
+        console.log('[LifeAiCode] 已应用变更到:', filePath, '→', resolvedFilePath);
         return { success: true };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

@@ -31,6 +31,21 @@ function inferLanguage(filePath: string): string {
   return map[ext] || 'clike';
 }
 
+/**
+ * 需求1：把 inferLanguage 返回的全名压缩为 badge 用的缩写。
+ * - javascript → JS
+ * - typescript → TS
+ *
+ * 重要：只用于 badge 文本展示，syntax highlighter 仍需调用 inferLanguage
+ * 拿全名做高亮映射（react-syntax-highlighter 不支持 JS/TS 缩写）。
+ */
+function formatLangBadge(language: string): string {
+  const lower = (language || '').toLowerCase();
+  if (lower === 'javascript') return 'JS';
+  if (lower === 'typescript') return 'TS';
+  return language;
+}
+
 interface DiffLine {
   oldLine: number | null;
   newLine: number | null;
@@ -133,11 +148,26 @@ function DiffRow({ line, side, isHighlight, isMuted, language }: {
   );
 }
 
-export function DiffView({ change, onOpenDiffInEditor }: {
+export function DiffView({ change, onOpenDiffInEditor, collapsed: collapsedProp, onToggleCollapsed }: {
   change: SuggestionChange;
   onOpenDiffInEditor: (change: SuggestionChange) => void;
+  /**
+   * §需求3：受控模式——父组件（SuggestionCard）传入折叠状态。
+   * - 传 undefined 时使用组件内部状态（保持 DiffView 独立可用）
+   * - 传 boolean 时使用外部状态（让 SuggestionCard header「展开」按钮
+   *   与每个 DiffView 自己的「展开」按钮做同一件事）
+   */
+  collapsed?: boolean;
+  /** §需求3：用户点击 DiffView 自身的「展开」按钮时通知父组件 */
+  onToggleCollapsed?: () => void;
 }) {
-  const [collapsed, setCollapsed] = useState(true);
+  // §需求3：独立使用时（无受控 prop）保留默认折叠
+  const [internalCollapsed, setInternalCollapsed] = useState(true);
+  const collapsed = collapsedProp ?? internalCollapsed;
+  const handleToggle = () => {
+    if (onToggleCollapsed) onToggleCollapsed();
+    else setInternalCollapsed(!internalCollapsed);
+  };
   const language = useMemo(() => inferLanguage(change.filePath), [change.filePath]);
   const diffLines = useMemo(
     () => computeLineDiff(change.original, change.modified),
@@ -153,7 +183,7 @@ export function DiffView({ change, onOpenDiffInEditor }: {
         <div className="diff-view__file-info">
           <FileText size={12} strokeWidth={1.8} />
           <span className="diff-view__file-path">{change.filePath}</span>
-          <span className="diff-view__lang-badge">{language}</span>
+          <span className="diff-view__lang-badge">{formatLangBadge(language)}</span>
         </div>
         <div className="diff-view__stats">
           {removedCount > 0 && <span className="diff-view__stat diff-view__stat--removed">−{removedCount}</span>}
@@ -168,7 +198,7 @@ export function DiffView({ change, onOpenDiffInEditor }: {
           </button>
           <button
             className="diff-view__toggle"
-            onClick={() => setCollapsed(!collapsed)}
+            onClick={handleToggle}
             title={collapsed ? '展开差异' : '折叠差异'}
           >
             {collapsed ? '展开' : '折叠'}
@@ -178,7 +208,13 @@ export function DiffView({ change, onOpenDiffInEditor }: {
 
       {change.explanation && (
         <div className="diff-view__explanation">
-          <MarkdownContent content={change.explanation} enableOptions={false} />
+          {/* §需求：传入 change.filePath 作为 fileHint，让每个 diff 的解释文本里
+              LLM 输出的裸代码能优先用文件后缀推断语言。 */}
+          <MarkdownContent
+            content={change.explanation}
+            enableOptions={false}
+            fileHint={change.filePath}
+          />
         </div>
       )}
 

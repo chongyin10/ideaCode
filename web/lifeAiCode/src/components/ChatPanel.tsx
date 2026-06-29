@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import type { ChatMessage, CodeContext, WebViewRequest, ExtensionMessage, LlmConfig, ProviderType, ToolCallInfo, SuggestionChange } from '../types';
+import type { ChatMessage, CodeContext, WebViewRequest, ExtensionMessage, LlmConfig, ProviderType, ToolCallInfo, SuggestionChange, FileChangeStatus } from '../types';
 import { PROVIDER_META, getConnectionStatusColor, getModelContextWindow } from '../types';
 import { SuggestionList } from './SuggestionList';
 import { ContentBlocks } from './ContentBlocks';
@@ -203,6 +203,11 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
   currentHistoryIdRef.current = currentHistoryId;
   const messagesRef = useRef<ChatMessage[]>(messages);
   messagesRef.current = messages;
+  // §需求3：中止标志位。点击暂停时立即置 true，chatResponse 等消息回调看到 true
+  // 就直接丢弃后续内容（阻断输出），避免后端无响应时 UI 卡死在 isProcessing=true
+  const abortedRef = useRef<boolean>(false);
+  const isProcessingRef = useRef<boolean>(false);
+  isProcessingRef.current = isProcessing;
 
   // 点击外部关闭下拉面板
   useEffect(() => {
@@ -281,15 +286,21 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
   // 自动滚动到底部：用 rAF 节流 + 直接设置 scrollTop，避免高频 scrollIntoView 导致抖动
   // §需求1：改用 ref 而非 state 判断是否吸附底部，避免 React 渲染延迟导致
   // 自动滚动与用户向上滚动冲突（用户需大力滑动才能克服自动滚动）
+  // §需求1（连续修复）：当 isProcessing（LLM 正在回复）时，无论 isPinnedRef 是什么
+  // 都强制跟随底部。解决“用户在历史中浏览过、然后发新消息时 auto-scroll 不生效”的问题。
   useEffect(() => {
-    if (!isPinnedRef.current) return;
     const el = messagesContainerRef.current;
     if (!el) return;
+    // 非回复态且用户已离开底部较远时，不强制滚动
+    if (!isPinnedRef.current && !isProcessing) return;
     if (scrollRafRef.current != null) cancelAnimationFrame(scrollRafRef.current);
     scrollRafRef.current = requestAnimationFrame(() => {
       // rAF 回调中再次检查 ref——用户可能在此帧内滚动了
-      if (isPinnedRef.current) {
+      // 但只要在 isProcessing（LLM 回复中），始终保持跟随底部
+      if (isPinnedRef.current || isProcessing) {
         el.scrollTop = el.scrollHeight;
+        // 连续跟随：实际滚动后保持 pinned，让后续 content 能继续跟随
+        isPinnedRef.current = true;
       }
       scrollRafRef.current = null;
     });
@@ -299,7 +310,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
         scrollRafRef.current = null;
       }
     };
-  }, [messages, toolCalls, agentStatus]);
+  }, [messages, toolCalls, agentStatus, isProcessing]);
 
   // §需求1：监听 wheel/touch/scroll 事件，实时检测用户滚动方向
   // wheel/touchmove 在 scroll 之前触发，能立即将 isPinnedRef 置 false，
@@ -307,7 +318,11 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
   useEffect(() => {
     const el = messagesContainerRef.current;
     if (!el) return;
-    const threshold = 40;
+    // §需求1（连续修复）：threshold 从 40 提升到 120。
+    // 原阈值太严格，LLM 输出中微小高度变化（如 <p> 增加一个字符、
+    // 代码块渲染高度跳变）会让 distance 短暂超 40 误判为“离开底部”，
+    // 进而 auto-scroll 提前退出。
+    const threshold = 120;
 
     const updatePinned = () => {
       const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
@@ -317,8 +332,10 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
     };
 
     // wheel 事件：用户向上滚动时立即取消吸附
+    // §需求1（连续修复）：需考虑 isProcessing 中——此时不取消 pinned，
+    // 避免 LLM 回复中鼠标微动 / 边缘 wheel 事件误中断 auto-scroll
     const handleWheel = (e: WheelEvent) => {
-      if (e.deltaY < 0 && isPinnedRef.current) {
+      if (e.deltaY < 0 && isPinnedRef.current && !isProcessing) {
         isPinnedRef.current = false;
         setUserScrolledUp(true);
       }
@@ -331,13 +348,22 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
     };
     const handleTouchMove = (e: TouchEvent) => {
       const deltaY = touchStartY - (e.touches[0]?.clientY ?? 0);
-      if (deltaY < 0 && isPinnedRef.current) {
+      if (deltaY < 0 && isPinnedRef.current && !isProcessing) {
         isPinnedRef.current = false;
         setUserScrolledUp(true);
       }
     };
 
-    const handleScroll = () => updatePinned();
+    const handleScroll = () => {
+      // §需求1（连续修复）：isProcessing 中程序触发的滚动（auto-scroll 设置的
+      // scrollTop）不应被当作“用户离开底部”。仅在非回复态下才根据 distance
+      // 更新 pinned。回复中始终保持 pinned=true。
+      if (isProcessing) {
+        isPinnedRef.current = true;
+        return;
+      }
+      updatePinned();
+    };
 
     el.addEventListener('wheel', handleWheel, { passive: true });
     el.addEventListener('touchstart', handleTouchStart, { passive: true });
@@ -351,7 +377,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
       el.removeEventListener('touchmove', handleTouchMove);
       el.removeEventListener('scroll', handleScroll);
     };
-  }, []);
+  }, [isProcessing]);
 
   // 聚焦输入框
   useEffect(() => {
@@ -366,6 +392,22 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
 
       switch (msg.type) {
         case 'chatResponse': {
+          // §需求3：已被用户中止时直接丢弃内容（阻断输出），
+          // 避免后端响应延迟到达造成状态错乱（已恢复的 UI 不会重新进入 isProcessing）
+          if (abortedRef.current) {
+            // msg.done 时同时清掉占位 + 标记 streaming=false
+            if (msg.done) {
+              setMessages((prev) => {
+                const noPlaceholder = prev.filter((m) => !m.placeholder);
+                return noPlaceholder.map((m) =>
+                  m.id === msg.id
+                    ? { ...m, content: m.content || '> ⏹ 已停止生成', streaming: false, incomplete: false, incompleteReasons: [] }
+                    : m
+                );
+              });
+            }
+            return;
+          }
           let finalContent = msg.done ? finalizeSteps(msg.content) : msg.content;
           let incomplete = false;
           let incompleteReasons: string[] = [];
@@ -460,6 +502,10 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
           break;
         }
         case 'error': {
+          // §需求3：已被中止时不再处理 error（避免把后端的 abort 错误消息重新显示给用户）
+          if (abortedRef.current) {
+            return;
+          }
           // 错误时也清掉占位
           setMessages((prev) => prev.filter((m) => !m.placeholder));
           setError(msg.message);
@@ -684,10 +730,25 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
           break;
         }
         case 'filesReverted': {
-          // §撤销修改：文件恢复完成通知
+          // §撤销修改：文件恢复完成通知。
+          // 不仅清空 agentEditedFiles，还要把 messages 中嵌入的 suggestions / diffData 里
+          // 对应文件的 status 改为 'reverted'，这样状态栏弹窗里能看到「已撤销」标签。
           if (msg.success) {
-            // 清空已记录的 AI 修改文件列表
-            setAgentEditedFiles([]);
+            const revertedPaths = new Set(msg.filePaths);
+            setAgentEditedFiles((prev) => prev.map((c) =>
+              revertedPaths.has(c.filePath) ? { ...c, status: 'reverted' as FileChangeStatus } : c,
+            ));
+            setMessages((prev) => prev.map((m) => {
+              if (!m.suggestions?.length) return m;
+              return {
+                ...m,
+                suggestions: m.suggestions.map((s) => ({
+                  ...s,
+                  changes: s.changes?.map((c) => revertedPaths.has(c.filePath) ? { ...c, status: 'reverted' as FileChangeStatus } : c),
+                  diffData: s.diffData?.map((c) => revertedPaths.has(c.filePath) ? { ...c, status: 'reverted' as FileChangeStatus } : c),
+                })),
+              };
+            }));
           }
           const id = Date.now();
           setNotice({
@@ -809,6 +870,13 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
     if (!text.trim() || isProcessing) return;
 
     setError(null);
+    // §需求3：新一轮对话开始前重置中止标志位，允许正常接收后续响应
+    abortedRef.current = false;
+    // §需求1：新对话开启时强制重置“跟随底部”标志位——
+    // 上一轮用户可能浏览了历史消息（导致 isPinnedRef 被置 false），
+    // 现在发新消息，必须让 auto-scroll 重新生效才能跟随 LLM 输出
+    isPinnedRef.current = true;
+    setUserScrolledUp(false);
     const userMsg: ChatMessage = { id: generateId(), role: 'user', content: text.trim(), timestamp: Date.now() };
     // 占位消息：填充用户提交到 AI 返回第一个字符之间的时间空隙
     const placeholderMsg: ChatMessage = {
@@ -861,6 +929,31 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
     } as WebViewRequest);
   };
 
+  // §需求3：点击暂停时的统一处理
+  // 1) 通知后端（让流式生成尽早停止，避免后端继续烧 token）
+  // 2) 立即同步恢复前端 UI 状态——不管后端是否响应，UI 都不能卡死
+  // 3) 设置 abortedRef 阻断后续 chatResponse/error 等消息的输出
+  // 4) 把所有 running 中的 streaming 消息标记为停止，避免 spinner 一直转
+  const handleAbort = useCallback(() => {
+    // 通知后端（即便失败也无所谓，前端已自行恢复）
+    vscode?.postMessage({ command: 'abortGeneration' } as WebViewRequest);
+    // 阻断后续输出
+    abortedRef.current = true;
+    // 同步恢复 UI 状态
+    setIsProcessing(false);
+    setAgentStatus(null);
+    setToolCalls((prev) => prev.map((t) => (t.status === 'running' ? { ...t, status: 'error' as const } : t)));
+    // 把所有 streaming 消息标记为停止，并清掉占位消息
+    setMessages((prev) => {
+      const noPlaceholder = prev.filter((m) => !m.placeholder);
+      return noPlaceholder.map((m) =>
+        m.streaming
+          ? { ...m, streaming: false, content: m.content || '> ⏹ 已停止生成' }
+          : m
+      );
+    });
+  }, []);
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(input); }
   };
@@ -905,10 +998,14 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
     return Array.from(seen.values());
   }, [messages]);
 
-  // 合并 suggestions 变更 + agent 编辑变更（按 filePath 去重）
+  // 合并 suggestions 变更 + agent 编辑变更（按 filePath 去重），并过滤空值
+  // §空值定义：1) filePath 为空；2) original === modified（未产生实际改动）。
+  // 这两类 entry 通常是流式占位/LLM 抖动产物，列在弹窗里会让计数虚高、误导用户。
   const allChanges = useMemo<SuggestionChange[]>(() => {
     const seen = new Map<string, SuggestionChange>();
     for (const c of [...collectedChanges, ...agentEditedFiles]) {
+      if (!c || !c.filePath) continue;
+      if (c.original !== undefined && c.modified !== undefined && c.original === c.modified) continue;
       seen.set(c.filePath, c);
     }
     return Array.from(seen.values());
@@ -968,6 +1065,27 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
       changes: changes.map((c) => ({ filePath: c.filePath, original: c.original })),
     } as WebViewRequest);
   }, [vscode]);
+
+  // §接受修改：用户确认保留 AI 改动。
+  // 不需要再调后端（completed 状态时文件已默认同步到磁盘），只需把 UI 状态从 completed 升级为 applied。
+  const handleAcceptChanges = useCallback((changes: SuggestionChange[]) => {
+    if (changes.length === 0) return;
+    const updatedPaths = new Set(changes.map((c) => c.filePath));
+    setAgentEditedFiles((prev) => prev.map((c) =>
+      updatedPaths.has(c.filePath) ? { ...c, status: 'applied' as FileChangeStatus } : c,
+    ));
+    setMessages((prev) => prev.map((m) => {
+      if (!m.suggestions?.length) return m;
+      return {
+        ...m,
+        suggestions: m.suggestions.map((s) => ({
+          ...s,
+          changes: s.changes?.map((c) => updatedPaths.has(c.filePath) ? { ...c, status: 'applied' as FileChangeStatus } : c),
+          diffData: s.diffData?.map((c) => updatedPaths.has(c.filePath) ? { ...c, status: 'applied' as FileChangeStatus } : c),
+        })),
+      };
+    }));
+  }, []);
 
   const contextFile = context?.activeFile?.filePath;
   const fileName = contextFile ? contextFile.split('/').pop() || contextFile : '';
@@ -1282,6 +1400,8 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
             agentStatus={agentStatus}
             changes={allChanges}
             onOpenDiff={handleOpenDiffInEditor}
+            onAcceptChanges={handleAcceptChanges}
+            onRejectChanges={handleRevertChanges}
             tokenUsage={tokenUsage}
             onCompact={() => {
               const realMsgs = messagesRef.current
@@ -1293,7 +1413,6 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
             }}
             userQuestions={userQuestions}
             onLocateMessage={handleLocateMessage}
-            onRevertChanges={handleRevertChanges}
           />
         </div>
       )}
@@ -1479,7 +1598,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
                 className={`input-send ${isProcessing ? 'input-send--stop' : ''}`}
                 onClick={() => {
                   if (isProcessing) {
-                    vscode?.postMessage({ command: 'abortGeneration' } as WebViewRequest);
+                    handleAbort();
                   } else {
                     sendMessage(input);
                   }
@@ -1555,6 +1674,47 @@ function computeChangeStats(change: SuggestionChange): { added: number; removed:
   return { added, removed };
 }
 
+/** §变更文件状态标签：根据 SuggestionChange.status 推断当前文件的处理状态
+ *  返回 { status, label, title }：
+ *    - status: 用于 BEM 类名（status-tag--completed/reverted/reading/queued/failed）
+ *    - label:  2~3 字中文简写（已完成/已撤销/读写中/排队中/失败）
+ *    - title:  hover 提示文本（hover 时能看到详细原因）
+ *  优先使用 change.status；缺省时：
+ *    - 若当前对话正在处理 → reading
+ *    - 若对话已完成（isDone） → completed
+ *  这样在 status 字段未传递时也能与顶部状态卡联动，避免空洞状态 */
+function resolveChangeStatus(
+  change: SuggestionChange,
+  ctx: { isProcessing: boolean },
+): { status: FileChangeStatus; label: string; title: string } {
+  const fallback: FileChangeStatus = ctx.isProcessing ? 'reading' : 'completed';
+  const status: FileChangeStatus = change.status || fallback;
+  const labelMap: Record<FileChangeStatus, string> = {
+    completed: '已完成',
+    applied: '已应用',
+    reverted: '已撤销',
+    reading: '读写中',
+    queued: '排队中',
+    failed: '失败',
+  };
+  const label = labelMap[status];
+  let title = '';
+  if (status === 'failed' && change.errorMessage) {
+    title = `失败原因：${change.errorMessage}`;
+  } else if (status === 'reading') {
+    title = '正在写入/读取磁盘，请稍候';
+  } else if (status === 'queued') {
+    title = '等待依赖文件先处理完成';
+  } else if (status === 'reverted') {
+    title = '用户已撤销该文件的 AI 修改';
+  } else if (status === 'applied') {
+    title = '用户已确认接受该文件的 AI 修改';
+  } else {
+    title = `文件修改${label}`;
+  }
+  return { status, label, title };
+}
+
 /** §需求8：格式化 token 数为 K 简写（128000 → 128K） */
 function formatK(n: number): string {
   if (n >= 1000) return `${Math.round(n / 1000)}K`;
@@ -1585,7 +1745,8 @@ function PreparingPlaceholder({
   onCompact,
   userQuestions,
   onLocateMessage,
-  onRevertChanges,
+  onAcceptChanges,
+  onRejectChanges,
 }: {
   agentStatus?: { status: string; message: string; stepType?: string } | null;
   changes?: SuggestionChange[];
@@ -1596,16 +1757,15 @@ function PreparingPlaceholder({
   userQuestions?: { id: string; content: string }[];
   /** §定位提问：点击某条提问后滚动定位 */
   onLocateMessage?: (id: string) => void;
-  /** §撤销修改：将 AI 修改的文件恢复到修改前的内容 */
-  onRevertChanges?: (changes: SuggestionChange[]) => void;
+  /** §接受修改：把所有变更标记为“已应用”（文件已同步到磁盘，仅更新 UI 状态） */
+  onAcceptChanges?: (changes: SuggestionChange[]) => void;
+  /** §拒绝修改：撤销所有变更（后端调用 lifeAiCode.applyChanges 写回 original） */
+  onRejectChanges?: (changes: SuggestionChange[]) => void;
 }) {
   const isDone = agentStatus?.status === 'done';
   const [showChanges, setShowChanges] = useState(false);
   // §定位提问 Dropdown
   const [showQuestionNav, setShowQuestionNav] = useState(false);
-  // §撤销修改确认弹窗状态
-  const [showRevertConfirm, setShowRevertConfirm] = useState(false);
-  const revertConfirmRef = useRef<HTMLDivElement>(null);
   const questionNavRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!showQuestionNav) return;
@@ -1623,22 +1783,20 @@ function PreparingPlaceholder({
       window.removeEventListener('blur', handleBlur);
     };
   }, [showQuestionNav]);
-  // §撤销修改确认弹窗：点击外部关闭
-  useEffect(() => {
-    if (!showRevertConfirm) return;
-    const handleMouseDown = (e: MouseEvent) => {
-      if (revertConfirmRef.current && !revertConfirmRef.current.contains(e.target as Node)) {
-        setShowRevertConfirm(false);
-      }
-    };
-    const handleBlur = () => setShowRevertConfirm(false);
-    document.addEventListener('mousedown', handleMouseDown);
-    window.addEventListener('blur', handleBlur);
-    return () => {
-      document.removeEventListener('mousedown', handleMouseDown);
-      window.removeEventListener('blur', handleBlur);
-    };
-  }, [showRevertConfirm]);
+  // §变更文件 批量接受/拒绝：仅作用于未结束的项（未 reverted / 未 applied）
+  // 避免重复点同一动作造成消息反复。
+  const pendingChanges = useMemo(
+    () => changes.filter((c) => c.status !== 'reverted' && c.status !== 'applied'),
+    [changes],
+  );
+  const handleAcceptAll = () => {
+    if (!onAcceptChanges || pendingChanges.length === 0) return;
+    onAcceptChanges(pendingChanges);
+  };
+  const handleRejectAll = () => {
+    if (!onRejectChanges || pendingChanges.length === 0) return;
+    onRejectChanges(pendingChanges);
+  };
   // 任务完成：静态无动画，使用 status-card--done 停止 iconPulse/iconSpin
   if (isDone) {
     return (
@@ -1650,23 +1808,11 @@ function PreparingPlaceholder({
         {changes.length > 0 && onOpenDiff && (
           <button
             className={`status-card__action ${showChanges ? 'status-card__action--active' : ''}`}
-            onClick={() => { setShowChanges(!showChanges); setShowQuestionNav(false); setShowRevertConfirm(false); }}
+            onClick={() => { setShowChanges(!showChanges); setShowQuestionNav(false); }}
             title="查看代码变更"
           >
             <GitCompare size={11} strokeWidth={1.8} />
             <span>代码变更</span>
-            <span className="status-card__action-count">{changes.length}</span>
-          </button>
-        )}
-        {/* §撤销修改：将 AI 自动修改的文件恢复到修改前的内容 */}
-        {changes.length > 0 && onRevertChanges && (
-          <button
-            className={`status-card__action status-card__action--undo ${showRevertConfirm ? 'status-card__action--active' : ''}`}
-            onClick={() => { setShowRevertConfirm(!showRevertConfirm); setShowChanges(false); setShowQuestionNav(false); }}
-            title="撤销 AI 修改的文件，恢复到修改前的状态"
-          >
-            <Undo2 size={11} strokeWidth={1.8} />
-            <span>撤销修改</span>
             <span className="status-card__action-count">{changes.length}</span>
           </button>
         )}
@@ -1701,17 +1847,47 @@ function PreparingPlaceholder({
         {showChanges && changes.length > 0 && (
           <div className="status-changes-popup">
             <div className="status-changes-popup__header">
-              <span>变更文件</span>
+              {/* §左侧：仅 isDone 状态卡才暴露“拒绝/接受”动作，
+                  进行中弹窗仅作只读列表展示 */}
+              {(onAcceptChanges || onRejectChanges) && isDone ? (
+                <div className="status-changes-popup__header-actions" role="group" aria-label="批量接受/拒绝">
+                  <button
+                    type="button"
+                    className="status-changes-popup__action-btn status-changes-popup__action-btn--reject"
+                    onClick={handleRejectAll}
+                    disabled={pendingChanges.length === 0}
+                    title={`拒绝所有变更（将文件恢复到修改前）${pendingChanges.length > 0 ? `，共 ${pendingChanges.length} 个未决项` : '，无未决项'}`}
+                  >
+                    <Undo2 size={11} strokeWidth={1.8} />
+                    <span>拒绝</span>
+                    {pendingChanges.length > 0 && <span className="status-changes-popup__action-count">{pendingChanges.length}</span>}
+                  </button>
+                  <button
+                    type="button"
+                    className="status-changes-popup__action-btn status-changes-popup__action-btn--accept"
+                    onClick={handleAcceptAll}
+                    disabled={pendingChanges.length === 0}
+                    title={`接受所有变更（仅更新状态为“已应用”，文件已同步到磁盘）${pendingChanges.length > 0 ? `，共 ${pendingChanges.length} 个未决项` : '，无未决项'}`}
+                  >
+                    <Check size={11} strokeWidth={2} />
+                    <span>接受</span>
+                    {pendingChanges.length > 0 && <span className="status-changes-popup__action-count">{pendingChanges.length}</span>}
+                  </button>
+                </div>
+              ) : (
+                <span>变更文件</span>
+              )}
               <span className="status-changes-popup__count">{changes.length}</span>
             </div>
             <div className="status-changes-popup__list">
               {changes.map((change, idx) => {
                 const stats = computeChangeStats(change);
                 const fileName = change.filePath.split(/[\\/]/).pop() || change.filePath;
+                const tag = resolveChangeStatus(change, { isProcessing: !isDone });
                 return (
                   <button
                     key={idx}
-                    className="status-changes-popup__item"
+                    className={`status-changes-popup__item status-changes-popup__item--${tag.status}`}
                     onClick={() => { onOpenDiff?.(change); setShowChanges(false); }}
                     title={change.filePath}
                   >
@@ -1720,6 +1896,15 @@ function PreparingPlaceholder({
                     <span className="status-changes-popup__stats">
                       {stats.added > 0 && <span className="status-changes-popup__added">+{stats.added}</span>}
                       {stats.removed > 0 && <span className="status-changes-popup__removed">-{stats.removed}</span>}
+                    </span>
+                    {/* §变更文件状态标签：已完成/已应用/已撤销/读写中/排队中/失败 */}
+                    <span
+                      className={`status-tag status-tag--${tag.status}`}
+                      title={tag.title}
+                      data-status={tag.status}
+                    >
+                      {tag.status === 'reading' && <span className="status-tag__dot" aria-hidden="true" />}
+                      {tag.label}
                     </span>
                   </button>
                 );
@@ -1745,47 +1930,6 @@ function PreparingPlaceholder({
                   <span className="status-question-nav__text">{q.content}</span>
                 </button>
               ))}
-            </div>
-          </div>
-        )}
-        {/* §撤销修改确认弹窗 */}
-        {showRevertConfirm && changes.length > 0 && onRevertChanges && (
-          <div className="status-revert-confirm" ref={revertConfirmRef}>
-            <div className="status-revert-confirm__header">
-              <Undo2 size={12} strokeWidth={1.8} />
-              <span>确认撤销 AI 修改</span>
-            </div>
-            <div className="status-revert-confirm__body">
-              即将把 {changes.length} 个文件恢复到 AI 修改前的状态，此操作不可撤销。
-            </div>
-            <div className="status-revert-confirm__files">
-              {changes.slice(0, 5).map((c, idx) => {
-                const fname = c.filePath.split(/[\\/]/).pop() || c.filePath;
-                return (
-                  <span key={idx} className="status-revert-confirm__file" title={c.filePath}>
-                    {fname}
-                  </span>
-                );
-              })}
-              {changes.length > 5 && (
-                <span className="status-revert-confirm__more">等 {changes.length} 个文件</span>
-              )}
-            </div>
-            <div className="status-revert-confirm__actions">
-              <button
-                type="button"
-                className="status-revert-confirm__btn status-revert-confirm__btn--cancel"
-                onClick={() => setShowRevertConfirm(false)}
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                className="status-revert-confirm__btn status-revert-confirm__btn--confirm"
-                onClick={() => { onRevertChanges(changes); setShowRevertConfirm(false); }}
-              >
-                确认撤销
-              </button>
             </div>
           </div>
         )}
@@ -1840,10 +1984,11 @@ function PreparingPlaceholder({
             {changes.map((change, idx) => {
               const stats = computeChangeStats(change);
               const fileName = change.filePath.split(/[\\/]/).pop() || change.filePath;
+              const tag = resolveChangeStatus(change, { isProcessing: true });
               return (
                 <button
                   key={idx}
-                  className="status-changes-popup__item"
+                  className={`status-changes-popup__item status-changes-popup__item--${tag.status}`}
                   onClick={() => { onOpenDiff?.(change); setShowChanges(false); }}
                   title={change.filePath}
                 >
@@ -1852,6 +1997,15 @@ function PreparingPlaceholder({
                   <span className="status-changes-popup__stats">
                     {stats.added > 0 && <span className="status-changes-popup__added">+{stats.added}</span>}
                     {stats.removed > 0 && <span className="status-changes-popup__removed">-{stats.removed}</span>}
+                  </span>
+                  {/* §变更文件状态标签：已完成/已撤销/读写中/排队中/失败 */}
+                  <span
+                    className={`status-tag status-tag--${tag.status}`}
+                    title={tag.title}
+                    data-status={tag.status}
+                  >
+                    {tag.status === 'reading' && <span className="status-tag__dot" aria-hidden="true" />}
+                    {tag.label}
                   </span>
                 </button>
               );

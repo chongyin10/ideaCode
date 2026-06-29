@@ -1442,6 +1442,11 @@ body {
   padding-top: 12px;
   border-top: 1px dashed var(--border-default);
 }
+/* 选项按钮外层包裹：用于定位自定义 tooltip（避免原生 title 被默认裁断） */
+.option-btn-wrap {
+  position: relative;
+  display: block;
+}
 .option-btn {
   display: flex;
   align-items: center;
@@ -1512,6 +1517,38 @@ body {
   font-weight: 500;
 }
 .option-btn:active { transform: scale(0.99); }
+
+/* 自定义 Tooltip：悬浮时显示完整选项文本，不受默认省略裁断 */
+.option-tooltip {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 100;
+  pointer-events: none;
+  display: flex;
+  justify-content: flex-start;
+  animation: optionTooltipIn 0.12s var(--ease-out);
+}
+@keyframes optionTooltipIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.option-tooltip__inner {
+  max-width: 100%;
+  padding: 6px 10px;
+  background: var(--surface-3, #1f2937);
+  color: var(--text-primary, #f3f4f6);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  line-height: 1.45;
+  font-family: var(--font-sans);
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
 
 /* ════════════════════════════════════════════════════════════════ */
 /*  Typing Indicator                                                */
@@ -1616,6 +1653,70 @@ body {
   color: var(--warning-400);
 }
 .md-incomplete-banner__icon { color: var(--warning-500); }
+
+/* ─────────────────────────────────────────────────────────────────── */
+/*  md-fallback：预解析发现 hast 含破坏性结构时（通常是 LLM 嵌套了      */
+/*  未对齐的代码围栏），改用 <pre><code> 展示原文。等宽字体 + 横向滚动  */
+/*  + 保留原始换行，保证用户至少能看到完整内容、不会丢字。               */
+/* ─────────────────────────────────────────────────────────────────── */
+
+.md-fallback {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 4px 0;
+}
+
+.md-fallback__notice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  border-radius: var(--radius-md);
+  font-size: 11.5px;
+  color: var(--warning-400);
+  align-self: flex-start;
+  max-width: 100%;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.md-fallback__icon { color: var(--warning-500); flex-shrink: 0; }
+.md-fallback__text { line-height: 1.5; }
+
+.md-fallback__pre {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--code-bg, rgba(0, 0, 0, 0.32));
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  border-radius: var(--radius-md, 6px);
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
+  /* 关键：让长行（嵌套围栏里的内容）横向滚动，而不是撑爆父容器 */
+  white-space: pre;
+  /* iOS 弹性滚动 */
+  -webkit-overflow-scrolling: touch;
+  /* contain 隔离：避免内部大块文本触发父布局重排 */
+  contain: layout style;
+}
+
+.md-fallback__code {
+  display: block;
+  font-family: var(--font-mono, 'Menlo', 'Monaco', 'Consolas', 'Courier New', monospace);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-primary, #e6e6e6);
+  /* 保留所有换行、空白字符 */
+  white-space: pre;
+  tab-size: 2;
+  /* 防止最末一行的滚动留白 */
+  padding: 0;
+  background: transparent;
+  border: 0;
+}
 .chat-notice {
   display: inline-flex;
   align-items: center;
@@ -1972,8 +2073,9 @@ body {
   position: absolute;
   bottom: calc(100% + 6px);
   left: 0;
-  min-width: 340px;
+  min-width: 380px;
   max-width: 520px;
+  min-height: 80px;
   max-height: 320px;
   display: flex;
   flex-direction: column;
@@ -1984,6 +2086,8 @@ body {
   z-index: 100;
   animation: changesPopupIn 0.18s var(--ease-out, ease-out);
   overflow: hidden;
+  /* §防止被意外压缩：作为绝对定位容器需明确提供尺寸参考 */
+  contain: layout style;
 }
 @keyframes changesPopupIn {
   from { opacity: 0; transform: translateY(6px); }
@@ -2013,6 +2117,77 @@ body {
   font-size: 10px;
   font-weight: 600;
 }
+/* §拒绝/接受批量操作按钮组（位于弹窗 header 左侧） */
+.status-changes-popup__header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.status-changes-popup__action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  font-size: 10px;
+  font-weight: 600;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, filter 0.12s ease;
+  user-select: none;
+  background: transparent;
+}
+.status-changes-popup__action-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  filter: grayscale(0.4);
+}
+.status-changes-popup__action-btn:focus-visible {
+  outline: 1px solid var(--accent-400, #6366f1);
+  outline-offset: 1px;
+}
+.status-changes-popup__action-btn--reject {
+  background: rgba(248, 113, 113, 0.10);
+  border-color: rgba(248, 113, 113, 0.28);
+  color: #f87171;
+}
+.status-changes-popup__action-btn--reject:hover:not(:disabled) {
+  background: rgba(248, 113, 113, 0.18);
+  border-color: rgba(248, 113, 113, 0.45);
+}
+.status-changes-popup__action-btn--accept {
+  background: rgba(52, 211, 153, 0.10);
+  border-color: rgba(52, 211, 153, 0.28);
+  color: #34d399;
+}
+.status-changes-popup__action-btn--accept:hover:not(:disabled) {
+  background: rgba(52, 211, 153, 0.18);
+  border-color: rgba(52, 211, 153, 0.45);
+}
+.status-changes-popup__action-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 14px;
+  height: 13px;
+  padding: 0 3px;
+  border-radius: 6px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  background: rgba(255, 255, 255, 0.10);
+  color: inherit;
+}
+.status-changes-popup__action-btn--reject .status-changes-popup__action-count {
+  background: rgba(248, 113, 113, 0.22);
+}
+.status-changes-popup__action-btn--accept .status-changes-popup__action-count {
+  background: rgba(52, 211, 153, 0.22);
+}
 .status-changes-popup__list {
   flex: 1;
   overflow-y: auto;
@@ -2028,6 +2203,7 @@ body {
   align-items: center;
   gap: 8px;
   width: 100%;
+  min-height: 26px;
   padding: 6px 12px;
   border: none;
   background: transparent;
@@ -2036,43 +2212,151 @@ body {
   cursor: pointer;
   transition: background 0.12s ease;
   font-family: var(--font-sans);
+  box-sizing: border-box;
+  /* §防御性：防止子元素被压缩成 0 宽导致不可见 */
+  contain: layout;
 }
 .status-changes-popup__item:hover {
   background: rgba(255,255,255,0.05);
 }
 .status-changes-popup__file {
   flex-shrink: 0;
+  flex-grow: 0;
   font-size: 12px;
   font-weight: 500;
   color: var(--text-primary);
+  min-width: 60px;
   max-width: 140px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* §按钮子元素需取消 button 默认背景/前景 */
+  background: transparent;
 }
 .status-changes-popup__path {
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 60px;
   font-size: 10.5px;
   color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--font-mono);
+  background: transparent;
 }
 .status-changes-popup__stats {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
+  flex-grow: 0;
+  min-width: 24px;
   font-size: 11px;
   font-family: var(--font-mono);
   font-weight: 600;
+  background: transparent;
 }
 .status-changes-popup__added {
   color: #34d399;
 }
 .status-changes-popup__removed {
   color: #f87171;
+}
+
+/* ── 变更文件状态标签 ── */
+/* 文件行状态染色（背景色渐变）：颜色提亮状态文件 */
+/* 状态行状态染色（仅在 status 上重叠）用于刷新时闪烁 */
+.status-changes-popup__item--reading {
+  background: linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.06));
+}
+.status-changes-popup__item--queued {
+  background: linear-gradient(90deg, transparent, rgba(245, 158, 11, 0.05));
+}
+.status-changes-popup__item--failed {
+  background: linear-gradient(90deg, transparent, rgba(239, 68, 68, 0.06));
+}
+.status-changes-popup__item--reverted {
+  opacity: 0.62;
+}
+
+/* 状态 tag：right-aligned 圆角胶囊，不同状态不同颜色 */
+.status-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 9.5px;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: 0.2px;
+  font-family: var(--font-sans, sans-serif);
+  white-space: nowrap;
+  user-select: none;
+  transition: filter 0.15s ease, transform 0.15s ease;
+}
+.status-tag:hover {
+  filter: brightness(1.12);
+  transform: translateY(-0.5px);
+}
+/* 已完成：绿色 */
+.status-tag--completed {
+  background: rgba(52, 211, 153, 0.14);
+  color: #34d399;
+  border: 1px solid rgba(52, 211, 153, 0.32);
+}
+/* §已应用：用户点接受后，绿色加深 + 实心点，区分“AI 已完成”与“用户已确认” */
+.status-tag--applied {
+  background: rgba(52, 211, 153, 0.28);
+  color: #10b981;
+  border: 1px solid rgba(52, 211, 153, 0.55);
+  font-weight: 700;
+}
+/* 已撤销：中性灰 */
+.status-tag--reverted {
+  background: rgba(148, 163, 184, 0.14);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  text-decoration: line-through;
+  text-decoration-color: rgba(148, 163, 184, 0.6);
+}
+/* 读写中：蓝色 + 脉动点 */
+.status-tag--reading {
+  background: rgba(59, 130, 246, 0.16);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.36);
+  animation: statusTagPulse 1.4s ease-in-out infinite;
+}
+/* 排队中：暖黄色 */
+.status-tag--queued {
+  background: rgba(245, 158, 11, 0.16);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.36);
+}
+/* 失败：红色 */
+.status-tag--failed {
+  background: rgba(239, 68, 68, 0.16);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+}
+
+/* 读写中状态的小点（脉动） */
+.status-tag__dot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: statusTagDotBlink 1s ease-in-out infinite;
+}
+@keyframes statusTagPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.36); }
+  50%      { box-shadow: 0 0 0 4px rgba(59, 130, 246, 0); }
+}
+@keyframes statusTagDotBlink {
+  0%, 100% { opacity: 0.4; transform: scale(0.85); }
+  50%      { opacity: 1;   transform: scale(1.15); }
 }
 
 /* ── 提问定位 Dropdown ── */
@@ -2362,7 +2646,10 @@ body {
   background: var(--surface-1);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  overflow: hidden;
+  /* §需求2：改 overflow 为 visible，让 header 里 dropdown 下拉菜单不被裁剪。
+     border-radius 仍可通过 .suggestion-card__body / .suggestion-card__header 自身的
+     overflow:hidden + border-radius 局部分别裁剪。 */
+  overflow: visible;
   transition: all var(--duration-fast);
 }
 .suggestion-card:hover { border-color: var(--border-default); }
@@ -2372,41 +2659,86 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 2px;
-  border-bottom: 1px solid var(--border-subtle);
+  /* §需求2：padding 4px 让 header 更紧凑，与折叠后的状态徽标密度更协调 */
+  padding: 4px 12px;
+  border-bottom: 1px solid transparent;
+  transition: background var(--duration-fast);
 }
+.suggestion-card__header:hover { background: var(--surface-2); }
+/* §body 折叠时不显示分隔线，展开时才出现 */
+.suggestion-card__header + .suggestion-card__body { border-top: 1px solid var(--border-subtle); }
 
-.suggestion-card__type {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 10px;
-  font-weight: 700;
-  padding: 2px 8px 2px 6px;
-  border-radius: var(--radius-full);
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
+/* §统一 icon：替代之前的 type icon（重构/修复/功能/优化各自不同 icon） */
+.suggestion-card__file-icon {
+  color: var(--text-tertiary);
   flex-shrink: 0;
 }
-.suggestion-card__type-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-.suggestion-card__type--refactor { color: var(--accent-400); background: rgba(59, 130, 246, 0.12); border: 1px solid rgba(59, 130, 246, 0.2); }
-.suggestion-card__type--bugfix  { color: var(--error-400); background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 71, 0.2); }
-.suggestion-card__type--feature { color: var(--success-400); background: rgba(34, 197, 94, 0.12); border: 1px solid rgba(34, 197, 94, 0.2); }
-.suggestion-card__type--optimization { color: var(--warning-400); background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.2); }
-.suggestion-card__type--explanation { color: var(--purple-400); background: rgba(168, 85, 247, 0.12); border: 1px solid rgba(168, 85, 247, 0.2); }
 
-.suggestion-card__title {
-  flex: 1;
-  font-size: 13px;
-  font-weight: 500;
+.suggestion-card__file-path {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
   color: var(--text-primary);
+  font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex-shrink: 1;
+  min-width: 0;
+}
+.suggestion-card__file-path--empty {
+  font-family: var(--font-sans);
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.suggestion-card__lang-badge {
+  font-size: 9.5px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  background: rgba(168, 85, 247, 0.12);
+  color: var(--purple-400);
+  text-transform: lowercase;
+  letter-spacing: 0.3px;
+  flex-shrink: 0;
+}
+
+/* §占位元素：把 stats 推到右侧 */
+.suggestion-card__spacer { flex: 1; }
+
+/* §本轮调整：「变更 + stats + 展开」三元素打包的紧凑 cluster。
+   父级 header 的 gap 是 8px，但 cluster 内部使用更小的 gap（4px），
+   让三者视觉上是一个功能组，紧贴「展开」左侧。 */
+.suggestion-card__cluster {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+/* §stats 样式：与 diff-view__stats 一致 */
+.suggestion-card__stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.suggestion-card__stat {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+}
+.suggestion-card__stat--added {
+  color: var(--success-400);
+  background: rgba(34, 197, 94, 0.1);
+}
+.suggestion-card__stat--removed {
+  color: var(--error-400);
+  background: rgba(239, 68, 68, 0.1);
 }
 
 .suggestion-card__status {
@@ -2423,7 +2755,181 @@ body {
 .suggestion-card__status--rejected { color: var(--text-muted); background: rgba(255, 255, 255, 0.04); text-decoration: line-through; }
 .suggestion-card__status--applied { color: var(--success-400); background: rgba(34, 197, 94, 0.12); }
 
-.suggestion-card__body { padding: 10px 12px; font-size: 12.5px; }
+/* §需求4：固定文案 "变更" — 标识这是文件变更建议 */
+.suggestion-card__change-label {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  font-weight: 500;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+/* §需求2：「变更」按钮包裹层 — relative 定位，dropdown 绝对定位以此为参照 */
+.suggestion-card__change-wrapper {
+  position: relative;
+  flex-shrink: 0;
+}
+
+/* §需求2：多文件时「变更」变成可点击 trigger（带数量徽标 + 下拉箭头） */
+.suggestion-card__change-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 8px;
+  background: transparent;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-full);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all var(--duration-fast);
+}
+.suggestion-card__change-trigger:hover {
+  background: var(--surface-2);
+  border-color: var(--border-default);
+  color: var(--text-primary);
+}
+.suggestion-card__change-trigger--open {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+.suggestion-card__change-trigger-text {
+  font-size: 11.5px;
+  color: inherit;
+}
+/* §需求2：trigger 内置文件数量徽标（小圆点数字，紫色调暗示是统计） */
+.suggestion-card__change-trigger-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: var(--radius-full);
+  background: rgba(168, 85, 247, 0.16);
+  color: var(--purple-400, #c084fc);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+.suggestion-card__change-trigger-icon {
+  transition: transform var(--duration-fast);
+  opacity: 0.7;
+}
+.suggestion-card__change-trigger--open .suggestion-card__change-trigger-icon {
+  transform: rotate(180deg);
+}
+
+/* §需求2：dropdown 容器 — 绝对定位在 trigger 下方，浮层感 */
+.suggestion-card__dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 50;
+  min-width: 280px;
+  max-width: 460px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--surface-3, #1f2937);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32), 0 0 0 1px rgba(255, 255, 255, 0.02);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* §需求2：dropdown item — UI 与底部 DiffView 的 file-header 一致 */
+.suggestion-card__dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--duration-fast);
+}
+.suggestion-card__dropdown-item:hover {
+  background: var(--surface-2);
+}
+.suggestion-card__dropdown-icon {
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+.suggestion-card__dropdown-item .diff-view__file-path {
+  flex: 1;
+  min-width: 0;
+}
+/* §需求2：dropdown item 内 stats 区，不与 file-info 重叠 */
+.suggestion-card__dropdown-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+/* §需求2：dropdown item 右侧的「对比」图标——hover 时强调 */
+.suggestion-card__dropdown-compare {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity var(--duration-fast), color var(--duration-fast);
+}
+.suggestion-card__dropdown-item:hover .suggestion-card__dropdown-compare {
+  opacity: 1;
+  color: var(--accent-400, #60a5fa);
+}
+
+/* §需求4：展开/收起按钮 — 独立按钮，点击切换 body 展开 */
+.suggestion-card__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 8px;
+  background: transparent;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-full);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all var(--duration-fast);
+}
+.suggestion-card__toggle:hover {
+  background: var(--surface-2);
+  border-color: var(--border-default);
+  color: var(--text-primary);
+}
+.suggestion-card__toggle-icon {
+  transition: transform var(--duration-fast);
+}
+.suggestion-card__toggle--expanded .suggestion-card__toggle-icon {
+  transform: rotate(180deg);
+}
+
+.suggestion-card__body {
+  /* §需求2：body 保留 overflow:hidden + border-radius 让 description 等内容被圆角裁剪，
+     但父级 .suggestion-card 已改为 overflow:visible 以便 dropdown 溢出。 */
+  padding: 10px 12px;
+  font-size: 12.5px;
+  overflow: hidden;
+  border-bottom-left-radius: var(--radius-md);
+  border-bottom-right-radius: var(--radius-md);
+}
+.suggestion-card__body:empty { display: none; }
 
 .suggestion-card__description {
   color: var(--text-secondary);
