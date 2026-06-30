@@ -338,8 +338,9 @@ class AgentRuntime {
         continue;
       }
 
-      // 通知前端：该步骤开始执行
-      this._notifyPlanStep(i, 'running');
+      // 通知前端：该步骤开始执行（记录开始时间）
+      const stepStartTime = Date.now();
+      this._notifyPlanStep(i, 'running', undefined, stepStartTime);
       this._notifyStep('think', `执行步骤 ${i + 1}/${plan.length}: ${step.tool}`);
 
       // 通知 UI tool_call（复用现有 ToolCallCard）
@@ -352,8 +353,9 @@ class AgentRuntime {
 
       try {
         const result = await this.executor.execute(step.tool, step.args || {});
+        const stepEndTime = Date.now();
         if (signal.aborted || this.cancelled) {
-          this._notifyPlanStep(i, 'skipped');
+          this._notifyPlanStep(i, 'skipped', undefined, stepStartTime, stepEndTime);
           results.push({ error: '任务已取消' });
           continue;
         }
@@ -361,11 +363,12 @@ class AgentRuntime {
         const summary = typeof result === 'string'
           ? result.slice(0, 200)
           : (result && result.summary) || (result && JSON.stringify(result).slice(0, 200)) || '成功';
-        this._notifyPlanStep(i, 'done', summary);
+        this._notifyPlanStep(i, 'done', summary, stepStartTime, stepEndTime);
         results.push({ summary });
       } catch (err) {
+        const stepEndTime = Date.now();
         const errMsg = err instanceof Error ? err.message : String(err);
-        this._notifyPlanStep(i, 'error', errMsg);
+        this._notifyPlanStep(i, 'error', errMsg, stepStartTime, stepEndTime);
         results.push({ error: errMsg });
       }
     }
@@ -374,15 +377,14 @@ class AgentRuntime {
 
   /**
    * §需求9：通知前端某个 plan step 的状态变更
+   * 待办任务：附带 startTime/endTime 时间戳，供 UI 显示执行时长
    */
-  _notifyPlanStep(index, status, summary) {
+  _notifyPlanStep(index, status, summary, startTime, endTime) {
     if (typeof this.context.postToWebView === 'function') {
-      this.context.postToWebView({
-        type: 'planStepUpdate',
-        index,
-        status,
-        summary,
-      });
+      const msg = { type: 'planStepUpdate', index, status, summary };
+      if (startTime !== undefined) msg.startTime = startTime;
+      if (endTime !== undefined) msg.endTime = endTime;
+      this.context.postToWebView(msg);
     }
   }
 

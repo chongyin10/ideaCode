@@ -50,7 +50,7 @@ export class WorkspaceServiceAdapter implements ServiceAdapter {
     bus.handle('workspace.getFolders', () => {
       const root = this.workspaceState?.getRootSource();
       return root
-        ? [{ uri: { fsPath: root, scheme: 'file' }, name: 'workspace', index: 0 }]
+        ? [{ uri: this._buildWorkspaceFolderUri(root), name: 'workspace', index: 0 }]
         : [];
     });
 
@@ -58,9 +58,10 @@ export class WorkspaceServiceAdapter implements ServiceAdapter {
     bus.handle('workspace.getWorkspaceFolders', () => {
       const root = this.workspaceState?.getRootSource();
       return root
-        ? [{ uri: { fsPath: root, scheme: 'file' }, name: 'workspace', index: 0 }]
+        ? [{ uri: this._buildWorkspaceFolderUri(root), name: 'workspace', index: 0 }]
         : [];
     });
+
 
     // 打开文档
     bus.handle('workspace.openDocument', (params) => {
@@ -145,5 +146,12 @@ export class WorkspaceServiceAdapter implements ServiceAdapter {
     });
 
     console.log('[WorkspaceServiceAdapter] 已注册 14 个处理器');
+  }
+
+  private _buildWorkspaceFolderUri(root: string) {
+    if (root.startsWith('ssh://')) {
+      return { fsPath: root, scheme: 'ssh' };
+    }
+    return { fsPath: root, scheme: 'file' };
   }
 }

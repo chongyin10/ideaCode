@@ -1095,6 +1095,25 @@ function buildStatusMap(state) {
   add(state.untracked, () => "U");
   return map;
 }
+async function findRemoteRepoRoot(sshUri) {
+  const match = sshUri.match(/^ssh:\/\/([^/]+)(.*)$/);
+  if (!match) return null;
+  const connId = match[1];
+  const remotePath = match[2] || "/";
+  try {
+    const result = await vscode.commands.executeCommand(
+      "ssh.internal.execute",
+      { id: connId, command: "git rev-parse --show-toplevel", cwd: remotePath }
+    );
+    if (!result || !result.success) return null;
+    const stdout = (result.stdout || "").trim();
+    if (!stdout) return null;
+    return stdout;
+  } catch (err) {
+    console.error("[Git Extension] \u8FDC\u7A0B\u4ED3\u5E93\u68C0\u6D4B\u5931\u8D25:", err.message);
+    return null;
+  }
+}
 function pushActiveFile() {
   if (!webviewPanel) return;
   try {
@@ -1228,9 +1247,48 @@ async function openRepository(rootPath) {
   pushLoading(rootPath);
   closeRepository();
   if (typeof rootPath === "string" && /^[a-z][a-z0-9+.-]*:\/\//i.test(rootPath)) {
-    currentRootPath = rootPath;
-    currentRepo = null;
-    pushState();
+    if (!gitAvailable) {
+      currentRootPath = rootPath;
+      pushState();
+      return;
+    }
+    pushLoading(rootPath);
+    let remoteRepoRoot = null;
+    let detectError = null;
+    try {
+      remoteRepoRoot = await findRemoteRepoRoot(rootPath);
+    } catch (err) {
+      detectError = err;
+      console.error("[Git Extension] \u8FDC\u7A0B\u4ED3\u5E93\u68C0\u6D4B\u5931\u8D25\uFF08\u4FDD\u7559 currentRepo \u4E0D\u53D8\uFF09:", err.message);
+    }
+    if (remoteRepoRoot) {
+      currentRootPath = rootPath;
+      currentRepo = new Repository(remoteRepoRoot);
+      currentRepo.onDidChange(() => {
+        pushState();
+        pushBranches();
+        pushStashes();
+      });
+      pushState();
+      try {
+        await currentRepo.refresh();
+        pushState();
+        pushBranches();
+        pushStashes();
+      } catch (refreshErr) {
+        console.warn("[Git Extension] \u8FDC\u7A0B\u4ED3\u5E93 refresh \u5931\u8D25\uFF08\u4EC5\u72B6\u6001\u52A0\u8F7D\u53D7\u9650\uFF0CUI \u5DF2\u663E\u793A\u4E3A\u4ED3\u5E93\uFF09:", refreshErr.message);
+      }
+    } else {
+      if (!currentRepo) {
+        currentRootPath = rootPath;
+        pushState();
+      } else {
+        pushState();
+      }
+      if (detectError) {
+        console.warn("[Git Extension] \u8FDC\u7A0B git \u68C0\u6D4B\u672A\u5B8C\u6210\uFF0C\u6CBF\u7528 currentRepo \u72B6\u6001");
+      }
+    }
     return;
   }
   if (!gitAvailable) {

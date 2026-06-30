@@ -514,6 +514,42 @@ async function getRemoteFileTree(connectionId) {
   return { rootPath: tree.path, tree };
 }
 
+/**
+ * §需求：让其他扩展（如 git 扩展）能在 SSH 远程主机上执行命令并拿到 stdout/stderr。
+ * 之前 git 扩展看到 ssh:// 路径就直接报"不是 Git 仓库"——是因为没有远程执行能力。
+ * 现在通过此导出，git 扩展可以调用 git rev-parse --show-toplevel 等命令远程检测。
+ *
+ * 调用方（外部扩展）：ext.invoke('ideacode-ssh', 'executeRemote', [connectionId, command, cwd])
+ *
+ * @param {string} connectionId  连接 ID
+ * @param {string} command       要执行的 shell 命令
+ * @param {string} [cwd]         可选的工作目录
+ * @returns {Promise<{success: boolean, stdout: string, stderr: string, code: number}>}
+ */
+async function executeRemote(connectionId, command, cwd) {
+  const conn = findConnection(connectionId);
+  if (!conn) throw new Error('SSH 连接不存在: ' + connectionId);
+  const session = findConnectedSession(connectionId);
+  if (!session) throw new Error('SSH 没有已连接的会话: ' + connectionId);
+
+  // 若指定 cwd，包装成 `cd <cwd> && <command>` 形式
+  const finalCommand = cwd
+    ? `cd ${shellEscape(cwd)} && ${command}`
+    : command;
+
+  const result = await vscode.commands.executeCommand('ssh.internal.execute', {
+    id: session.id,
+    command: finalCommand,
+  });
+
+  return {
+    success: result.success === true && result.code === 0,
+    stdout: typeof result.stdout === 'string' ? result.stdout : '',
+    stderr: typeof result.stderr === 'string' ? result.stderr : '',
+    code: typeof result.code === 'number' ? result.code : -1,
+  };
+}
+
 async function handleFileOperation(payload) {
   const { operation, connectionId } = payload;
   const conn = findConnection(connectionId);
@@ -779,6 +815,10 @@ async function activate(context) {
           executable: 'ssh',
           args: ['-p', String(conn.port || 22), `${conn.username}@${conn.host}`],
           isModal: true,
+          // §需求：标识为 SSH 远程终端——前端 TerminalModal.handleExpandToTab
+          // 检测到 isSSH=true 时只关闭 modal，不再走 moveToEditor（避免在 BottomPanel
+          // tab 列表 / editor area 出现 SSH 终端）。SSH 终端的归宿只在 modal / SSH 面板。
+          isSSH: true,
           profile: { name: 'ssh', path: 'ssh' },
         };
         // 密码认证时自动输入密码，并过滤掉密码提示行，避免显示不美观
@@ -947,4 +987,4 @@ function deactivate() {
   sessions.clear();
 }
 
-module.exports = { activate, deactivate, getRemoteFileTree, handleFileOperation, callFileSystemProvider };
+module.exports = { activate, deactivate, getRemoteFileTree, handleFileOperation, callFileSystemProvider, executeRemote };

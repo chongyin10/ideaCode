@@ -14,6 +14,7 @@
 
 const path = require('path');
 const fs = require('fs');
+const { isRemoteUri, parseSshUri } = require('./sshUri');
 
 class CodeContextBuilder {
   constructor(rpc) {
@@ -45,17 +46,30 @@ class CodeContextBuilder {
 
     // 无论是否有激活文件，都尝试获取工作区根目录和项目文件树
     let workspaceRoot = '';
+    let remote = null;
     try {
       const folders = await this.rpc.request('workspace.getFolders', {});
       if (folders && folders.length > 0) {
-        workspaceRoot = folders[0].uri?.fsPath || '';
+        const uri = folders[0].uri || {};
+        workspaceRoot = uri.fsPath || uri.toString?.() || '';
       }
     } catch {
       // ignore
     }
 
+    // §SSH 远程工作区：解析连接信息；本地文件树走 _getFileTree，远程先留空，由 Agent get_file_tree 工具按需获取
+    if (isRemoteUri(workspaceRoot)) {
+      const sshInfo = parseSshUri(workspaceRoot);
+      remote = {
+        isRemote: true,
+        scheme: sshInfo.scheme,
+        connectionId: sshInfo.connectionId,
+        remotePath: sshInfo.remotePath,
+      };
+    }
+
     let fileTree = '';
-    if (workspaceRoot) {
+    if (workspaceRoot && !remote?.isRemote) {
       try {
         fileTree = this._getFileTree(workspaceRoot, 2, 80);
       } catch {
@@ -133,6 +147,7 @@ class CodeContextBuilder {
       activeFile,
       relatedFiles,
       workspaceRoot,
+      remote,
       fileTree,
       diagnostics,
       selection: selection || '',
@@ -183,7 +198,18 @@ class CodeContextBuilder {
   }
 
   _getRelativePath(filePath, workspaceRoot) {
-    if (workspaceRoot && filePath.startsWith(workspaceRoot)) {
+    if (!workspaceRoot) return filePath;
+    if (isRemoteUri(workspaceRoot)) {
+      const { remotePath } = parseSshUri(workspaceRoot);
+      if (filePath.startsWith(remotePath)) {
+        return '.' + filePath.slice(remotePath.length);
+      }
+      if (filePath.startsWith(workspaceRoot)) {
+        return '.' + filePath.slice(workspaceRoot.length);
+      }
+      return filePath;
+    }
+    if (filePath.startsWith(workspaceRoot)) {
       return '.' + filePath.slice(workspaceRoot.length);
     }
     return filePath;

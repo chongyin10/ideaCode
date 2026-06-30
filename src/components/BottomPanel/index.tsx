@@ -101,12 +101,15 @@ const BottomPanel = () => {
     for (const group of terminal.panelLayout.groups) {
       for (const pane of group.panes) {
         const tab = terminal.tabs[pane.terminalId];
-        if (tab) tabs.push(tab);
+        // §需求：SSH 终端不进入底部面板 tab 列表——
+        // 即使用户在 Modal 中点击"嵌入到标签页"，也不应出现底部 tab。
+        // SSH 终端的归宿是 editor area（isEditorTerminal=true）或保持 modal 状态。
+        if (tab && !tab.isSSH) tabs.push(tab);
       }
     }
     for (const tid of terminal.editorTerminals) {
       const tab = terminal.tabs[tid];
-      if (tab && !tabs.find(t => t.id === tab.id)) {
+      if (tab && !tab.isSSH && !tabs.find(t => t.id === tab.id)) {
         tabs.push(tab);
       }
     }

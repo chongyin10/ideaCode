@@ -35,6 +35,8 @@ const { LlmClient } = require('./llmClient');
 const { CodeContextBuilder } = require('./codeContext');
 const { SuggestionGenerator } = require('./suggestionGenerator');
 const { AgentRuntime } = require('./agent/agentRuntime');
+const { createFsAdapter } = require('./remoteFsAdapter');
+const { isRemoteUri } = require('./sshUri');
 
 /* ─── 全局状态 ─── */
 
@@ -49,6 +51,32 @@ let activeConfigId = null; // 当前激活配置 ID
 
 /* ─── Agent 待确认编辑 ─── */
 const pendingAgentEdits = new Map(); // editId -> { filePath, original, modified }
+// §Agent 模式：是否自动应用 AI 生成的编辑（无需 webview 确认）
+let agentAutoApply = false;
+
+/**
+ * 立即应用单个 pending edit（Agent 自动模式）。
+ * 与 confirmAgentEdit 消息处理共用同一份 RPC 参数构造逻辑。
+ */
+function applyPendingEdit(editId, edit) {
+  let rpcMethod = 'lifeAiCode.applyChanges';
+  let rpcParams;
+  if (edit.mode === 'write') {
+    rpcParams = { filePath: edit.filePath, content: edit.modified };
+  } else if (edit.mode === 'delete') {
+    rpcMethod = 'lifeAiCode.deleteFile';
+    rpcParams = { filePath: edit.filePath };
+  } else {
+    rpcParams = { filePath: edit.filePath, original: [edit.original], modified: [edit.modified] };
+  }
+  if (typeof process !== 'undefined' && process.send) {
+    process.send({ jsonrpc: '2.0', method: rpcMethod, params: rpcParams });
+    postToWebView({ type: 'agentEditStatus', editId, status: 'applied' });
+    return true;
+  }
+  postToWebView({ type: 'agentEditStatus', editId, status: 'error' });
+  return false;
+}
 
 /* ─── 工具函数 ─── */
 
@@ -166,10 +194,17 @@ const LONG_RUNNING_OUTPUT_TAIL_CHARS = 16 * 1024; // 长驻进程只保留最新
  * @param {string} command
  * @returns {boolean}
  */
+// 脚手架/初始化命令排除列表：这些是一次性命令（可能交互式），不是长驻进程。
+// 必须在 LONG_RUNNING_COMMAND_PATTERNS 之前检查，避免 create-vite 被 /\bvite\b/ 误判。
+const SCAFFOLD_COMMAND_PATTERN = /\bcreate-(vite|next|nuxt|react|react-app|vue|angular|svelte|solid|remix|astro|preact)\b/i;
+
 function detectLongRunningCommand(command) {
   if (!command || typeof command !== 'string') return false;
   const trimmed = command.trim();
   if (!trimmed) return false;
+  // 脚手架命令（create-vite, create-next-app 等）是一次性命令，不是 dev server，
+  // 不能当长驻进程处理——否则 waitShellCompletion 立即返回假成功，Agent 误以为已完成。
+  if (SCAFFOLD_COMMAND_PATTERN.test(trimmed)) return false;
   for (const pattern of LONG_RUNNING_COMMAND_PATTERNS) {
     if (pattern.test(trimmed)) return true;
   }
@@ -216,6 +251,143 @@ const pendingShellWaits = new Map(); // id -> { resolve, reject }
 const recentShellIds = new Map(); // id -> timestamp(ms)
 const SHELL_DEDUP_MS = 2000;
 
+// §PTY 伪终端支持：让 npm create / vue create 等交互式命令能正常接收 stdin。
+//   node-pty 已在根 package.json 中声明，扩展宿主进程运行在 Electron Node 中，
+//   与主进程共用同一份原生模块二进制，require 应能成功。若加载失败则降级为 spawn（普通模式）。
+let pty = null;
+try {
+  pty = require('node-pty');
+} catch (e) {
+  console.warn('[LifeAiCode][executeShellCommand] node-pty 加载失败，降级为 spawn 模式:', e.message);
+}
+
+// 维护本次 Agent 任务中产生文件变更的工作目录集合，命令完成后统一通知渲染进程刷新资源管理器。
+// 渲染进程通过 setExternalFileChange 触发 ExplorerContent 精准刷新受影响目录（避免整树 rebuild 引发 GPU/CPU 卡顿）。
+const fileChangeNotify = {
+  // Set<cwd> —— 哪些工作目录可能产生新文件
+  pendingCwds: new Set(),
+  // 待刷新的具体文件/目录路径（绝对路径），用于"更精准"刷新
+  pendingPaths: new Set(),
+  // 防抖定时器
+  timer: null,
+  // 防抖窗口（毫秒）—— 多个连续命令会在窗口结束统一推送一次，避免高频 IPC
+  DEBOUNCE_MS: 600,
+};
+
+function scheduleFileChangeNotify() {
+  if (fileChangeNotify.timer) clearTimeout(fileChangeNotify.timer);
+  fileChangeNotify.timer = setTimeout(() => {
+    flushFileChangeNotify();
+  }, fileChangeNotify.DEBOUNCE_MS);
+}
+
+function flushFileChangeNotify() {
+  if (fileChangeNotify.timer) {
+    clearTimeout(fileChangeNotify.timer);
+    fileChangeNotify.timer = null;
+  }
+  const cwds = Array.from(fileChangeNotify.pendingCwds);
+  const paths = Array.from(fileChangeNotify.pendingPaths);
+  fileChangeNotify.pendingCwds.clear();
+  fileChangeNotify.pendingPaths.clear();
+  if (cwds.length === 0 && paths.length === 0) return;
+  try {
+    process.send({
+      jsonrpc: '2.0',
+      method: 'lifeAiCode.fileChanged',
+      params: { paths, cwds },
+    });
+  } catch (err) {
+    console.warn('[LifeAiCode][fileChangeNotify] 发送 fileChanged 通知失败:', err.message);
+  }
+}
+
+// 在每个 shell 命令正常结束时调用（成功 / 失败 / 被杀都算）
+function recordShellCommandCompletion(cwd) {
+  if (cwd) fileChangeNotify.pendingCwds.add(cwd);
+  scheduleFileChangeNotify();
+}
+
+// §shell 命令文件变更检测：命令执行前后对 cwd 做轻量快照，
+// 把新增/修改/删除的文件列表推给 webview，让底部"变更文件"能展示
+// `npx create-vite` / `npm install` 等 shell 产生的变更。
+const SHELL_SNAPSHOT_IGNORE = new Set(['node_modules', '.git', '.DS_Store', 'dist', 'build', '.vite', '.next', 'coverage']);
+const SHELL_SNAPSHOT_MAX_FILES = 5000;
+
+async function snapshotDir(dir, relativeTo, result = new Map(), countRef = { value: 0 }) {
+  if (countRef.value >= SHELL_SNAPSHOT_MAX_FILES) return result;
+  let entries;
+  try {
+    entries = await fs.promises.readdir(dir, { withFileTypes: true });
+  } catch {
+    return result;
+  }
+  for (const entry of entries) {
+    if (countRef.value >= SHELL_SNAPSHOT_MAX_FILES) break;
+    if (SHELL_SNAPSHOT_IGNORE.has(entry.name)) continue;
+    const relative = relativeTo ? path.join(relativeTo, entry.name) : entry.name;
+    const absolute = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      await snapshotDir(absolute, relative, result, countRef);
+    } else if (entry.isFile()) {
+      try {
+        const stat = await fs.promises.stat(absolute);
+        result.set(relative, { size: stat.size, mtimeMs: stat.mtimeMs });
+        countRef.value++;
+      } catch { /* ignore */ }
+    }
+  }
+  return result;
+}
+
+function diffSnapshots(before, after) {
+  const created = [];
+  const modified = [];
+  const deleted = [];
+  for (const [p, info] of after) {
+    if (!before.has(p)) {
+      created.push(p);
+    } else {
+      const old = before.get(p);
+      if (old.size !== info.size || old.mtimeMs !== info.mtimeMs) {
+        modified.push(p);
+      }
+    }
+  }
+  for (const p of before.keys()) {
+    if (!after.has(p)) deleted.push(p);
+  }
+  return { created, modified, deleted };
+}
+
+async function detectShellFileChanges(cwd) {
+  if (!cwd || isRemoteUri(cwd)) return null;
+  try {
+    const stat = await fs.promises.stat(cwd);
+    if (!stat.isDirectory()) return null;
+  } catch {
+    return null;
+  }
+  const before = await snapshotDir(cwd, '');
+  return async () => {
+    const after = await snapshotDir(cwd, '');
+    return diffSnapshots(before, after);
+  };
+}
+
+function postShellFileChanges(cwd, changes) {
+  if (!changes) return;
+  const total = changes.created.length + changes.modified.length + changes.deleted.length;
+  if (total === 0) return;
+  postToWebView({
+    type: 'shellFileChanges',
+    cwd,
+    created: changes.created,
+    modified: changes.modified,
+    deleted: changes.deleted,
+  });
+}
+
 /**
  * 异步执行 shell 命令。
  * - 立即把命令的初始事件 push 到 webview（命令回显 + cwd）
@@ -253,12 +425,25 @@ async function executeShellCommand(id, shellCommand, cwd) {
   if (!workingDir || !fs.existsSync(workingDir)) {
     workingDir = os.homedir();
   }
-  console.log('[LifeAiCode][executeShellCommand] workingDir:', workingDir);
+  // §命令本身包含 `cd /path && ...` 时，以命令指定的目录作为实际工作目录，
+  // 避免命令删除了自己的 cwd 后刷新文件树报错。
+  const effectiveCwd = extractCwdFromCommand(shellCommand, workingDir);
+  console.log('[LifeAiCode][executeShellCommand] workingDir:', workingDir, 'effectiveCwd:', effectiveCwd);
+
+  // §命令执行前后对 cwd 做快照，用于检测 shell 产生的文件变更（如 create-vite）
+  const getShellChanges = await detectShellFileChanges(effectiveCwd);
 
   // 平台相关 shell 选择
   const isWindows = process.platform === 'win32';
   const shell = isWindows ? 'cmd.exe' : '/bin/sh';
   const shellArgs = isWindows ? ['/c', shellCommand] : ['-c', shellCommand];
+
+  // PTY 路径：若 node-pty 可用且命令被判定为"需要 TTY 交互"（脚手架 / 安装向导等），
+  // 直接走 pty.spawn()，避免先 spawn 普通进程再转 PTY 导致双进程竞争同一目录。
+  // 普通命令（非交互）继续走 spawn 路径，避免 pty 的额外开销。
+  if (pty && needsPtyForCommand(shellCommand)) {
+    return executeShellWithPty(id, shellCommand, effectiveCwd, pty);
+  }
 
   let proc;
   try {
@@ -290,8 +475,8 @@ async function executeShellCommand(id, shellCommand, cwd) {
   // 立即给 Agent waiter 返回 "已启动"（不阻塞同步等待）。
   const isLongRunning = detectLongRunningCommand(shellCommand);
   const initialOutput = isLongRunning
-    ? `$ ${shellCommand}\n[工作目录] ${workingDir}\n\n[长驻进程] 已在后台启动。日志节流推送（每 5s），不会发送到 LLM。点击 ◼ 可手动停止。\n\n`
-    : `$ ${shellCommand}\n[工作目录] ${workingDir}\n\n`;
+    ? `$ ${shellCommand}\n[工作目录] ${effectiveCwd}\n\n[长驻进程] 已在后台启动。日志节流推送（每 5s），不会发送到 LLM。点击 ◼ 可手动停止。\n\n`
+    : `$ ${shellCommand}\n[工作目录] ${effectiveCwd}\n\n`;
   postToWebView({
     type: 'shellUpdate',
     id, shellCommand,
@@ -307,7 +492,7 @@ async function executeShellCommand(id, shellCommand, cwd) {
   const entry = {
     proc,
     finished: false,
-    cwd: workingDir,
+    cwd: effectiveCwd,
     buffers: { stdout: '', stderr: '' },
     fullOutput: '',
     outputTruncated: false,
@@ -385,6 +570,24 @@ async function executeShellCommand(id, shellCommand, cwd) {
       signal: signal ?? undefined,
       longRunning: isLongRunning,
     });
+    // §资源管理器刷新：命令结束后把 cwd 加入待刷新集合，调度去抖通知渲染进程。
+    // 长驻进程（npm run dev 等）不刷——它们通常只修改日志，不创建新文件。
+    if (!isLongRunning) {
+      try {
+        if (fs.existsSync(effectiveCwd)) {
+          recordShellCommandCompletion(effectiveCwd);
+        } else {
+          console.log('[LifeAiCode][executeShellCommand] cwd removed by command, skip file tree refresh:', effectiveCwd);
+        }
+      } catch (err) {
+        console.error('[LifeAiCode][executeShellCommand] error checking cwd:', err);
+      }
+      // §检测并上报 shell 产生的文件变更
+      (async () => {
+        const changes = getShellChanges ? await getShellChanges() : null;
+        postShellFileChanges(effectiveCwd, changes);
+      })();
+    }
     // 唤醒在等结果的人（Agent tool）
     // Bug 1: 使用 fullOutput（完整累积），不用会被 flush 清空的 buffers
     const result = {
@@ -393,6 +596,7 @@ async function executeShellCommand(id, shellCommand, cwd) {
       signal: signal ?? undefined,
       output: entry.fullOutput.trim(),
       truncated: entry.outputTruncated === true,
+      error: code !== 0 ? `命令执行失败 (exit code ${code})` : undefined,
     };
     entry.result = result;
     const waiter = pendingShellWaits.get(id);
@@ -418,19 +622,241 @@ async function executeShellCommand(id, shellCommand, cwd) {
   // 返回 Promise 给在等的调用方（Agent tool）
   // 注意：首次调用时这个 Promise 还没人等，所以 pendingShellWaits 里没记录
   // 后续如果有 waitShellCompletion(id) 调用，会被 addShellWaiter 添加到 map
-  // 这里我们返回 Promise 主动挂入（如果没有 waiter 就 setTimeout 删除自身）
+  // 这里我们返回 Promise 主动挂入；如果 60 秒内没人 wait，仅从 map 中清理自身
+  // （不主动 resolve 错误，避免和 proc.on('close') 的成功 resolve 冲突——之前
+  //  60s 后 resolve 一个 "无调用方" 错误，会覆盖 proc 实际完成的真实结果）。
   return new Promise((resolve, reject) => {
     pendingShellWaits.set(id, { resolve, reject });
-    // 如果 60 秒后还没人 wait，清理自身（避免泄漏）
+    // 仅清理 map 条目，不 resolve。proc.on('close') 仍然会 resolve 真实结果。
     setTimeout(() => {
-      const w = pendingShellWaits.get(id);
-      if (w) {
-        pendingShellWaits.delete(id);
-        w.resolve({
-          success: false,
-          error: 'shell 命令已触发但无调用方等待结果',
-        });
+      pendingShellWaits.delete(id);
+    }, 60_000);
+  });
+}
+
+/**
+ * 判断 shell 命令是否需要 PTY 伪终端。
+ * 仅在以下场景才返回 true：
+ * - 脚手架类（npm create / yarn create / pnpm create）— 没有非交互参数时会卡在 prompt
+ * - 交互式安装（npm init / yarn init / npx create-*）
+ * - sudo / login / passwd 等需要 tty 的命令
+ * 普通命令继续走 spawn 路径，避免 pty 的额外资源消耗。
+ */
+function needsPtyForCommand(shellCommand) {
+  if (!shellCommand) return false;
+  const cmd = shellCommand.trim();
+  // 显式非交互（带 --yes / -y 等）时不强制 PTY
+  if (/\s(?:-y|--yes|--no-interactive)\b/.test(cmd)) return false;
+  // 脚手架命令（npm create / yarn create / pnpm create / npx create-*）
+  if (/\b(?:npm|yarn|pnpm)\s+create\b/.test(cmd)) return true;
+  if (/\bnpx\s+create-[a-z-]+/.test(cmd)) return true;
+  // 交互式 init
+  if (/\binit\s*$/.test(cmd)) return true;
+  // 其它典型需要 tty 的命令
+  if (/^\s*(?:sudo|login|passwd|su)\b/.test(cmd)) return true;
+  return false;
+}
+
+/**
+ * 使用 node-pty 启动伪终端子进程。
+ * 与 executeShellCommand 的区别：分配 TTY 让子进程能正常接收 stdin/输出 prompt，
+ * 解决 `npm create` / `vue create` 等需要交互的脚手架命令卡住的问题。
+ *
+ * 实现策略：
+ * - 通过 pty.spawn 启动 shell（login shell），把 shellCommand 通过 stdin 喂入
+ * - 数据通过 onData 流回 webview
+ * - 退出时清理资源 + 唤醒 Agent waiter
+ */
+function extractCwdFromCommand(shellCommand, fallbackCwd) {
+  const match = shellCommand.match(/^cd\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*&&/);
+  if (match) {
+    const dir = (match[1] || match[2] || match[3]).trim();
+    if (path.isAbsolute(dir)) return dir;
+    if (fallbackCwd) return path.resolve(fallbackCwd, dir);
+  }
+  return fallbackCwd;
+}
+
+function ensureNpxYes(shellCommand) {
+  // 非交互场景下给 npx 加上 --yes，避免“Need to install... Ok to proceed?”卡住。
+  // 只在 npx 作为命令出现时替换（行首或 ; && || | 之后），避免改掉字符串里的 npx。
+  if (/\bnpx\s+(?:-y|--yes)\b/.test(shellCommand)) return shellCommand;
+  return shellCommand.replace(/(^|[;&|]\s*)\bnpx\b(\s+)/g, '$1npx --yes$2');
+}
+
+async function executeShellWithPty(id, shellCommand, cwd, ptyModule) {
+  // §命令本身包含 `cd /path && ...` 时，以命令指定的目录作为实际工作目录，
+  // 避免 LLM 传进来的 cwd 与命令里的 cd 不一致导致目录被删后刷新报错。
+  const effectiveCwd = extractCwdFromCommand(shellCommand, cwd);
+  // §npx 自动加 --yes，防止安装包时卡在交互式确认。
+  const finalCommand = ensureNpxYes(shellCommand);
+  console.log('[LifeAiCode][executeShellWithPty] using pty:', { id, shellCommand: finalCommand, cwd: effectiveCwd });
+
+  // §命令执行前后对 cwd 做快照，用于检测 shell 产生的文件变更（如 create-vite）
+  const getShellChanges = await detectShellFileChanges(effectiveCwd);
+
+  // 复用现有 activeProcs 注册（用 proc 字段保存 pty 句柄，close 事件用 onExit 代替）
+  const isLongRunning = detectLongRunningCommand(finalCommand);
+  const initialOutput = `$ ${finalCommand}\n[工作目录] ${effectiveCwd}\n\n[PTY 模式] 已分配伪终端，支持交互式命令。\n\n`;
+  postToWebView({
+    type: 'shellUpdate',
+    id, shellCommand,
+    output: initialOutput,
+    status: 'running',
+    longRunning: isLongRunning,
+  });
+
+  let proc;
+  try {
+    const isWindows = process.platform === 'win32';
+    const shellPath = isWindows ? (process.env.COMSPEC || 'cmd.exe') : (process.env.SHELL || '/bin/zsh');
+    const shellArgs = [];
+    proc = ptyModule.spawn(shellPath, shellArgs, {
+      name: 'xterm-256color',
+      cols: 120,
+      rows: 30,
+      cwd: effectiveCwd || process.cwd(),
+      env: { ...process.env, FORCE_COLOR: '1' },
+    });
+  } catch (err) {
+    console.error('[LifeAiCode][executeShellWithPty] pty.spawn failed:', err);
+    const errorMsg = `[PTY 启动失败] ${err.message}\n回退普通模式请重试`;
+    postToWebView({ type: 'shellUpdate', id, shellCommand, output: errorMsg, status: 'error' });
+    activeProcs.set(id, { proc: null, finished: true, cwd, buffers: { stdout: '', stderr: '' }, fullOutput: errorMsg, result: { success: false, error: errorMsg, output: errorMsg } });
+    return;
+  }
+
+  // 注册到 activeProcs（用 proc 字段保存 pty 句柄）
+  const entry = {
+    proc,
+    finished: false,
+    cwd,
+    buffers: { stdout: '', stderr: '' },
+    fullOutput: '',
+    outputTruncated: false,
+    result: null,
+    isLongRunning,
+    isPty: true,
+  };
+  activeProcs.set(id, entry);
+
+  // 把 shellCommand 喂入 pty stdin（确保 shell 启动后立即执行）
+  // 追加 `; exit` 让命令结束后 shell 自动退出，避免登录 shell 卡在 prompt 导致 onExit 不触发。
+  setImmediate(() => {
+    try {
+      proc.write(`${finalCommand}; exit\r`);
+    } catch (err) {
+      console.error('[LifeAiCode][executeShellWithPty] write failed:', err);
+    }
+  });
+
+  // 实时输出
+  let outputBuffer = '';
+  const FLUSH_INTERVAL = isLongRunning ? LONG_RUNNING_FLUSH_INTERVAL_MS : 200;
+  const MAX_LINE_BUFFER_PTY = 64 * 1024;
+  const flushTimer = setInterval(() => {
+    if (entry.finished) return;
+    if (outputBuffer.length === 0) return;
+    const chunk = outputBuffer;
+    outputBuffer = '';
+    if (chunk.length > MAX_OUTPUT_BYTES) {
+      postToWebView({
+        type: 'shellUpdate', id, shellCommand,
+        output: '…(输出过长，已截断)…\n' + chunk.slice(-MAX_OUTPUT_BYTES),
+        status: 'running', longRunning: isLongRunning,
+      });
+    } else {
+      postToWebView({ type: 'shellUpdate', id, shellCommand, output: chunk, status: 'running', longRunning: isLongRunning });
+    }
+  }, FLUSH_INTERVAL);
+  entry.flushTimer = flushTimer;
+
+  proc.onData((data) => {
+    outputBuffer += data;
+    entry.fullOutput += data;
+    if (entry.fullOutput.length > MAX_FULL_OUTPUT_CHARS) {
+      entry.outputTruncated = true;
+      // 保留尾部 16KB（与 spawn 实现一致）
+      entry.fullOutput = entry.fullOutput.slice(-LONG_RUNNING_OUTPUT_TAIL_CHARS);
+    }
+    if (outputBuffer.length > MAX_LINE_BUFFER_PTY) {
+      // 立即 flush 一批，避免节流窗口内积压
+      const chunk = outputBuffer;
+      outputBuffer = '';
+      postToWebView({ type: 'shellUpdate', id, shellCommand, output: chunk, status: 'running', longRunning: isLongRunning });
+    }
+  });
+
+  proc.onExit(({ exitCode, signal }) => {
+    if (entry.finished) return;
+    entry.finished = true;
+    clearInterval(flushTimer);
+    if (entry.timeoutTimer) clearTimeout(entry.timeoutTimer);
+    const code = exitCode ?? (signal ? -1 : 0);
+    const status = code === 0 ? 'success' : 'error';
+    // 收尾 flush（outputBuffer 中的数据已在 proc.onData 追加到 fullOutput，此处不再重复追加）
+    if (outputBuffer.length > 0) {
+      postToWebView({ type: 'shellUpdate', id, shellCommand: finalCommand, output: outputBuffer, status, longRunning: isLongRunning });
+      outputBuffer = '';
+    }
+    // 推送 done 事件
+    postToWebView({
+      type: 'shellUpdate', id, shellCommand: finalCommand, output: '',
+      status, exitCode: code, signal: signal ? String(signal) : undefined, longRunning: isLongRunning,
+    });
+    // 唤醒 waiter
+    const result = {
+      success: code === 0,
+      exitCode: code,
+      signal: signal ? String(signal) : undefined,
+      output: entry.fullOutput.trim(),
+      truncated: entry.outputTruncated === true,
+      error: code !== 0 ? `命令执行失败 (exit code ${code})` : undefined,
+    };
+    entry.result = result;
+    const waiter = pendingShellWaits.get(id);
+    if (waiter) {
+      pendingShellWaits.delete(id);
+      waiter.resolve(result);
+    }
+    activeProcs.delete(id);
+    // §资源管理器刷新（使用命令解析后的实际 cwd，避免命令删除了自己的 cwd）
+    if (!isLongRunning) {
+      const notifyCwd = entry.cwd || cwd;
+      if (notifyCwd) {
+        try {
+          if (fs.existsSync(notifyCwd)) {
+            recordShellCommandCompletion(notifyCwd);
+          } else {
+            console.log('[LifeAiCode][executeShellWithPty] cwd removed by command, skip file tree refresh:', notifyCwd);
+          }
+        } catch (err) {
+          console.error('[LifeAiCode][executeShellWithPty] error checking cwd:', err);
+        }
+        // §检测并上报 shell 产生的文件变更
+        (async () => {
+          const changes = getShellChanges ? await getShellChanges() : null;
+          postShellFileChanges(notifyCwd, changes);
+        })();
       }
+    }
+    console.log('[LifeAiCode][executeShellWithPty] pty exited:', { id, code, signal });
+  });
+
+  // 兜底超时：5 分钟
+  const timeoutTimer = setTimeout(() => {
+    if (entry.finished) return;
+    outputBuffer += '\n[超时] 命令执行超过 5 分钟，已强制终止。\n';
+    try { proc.kill(); } catch { /* ignore */ }
+  }, 300_000);
+  entry.timeoutTimer = timeoutTimer;
+
+  // 返回 waiter Promise（与 spawn 版本一致）
+  // 仅清理 map 条目，不主动 resolve 错误——proc.onExit 仍然会 resolve 真实结果。
+  return new Promise((resolve, reject) => {
+    pendingShellWaits.set(id, { resolve, reject });
+    setTimeout(() => {
+      pendingShellWaits.delete(id);
     }, 60_000);
   });
 }
@@ -1033,11 +1459,20 @@ async function acceptAndApplySuggestion(suggestionId) {
         fileGroups.get(change.filePath).push(change);
       }
 
+      // §统一 fs 适配器：本地走 Node fs，远程走 SSH provider
+      const fsAdapter = agentRuntime?.context?.fs || {
+        readFile: (p) => fs.promises.readFile(p, 'utf-8'),
+        resolvePath: (p) => p,
+      };
+
       for (const [filePath, changes] of fileGroups) {
         // 读取当前文件内容并依次替换
         let currentContent = '';
+        let resolvedPath = filePath;
         try {
-          currentContent = fs.readFileSync(filePath, 'utf-8');
+          resolvedPath = fsAdapter.resolvePath(filePath);
+          const raw = await fsAdapter.readFile(resolvedPath);
+          currentContent = typeof raw === 'string' ? raw : raw.toString('utf-8');
         } catch {
           console.warn('[LifeAiCode] 无法读取文件:', filePath);
           continue;
@@ -1105,7 +1540,7 @@ async function acceptAndApplySuggestion(suggestionId) {
               jsonrpc: '2.0',
               method: 'lifeAiCode.applyChanges',
               params: {
-                filePath,
+                filePath: resolvedPath,
                 original: appliedChanges.map((c) => c.original),
                 modified: appliedChanges.map((c) => c.modified),
               },
@@ -1190,7 +1625,8 @@ async function activate(context) {
   });
 
   // 初始化 Agent Runtime
-  agentRuntime = new AgentRuntime(llmClient, {
+  // §SSH 远程工作区支持：注入统一的 fs 适配器，工具根据 workspaceRoot 自动选择本地 fs 或 SSH provider
+  const agentContext = {
     rpc: async (method, params) => {
       if (!contextBuilder) return null;
       return contextBuilder.rpc.request(method, params);
@@ -1200,6 +1636,11 @@ async function activate(context) {
     waitShellCompletion,
     registerPendingEdit: (editId, edit) => {
       pendingAgentEdits.set(editId, edit);
+      // §Agent 自动模式：注册后立即落盘，避免 webview 往返确认产生的 race/丢消息。
+      // 仍保留在 pendingAgentEdits 中，供可能的后续查询；apply 后由后端发送 agentEditStatus。
+      if (agentAutoApply) {
+        applyPendingEdit(editId, edit);
+      }
     },
     // §需求8-阶段2：动态读取当前激活配置的上下文窗口大小
     // AgentRuntime 在 LLM 调用前用此值判断是否需要自动压缩
@@ -1213,7 +1654,9 @@ async function activate(context) {
         return 128000;
       }
     },
-  });
+  };
+  agentContext.fs = createFsAdapter(agentContext);
+  agentRuntime = new AgentRuntime(llmClient, agentContext);
   // 设置 Agent 审计日志路径（多级兜底：扩展目录 → 用户家目录 → 临时目录）
   try {
     const auditPath = pickWritablePath([
@@ -1245,7 +1688,22 @@ async function activate(context) {
   };
 
   // 尝试加载持久化配置（多配置）
-  function loadPersistedConfigs() {
+  // §环境隔离：使用 context.globalState（渲染进程 localStorage）存储配置，
+  // 避免打包时将开发环境的 API key 一并发布出去。
+  async function loadPersistedConfigs() {
+    try {
+      const saved = await context.globalState.get('lifeAiCode.configs', null);
+      if (saved && saved.configs && Array.isArray(saved.configs)) {
+        configs = saved.configs;
+        activeConfigId = saved.activeConfigId || configs[0]?.id || '';
+        console.log('[LifeAiCode] 加载持久化配置:', configs.length, '个, 当前:', activeConfigId);
+        return;
+      }
+    } catch { /* ignore */ }
+
+    // §一次性迁移：旧版将配置存在扩展目录的 .lifeAiCode-config.json 中，
+    // 现改为 globalState，避免打包时把开发环境的 API key 带出去。
+    // 已打包的安装包不会包含该文件，因此不会误迁移。
     try {
       const configPath = path.join(context.extensionPath, '.lifeAiCode-config.json');
       if (fs.existsSync(configPath)) {
@@ -1253,16 +1711,18 @@ async function activate(context) {
         if (saved.configs && Array.isArray(saved.configs)) {
           configs = saved.configs;
           activeConfigId = saved.activeConfigId || configs[0]?.id || '';
-          console.log('[LifeAiCode] 加载持久化配置:', configs.length, '个, 当前:', activeConfigId);
+          console.log('[LifeAiCode] 从旧版文件迁移配置:', configs.length, '个, 当前:', activeConfigId);
+          await context.globalState.update('lifeAiCode.configs', { configs, activeConfigId });
           return;
         }
       }
     } catch { /* ignore */ }
+
     configs = [];
     activeConfigId = '';
   }
 
-  loadPersistedConfigs();
+  await loadPersistedConfigs();
 
   // 合并环境变量配置到列表（如果没有持久化配置）
   if (configs.length === 0 && initConfig.apiKey) {
@@ -1280,10 +1740,9 @@ async function activate(context) {
   }
 
   // 持久化当前配置状态并广播给 WebView
-  function persistConfigs() {
+  async function persistConfigs() {
     try {
-      const configPath = path.join(context.extensionPath, '.lifeAiCode-config.json');
-      fs.writeFileSync(configPath, JSON.stringify({ configs, activeConfigId }, null, 2));
+      await context.globalState.update('lifeAiCode.configs', { configs, activeConfigId });
     } catch { /* ignore */ }
   }
 
@@ -1291,11 +1750,11 @@ async function activate(context) {
     postToWebView({ type: 'configLoaded', configs, activeId: activeConfigId });
   }
 
-  function setActiveConfig(config) {
+  async function setActiveConfig(config) {
     if (!config) return;
     initLlmClient(config);
     activeConfigId = config.id;
-    persistConfigs();
+    await persistConfigs();
     broadcastConfigs();
   }
 
@@ -1333,7 +1792,7 @@ async function activate(context) {
       if (config) {
         configs = configs.map((c) => c.id === config.id ? config : c);
         if (!configs.find((c) => c.id === config.id)) configs.push(config);
-        setActiveConfig(config);
+        await setActiveConfig(config);
         console.log('[LifeAiCode] 配置已更新:', config.provider, config.model);
         vscode.window.showInformationMessage(`LifeAiCode: 已切换到 ${config.provider} / ${config.model || '默认'}`);
       }
@@ -1447,9 +1906,13 @@ async function activate(context) {
       switch (message.command) {
         case 'sendMessage': {
           const ctx = message.context || await contextBuilder.buildContext();
+          // §Agent 自动模式开关：true 时 write/apply/delete 工具注册后立即落盘，
+          // 避免 webview 往返确认出现 race/丢消息。
+          agentAutoApply = message.agentMode === true;
           // 更新 Agent Runtime 上下文
           if (agentRuntime) {
             agentRuntime.context.workspaceRoot = ctx.workspaceRoot || '';
+            agentRuntime.context.remote = ctx.remote || null;
           }
           if (message.agentMode) {
             await runAgentTask(message.text, ctx, { history: message.history });
@@ -1526,7 +1989,7 @@ async function activate(context) {
         case 'switchConfig': {
           const targetConfig = message.configId && configs.find((c) => c.id === message.configId);
           if (targetConfig) {
-            setActiveConfig(targetConfig);
+            await setActiveConfig(targetConfig);
             console.log('[LifeAiCode] 切换到配置:', targetConfig.name || targetConfig.provider);
           }
           break;
@@ -1537,7 +2000,7 @@ async function activate(context) {
           if (config) {
             configs = configs.map((c) => c.id === config.id ? config : c);
             if (!configs.find((c) => c.id === config.id)) configs.push(config);
-            setActiveConfig(config);
+            await setActiveConfig(config);
             console.log('[LifeAiCode] 配置已更新:', config.name || config.provider, config.model);
           }
           break;
@@ -1551,9 +2014,9 @@ async function activate(context) {
             }
             const activeConfig = configs.find((c) => c.id === activeConfigId);
             if (activeConfig) {
-              setActiveConfig(activeConfig);
+              await setActiveConfig(activeConfig);
             } else {
-              persistConfigs();
+              await persistConfigs();
               broadcastConfigs();
             }
             console.log('[LifeAiCode] 配置列表已更新顺序:', configs.length);
@@ -1659,7 +2122,13 @@ async function activate(context) {
         case 'confirmAgentEdit': {
           const edit = pendingAgentEdits.get(message.editId);
           if (!edit) {
-            postToWebView({ type: 'error', message: '未找到待确认的编辑' });
+            // §Agent 自动模式下该 edit 可能已在注册时被立即应用，
+            // 避免向聊天框抛出无意义的“未找到待确认编辑”错误。
+            if (agentAutoApply) {
+              postToWebView({ type: 'agentEditStatus', editId: message.editId, status: 'applied' });
+            } else {
+              postToWebView({ type: 'error', message: '未找到待确认的编辑' });
+            }
             break;
           }
           // 根据编辑模式选择 RPC 方法和参数：

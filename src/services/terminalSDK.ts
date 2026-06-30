@@ -40,6 +40,10 @@ export interface TerminalCreateOptions {
   autoFocus?: boolean;
   /** 是否为独立 Modal 终端，不参与底部面板布局 */
   isModal?: boolean;
+  /** §需求：标识此终端为 SSH 远程终端。
+   *  true 时：(a) 不进入 BottomPanel tab 列表；(b) "嵌入到标签页" 操作不创建底部 tab，
+   *  改为关闭 modal 即可（用户重新通过 SSH 面板可再次打开）。 */
+  isSSH?: boolean;
   /** 终端启动后自动输入的文本（例如 SSH 密码），注意隐私安全 */
   input?: string;
   /** 输出过滤正则字符串，用于隐藏密码提示等不美观内容 */
@@ -74,14 +78,14 @@ export const terminalSDK = {
    * 创建一个新的终端 Tab
    */
   async createTab(options: TerminalCreateOptions): Promise<TerminalCreateResult> {
-    const { name, cwd, executable, args, env, profile, autoFocus = true, isModal, input, outputFilter } = options;
+    const { name, cwd, executable, args, env, profile, autoFocus = true, isModal, isSSH, input, outputFilter } = options;
 
     if (autoFocus && !isModal) {
       this.showPanel();
     }
 
     const tabId = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-    store.dispatch(addTab({ id: tabId, name, profile, isModal, outputFilter }));
+    store.dispatch(addTab({ id: tabId, name, profile, isModal, isSSH, outputFilter }));
 
     const config: import('../types/electron').TerminalCreateConfig = {
       cwd,

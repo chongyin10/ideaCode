@@ -173,6 +173,8 @@ function App() {
     connections: true,
     addForm: false,
     sessions: true,
+    // §需求：SSH 操作日志也支持"活动会话"那种可折叠功能，默认展开
+    logs: true,
   });
   const [form, setForm] = useState({
     name: '',
@@ -217,6 +219,8 @@ function App() {
         connections: connections.length > 0,
         addForm: connections.length === 0,
         sessions: sessions.length > 0,
+        // §需求：SSH 操作日志首次挂载时默认展开（与活动会话同款行为）
+        logs: logs.length > 0,
       });
       hasMountedRef.current = true;
       prevSessionCountRef.current = sessions.length;
@@ -228,7 +232,7 @@ function App() {
       setExpandedSections((prev) => ({ ...prev, sessions: true }));
     }
     prevSessionCountRef.current = sessions.length;
-  }, [connections.length, sessions.length]);
+  }, [connections.length, sessions.length, logs.length]);
 
   // 进入编辑模式时自动展开添加/编辑表单
   useEffect(() => {
@@ -737,20 +741,26 @@ function App() {
 
       {logs.length > 0 && (
         <div className="section">
-          <div className="section-header">
+          <div className="section-header section-header--collapsible" onClick={() => toggleSection('logs')}>
+            <span className={`section-chevron ${expandedSections.logs ? 'expanded' : ''}`}>▶</span>
             <span>SSH 操作日志</span>
-            <button className="btn btn-sm btn-link section-header__action" onClick={() => setLogs([])}>清空</button>
+            <button
+              className="btn btn-sm btn-link section-header__action"
+              onClick={(e) => { e.stopPropagation(); setLogs([]); }}
+            >清空</button>
           </div>
-          <div className="ssh-log">
-            {logs.map((log, idx) => (
-              <div
-                key={idx}
-                className={`ssh-log__line ${log.level === 'error' ? 'ssh-log__line--error' : ''}`}
-              >
-                {log.message}
-              </div>
-            ))}
-          </div>
+          {expandedSections.logs && (
+            <div className="ssh-log">
+              {logs.map((log, idx) => (
+                <div
+                  key={idx}
+                  className={`ssh-log__line ${log.level === 'error' ? 'ssh-log__line--error' : ''}`}
+                >
+                  {log.message}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
         </>

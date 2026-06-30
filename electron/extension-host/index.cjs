@@ -749,9 +749,11 @@ const lifeAiCodeMethods = [
   'lifeAiCode.internal.setEditMode',
 ];
 
-// 处理 commands.execute（如 lifeAiCode.ask）
+// 处理 commands.execute（如 lifeAiCode.ask、ssh.internal.execute 等）
 rpc.on('commands.execute', async (params) => {
   const { command, args = [] } = params || {};
+
+  // 1) 本地注册的 lifeAiCode 命令（直接处理）
   if (command && global._lifeAiCodeCommandHandlers && global._lifeAiCodeCommandHandlers.has(command)) {
     const handler = global._lifeAiCodeCommandHandlers.get(command);
     try {
@@ -761,8 +763,47 @@ rpc.on('commands.execute', async (params) => {
       return { executed: false, error: err.message };
     }
   }
+
+  // 2) §需求：把 ssh.* 前缀的命令转发到 SSH 扩展执行。
+  //   之前没有这条路径，导致 git 扩展看到 ssh:// 路径无法做远程 git 检测。
+  //   例如：git 扩展调用 vscode.commands.executeCommand('ssh.internal.execute', { id, command })
+  //   会通过 process.send({ method: 'commands.execute' }) 来到这里，
+  //   我们把 args 透传给 ideacode-ssh 扩展的 executeRemote 或 ssh.internal.execute 包装。
+  // 3) §新增：ssh.fs.* 命令转发到 SSH 扩展的 FileSystemProvider，供 lifeAiCode 等扩展做远程文件操作。
+  if (command && command.startsWith('ssh.')) {
+    try {
+      await manager.activateExtension('ideacode-ssh');
+      if (command.startsWith('ssh.fs.')) {
+        const method = command.slice('ssh.fs.'.length);
+        const result = await manager.invokeExtension('ideacode-ssh', 'callFileSystemProvider', ['ssh', method, args]);
+        return { executed: true, result };
+      }
+      const result = await manager.invokeExtension('ideacode-ssh', 'executeRemote',
+        extractSshArgs(command, args));
+      return { executed: true, result };
+    } catch (err) {
+      return { executed: false, error: err.message };
+    }
+  }
+
   return { executed: false, error: `命令未找到: ${command}` };
 });
+
+/**
+ * 从 git 扩展传入的 ssh.internal.execute 调用格式（{ id, command, cwd? }）中
+ * 提取出 SSH 扩展 executeRemote(connectionId, command, cwd) 需要的参数。
+ * git 扩展解析 ssh://<connId>/path 格式，connId 就是 SSH 扩展的 connectionId。
+ */
+function extractSshArgs(command, args) {
+  if (command === 'ssh.internal.execute') {
+    const [cfg] = args;
+    if (cfg && typeof cfg === 'object' && cfg.id) {
+      return [cfg.id, cfg.command, cfg.cwd];
+    }
+  }
+  // 透传其他 ssh.* 命令（保持向后兼容）
+  return args;
+}
 
 for (const method of lifeAiCodeMethods) {
   rpc.on(method, async (params) => {

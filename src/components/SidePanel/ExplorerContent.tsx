@@ -16,6 +16,7 @@ import {
   ChevronsDownUp,
   Download,
   ChevronRight,
+  Terminal as TerminalIcon,
 } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import {
@@ -28,6 +29,7 @@ import {
   toggleExpandDir,
   activateFile,
   removeWorkspaceFolder,
+  closeFile,
 } from '../../store/slices/workspaceSlice';
 import { switchPanel } from '../../store/slices/layoutSlice';
 import { openDirectory } from '../../services/fileService';
@@ -38,6 +40,7 @@ import {
   isSameSource,
   isRemoteUri,
 } from '../../services/fileService';
+import { parseRemoteUri } from '../../services/fileSystemProvider';
 import {
   exists,
   createFile,
@@ -54,9 +57,11 @@ import {
   setFileClipboard,
   clearFileClipboard,
 } from '../../services/fileClipboard';
+import { terminalSDK } from '../../services/terminalSDK';
 import FileTree, { type PendingCreate, type PendingRename, type LastOperation, getCurrentDrag, currentDragExists, clearCurrentDrag } from './FileTree';
 import ContextMenu, { type MenuItem } from '../ContextMenu';
 import InlineInput from '../InlineInput';
+import { DeleteConfirmDialog } from '../DeleteConfirmDialog';
 import { getMenuManager, contributionToMenuItem } from '../../plugin/menuManager';
 
 /* ─── Hebbian 菜单频率学习 ─── */
@@ -161,9 +166,18 @@ const ExplorerContent = () => {
   }, [openedFiles, editorGroups]);
 
   // 各区域展开状态
-  const [openEditorsExpanded, setOpenEditorsExpanded] = useState(true);
+  // §打开的编辑器：没有已打开文件时默认收起，避免空列表占用空间
+  const [openEditorsExpanded, setOpenEditorsExpanded] = useState(() => visibleOpenedFiles.length > 0);
   const [projectExpanded, setProjectExpanded] = useState(true);
   const [timelineExpanded, setTimelineExpanded] = useState(false);
+
+  // §打开的编辑器：当从空状态首次打开文件时自动展开，方便查看
+  useEffect(() => {
+    if (visibleOpenedFiles.length > 0 && !openEditorsExpanded) {
+      setOpenEditorsExpanded(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleOpenedFiles.length]);
 
   // 打开的编辑器固定最大高度
   const OPEN_EDITORS_MAX_HEIGHT = 120;
@@ -239,6 +253,7 @@ const ExplorerContent = () => {
   const [lastOperation, setLastOperation] = useState<LastOperation | null>(null);
   const [clipboardState, setClipboardState] = useState<FileClipboardState | null>(null);
   const [selectedEntries, setSelectedEntries] = useState<{ entry: FileEntry; parentSource: FileSource }[]>([]);
+  const [pendingDeleteTargets, setPendingDeleteTargets] = useState<{ entry: FileEntry; parentSource: FileSource }[] | null>(null);
 
   // 提取为稳定引用：原 selectedEntries.map() 在每次渲染生成新数组，
   // 直接传给 FileTree 会击穿 React.memo，导致点击文件时整树重渲染。
@@ -250,6 +265,44 @@ const ExplorerContent = () => {
   const notifyChange = useCallback((...targets: FileSource[]) => {
     setLastOperation({ targets, timestamp: Date.now() });
   }, []);
+
+  // §删除文件并联动关闭已打开的编辑器 Tab
+  const executeDelete = useCallback(async (targets: { entry: FileEntry; parentSource: FileSource }[]) => {
+    if (!targets || targets.length === 0) return;
+    const parentSources = new Set<FileSource>();
+    for (const target of targets) {
+      try {
+        await deleteEntry(target.parentSource, target.entry.name, target.entry.kind);
+        parentSources.add(target.parentSource);
+
+        // 关闭与被删文件/目录匹配的编辑器 Tab
+        const deletedSource =
+          typeof target.parentSource === 'string'
+            ? `${target.parentSource}/${target.entry.name}`
+            : target.entry.source;
+        if (deletedSource) {
+          const filesToClose = openedFiles.filter((f) => {
+            if (typeof f.source !== 'string' || typeof deletedSource !== 'string') return false;
+            return f.source === deletedSource || f.source.startsWith(deletedSource + '/');
+          });
+          filesToClose.forEach((f) => dispatch(closeFile(f.id)));
+        }
+      } catch (err) {
+        alert(t('explorer.errors.deleteFailed', {
+          name: target.entry.name,
+          message: err instanceof Error ? err.message : String(err),
+        }));
+      }
+    }
+    for (const ps of parentSources) {
+      notifyChange(ps);
+    }
+    dispatch(refreshAllFilePaths());
+    if (rootSource) {
+      dispatch(refreshDirectory(rootSource));
+    }
+    setPendingDeleteTargets(null);
+  }, [openedFiles, dispatch, notifyChange, rootSource, t]);
 
   // Git discard 等外部文件变更后，精准刷新受影响目录（不全量刷新，避免 CPU/GPU 卡顿）
   useEffect(() => {
@@ -291,6 +344,62 @@ const ExplorerContent = () => {
     dispatch(switchPanel('search'));
     dispatch(setPendingSearchQuery(name));
   }, [dispatch]);
+
+  // §"在终端中打开"：右键条目时触发
+  //   - 本地路径：直接用 entry.source 作为 cwd，createTerminal 启动本地 shell
+  //   - SSH 远程路径：解析 ssh://<connId><path>，从 Redux 取出连接信息，
+  //     构造 ssh -t user@host "cd <path> && exec $SHELL -l" 命令（与 SshFileTreePanel
+  //     "在终端中打开" 行为一致），由 terminalSDK.createTab 统一调度
+  const sshConnections = useAppSelector((s) => s.workspace.sshConnections);
+  const handleOpenInTerminal = useCallback(async (entry: FileEntry) => {
+    const source = entry.source;
+    // SSH 远程条目：构造 ssh 命令
+    if (isPath(source) && isRemoteUri(source)) {
+      const parts = parseRemoteUri(String(source));
+      if (!parts || parts.scheme !== 'ssh') {
+        alert('无法解析该远程 URI（仅支持 ssh://）');
+        return;
+      }
+      const conn = sshConnections[parts.authority];
+      if (!conn) {
+        alert('未找到对应的 SSH 连接信息。请重新在"SSH 远程目录结构"中加载该目录。');
+        return;
+      }
+      // 智能判断：右键文件夹 → 切到该目录；右键文件 → 进入父目录
+      const remotePath = parts.path || '/';
+      const targetDir = entry.kind === 'directory'
+        ? remotePath
+        : remotePath.replace(/\/[^/]*$/, '') || '/';
+      const escapedDir = `'${targetDir.replace(/'/g, "'\\''")}'`;
+      try {
+        await terminalSDK.createTab({
+          name: `${conn.name} · ${conn.username}@${conn.host}`,
+          executable: 'ssh',
+          args: [
+            '-p', String(conn.port || 22),
+            '-t',
+            `${conn.username}@${conn.host}`,
+            `cd ${escapedDir} && exec $SHELL -l`,
+          ],
+        });
+      } catch (err) {
+        alert(`打开 SSH 终端失败: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      return;
+    }
+    // 本地路径：cwd 设为 entry.source（若点击文件则用父目录）
+    if (isPath(source)) {
+      const localPath = String(source);
+      const targetDir = entry.kind === 'directory'
+        ? localPath
+        : localPath.replace(/[/\\][^/\\]*$/, '') || localPath;
+      try {
+        await terminalSDK.createTab({ cwd: targetDir });
+      } catch (err) {
+        alert(`打开终端失败: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }, [sshConnections]);
 
   const handleItemSelect = useCallback((entry: FileEntry, parentSource: FileSource, isMultiSelect: boolean) => {
     if (isMultiSelect) {
@@ -590,11 +699,25 @@ const ExplorerContent = () => {
           }),
         },
         {
+          // §需求：在右键菜单里提供"在终端中打开"入口。点中后：
+          //   - 本地文件/目录：cwd 设为 entry 路径，createTerminal 直接打开本地 PTY。
+          //   - SSH 远程条目（之前由 SshFileTreePanel "添加到资源管理器" 加载的）：
+          //     从 Redux 取出 connection 信息，构造 ssh 命令：ssh -p 22 -t user@host
+          //     "cd <path> && exec $SHELL -l"，让终端标签直接连到远程主机。
+          id: 'open-in-terminal',
+          label: '在终端中打开',
+          icon: <TerminalIcon size={14} strokeWidth={1.5} />,
+          group: '1_new',
+          order: 4,
+          disabled: isMultiSelect,
+          onClick: wrapWithClickTracking('open-in-terminal', () => handleOpenInTerminal(targetEntry)),
+        },
+        {
           id: 'find-in-files',
           label: t('explorer.contextMenu.findInFiles'),
           icon: <Search size={14} strokeWidth={1.5} />,
           group: '2_search',
-          order: 4,
+          order: 5,
           disabled: isMultiSelect,
           onClick: wrapWithClickTracking('find-in-files', () => handleFindInFiles(targetEntry.name)),
         },
@@ -688,28 +811,8 @@ const ExplorerContent = () => {
           group: '5_file',
           order: 11,
           disabled: activeTargets.length === 0,
-          onClick: wrapWithClickTracking('delete', async () => {
-            const names = activeTargets.map((target) => target.entry.name).join('", "');
-            if (!window.confirm(t('explorer.confirm.delete', { names }))) return;
-            const parentSources = new Set<FileSource>();
-            for (const target of activeTargets) {
-              try {
-                await deleteEntry(target.parentSource, target.entry.name, target.entry.kind);
-                parentSources.add(target.parentSource);
-              } catch (err) {
-                alert(t('explorer.errors.deleteFailed', {
-                  name: target.entry.name,
-                  message: err instanceof Error ? err.message : String(err),
-                }));
-              }
-            }
-            for (const ps of parentSources) {
-              notifyChange(ps);
-            }
-            dispatch(refreshAllFilePaths());
-            if (rootSource) {
-              dispatch(refreshDirectory(rootSource));
-            }
+          onClick: wrapWithClickTracking('delete', () => {
+            setPendingDeleteTargets(activeTargets);
           }),
         }
       );
@@ -1055,6 +1158,14 @@ const ExplorerContent = () => {
         visible={contextMenu.visible}
         onClose={closeContextMenu}
       />
+
+      {pendingDeleteTargets && (
+        <DeleteConfirmDialog
+          message={t('explorer.confirm.delete')}
+          onConfirm={() => executeDelete(pendingDeleteTargets)}
+          onCancel={() => setPendingDeleteTargets(null)}
+        />
+      )}
     </div>
   );
 };

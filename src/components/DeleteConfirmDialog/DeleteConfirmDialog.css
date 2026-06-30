@@ -1,0 +1,62 @@
+.delete-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.delete-confirm-dialog {
+  min-width: 320px;
+  max-width: 480px;
+  padding: 20px 24px 24px;
+  background: var(--surface-1, #1f1f25);
+  border: 1px solid var(--border-default, rgba(255, 255, 255, 0.09));
+  border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
+  color: var(--text-primary, #ececf1);
+}
+
+.delete-confirm-dialog__message {
+  font-size: 14px;
+  line-height: 1.6;
+  margin-bottom: 20px;
+}
+
+.delete-confirm-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.delete-confirm-dialog__btn {
+  padding: 7px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 120ms ease;
+}
+
+.delete-confirm-dialog__btn--secondary {
+  background: var(--surface-3, #262630);
+  border-color: var(--border-default, rgba(255, 255, 255, 0.09));
+  color: var(--text-secondary, #b4b4be);
+}
+
+.delete-confirm-dialog__btn--secondary:hover {
+  background: var(--surface-4, #2e2e38);
+  color: var(--text-primary, #ececf1);
+}
+
+.delete-confirm-dialog__btn--danger {
+  background: var(--error-500, #ef4444);
+  color: #fff;
+}
+
+.delete-confirm-dialog__btn--danger:hover {
+  background: var(--error-600, #dc2626);
+}

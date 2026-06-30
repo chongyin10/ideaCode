@@ -3,11 +3,13 @@
  *
  * 读取指定文件内容。
  * 支持绝对路径和相对于工作区的路径。
+ * §SSH 远程工作区支持：优先使用 context.fs 统一适配器，自动桥接到 SSH FileSystemProvider。
  */
 
 const fs = require('fs');
 const path = require('path');
 const SafeFileReader = require('../safeFileReader.cjs');
+const { isRemoteUri } = require('../../sshUri');
 
 async function readFile(args, context) {
   const { path: filePathInput } = args || {};
@@ -16,23 +18,13 @@ async function readFile(args, context) {
   }
 
   const workspaceRoot = context.workspaceRoot || '';
-  let targetPath = filePathInput;
 
-  // 处理相对路径
-  if (!path.isAbsolute(targetPath) && workspaceRoot) {
-    targetPath = path.join(workspaceRoot, targetPath);
-  }
-
-  targetPath = path.resolve(targetPath);
-
-  // 路径边界检查
-  if (workspaceRoot && !targetPath.startsWith(path.resolve(workspaceRoot))) {
-    return { success: false, error: `拒绝访问工作区外的路径: ${filePathInput}` };
-  }
+  // §统一 fs 适配器：本地走 Node fs，远程走 SSH provider
+  const fsAdapter = context.fs || createLocalFsAdapter();
 
   try {
-    const stat = await fs.promises.stat(targetPath);
-    if (!stat.isFile()) {
+    const stat = await fsAdapter.stat(filePathInput);
+    if (!stat || stat.isDirectory) {
       return { success: false, error: `路径不是文件: ${filePathInput}` };
     }
 
@@ -40,8 +32,26 @@ async function readFile(args, context) {
     // 而是返回文件结构大纲 + 使用建议，让大模型自适应选择分片读取工具
     const MAX_SIZE = 500 * 1024; // 500KB
     if (stat.size > MAX_SIZE) {
-      const language = SafeFileReader.detectLanguage(targetPath);
-      const outline = await SafeFileReader.extractOutline(targetPath, language);
+      const language = SafeFileReader.detectLanguage(filePathInput);
+      let outline;
+      try {
+        // 本地文件才能走流式 outline；远程文件会抛错，降级处理
+        if (!isRemoteUri(workspaceRoot)) {
+          outline = await SafeFileReader.extractOutline(resolveLocalPath(filePathInput, workspaceRoot), language);
+        } else {
+          throw new Error('remote file');
+        }
+      } catch (err) {
+        const content = await fsAdapter.readFile(filePathInput);
+        const lines = (typeof content === 'string' ? content : content.toString('utf-8')).split('\n');
+        outline = {
+          symbols: [],
+          imports: [],
+          exports: [],
+          totalLines: lines.length,
+          truncated: true,
+        };
+      }
       const sizeKB = (stat.size / 1024).toFixed(1);
       return {
         success: true,
@@ -59,16 +69,30 @@ async function readFile(args, context) {
       };
     }
 
-    const content = await fs.promises.readFile(targetPath, 'utf-8');
+    const content = await fsAdapter.readFile(filePathInput);
     return {
       success: true,
       path: filePathInput,
       size: stat.size,
-      content,
+      content: typeof content === 'string' ? content : content.toString('utf-8'),
     };
   } catch (err) {
     return { success: false, error: `读取文件失败: ${err.message}` };
   }
+}
+
+function createLocalFsAdapter() {
+  return {
+    stat: (p) => fs.promises.stat(p),
+    readFile: (p) => fs.promises.readFile(p, 'utf-8'),
+  };
+}
+
+function resolveLocalPath(inputPath, workspaceRoot) {
+  if (!path.isAbsolute(inputPath) && workspaceRoot && !isRemoteUri(workspaceRoot)) {
+    return path.resolve(path.join(workspaceRoot, inputPath));
+  }
+  return path.resolve(inputPath);
 }
 
 module.exports = readFile;

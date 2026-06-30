@@ -14,6 +14,10 @@ const CLOSE_ANIMATION_DURATION = 200;
 export default function TerminalModal() {
   const modal = useAppSelector((state) => state.modal.terminalModal);
   const editorTerminals = useAppSelector((state) => state.terminal.editorTerminals);
+  // §需求：取 tab 的 isSSH 标记决定是否要把它"嵌入到标签页"
+  const isSSHTab = useAppSelector(
+    (state) => !!(modal && state.terminal.tabs[modal.tabId]?.isSSH)
+  );
   const dispatch = useAppDispatch();
   const [isClosing, setIsClosing] = useState(false);
   const terminalRef = useRef<TerminalInstanceHandle | null>(null);
@@ -39,7 +43,21 @@ export default function TerminalModal() {
   const handleExpandToTab = () => {
     if (!modal) return;
     const { tabId, title } = modal;
-    // 主动序列化当前屏幕内容写入快照，避免依赖卸载 cleanup 的被动执行时序。
+    // §需求：SSH 终端点击"嵌入到标签页"时【不要】执行以下操作——
+    //   (a) moveToEditor 会在 editor area 创建 tab
+    //   (b) editorTerminals 让它出现在 BottomPanel tab 列表（即使没在 panelLayout 里）
+    //   (c) openVirtualFile 创建一个虚拟文件
+    //   用户明确要求 SSH 终端的归宿只跟 modal / SSH 面板有关，不应占用底部区域。
+    //   修复：对 SSH 终端只关闭 modal，保留 processId——用户可以在 SSH 面板重新打开。
+    if (isSSHTab) {
+      // §SSH 终端：仅关闭 modal，保留底层的 ssh2 连接（process 仍在跑）。
+      //   用户可随时通过 SSH 面板"终端"按钮重新打开。
+      //   不动 BottomPanel、不动 editor area、不动虚拟文件列表。
+      dispatch(closeTerminalModal());
+      return;
+    }
+
+    // 普通终端：主动序列化当前屏幕内容写入快照，避免依赖卸载 cleanup 的被动执行时序。
     // 此前用 requestAnimationFrame 把迁移推迟到下一帧，会使卸载(cleanup serialize)
     // 与挂载(setup getSnapshot)分属两次 commit，React 不保证两者 passive effects
     // 的执行顺序，导致首次迁移时 setup 读不到快照而清屏。

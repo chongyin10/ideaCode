@@ -5,10 +5,12 @@
  * - 使用 fs.promises 全异步
  * - 限制单次最多扫描 100 个文件、收集 50 个匹配
  * - 自动忽略 node_modules / .git / 二进制文件 / 图片字体视频等
+ * §SSH 远程工作区支持：使用 context.fs 统一适配器读取目录和文件。
  */
 
 const fs = require('fs');
 const path = require('path');
+const { isRemoteUri, parseSshUri } = require('../../sshUri');
 
 const IGNORED_DIRS = new Set([
   'node_modules', '.git', 'dist', 'build', 'out', '.vite', '.next', '.nuxt',
@@ -34,7 +36,18 @@ async function searchFiles(args, context) {
     return { success: false, error: '未打开工作区，无法搜索' };
   }
 
-  const rootPath = path.resolve(workspaceRoot);
+  const isRemote = isRemoteUri(workspaceRoot);
+  const fsAdapter = context.fs || createLocalFsAdapter();
+
+  let rootPath = workspaceRoot;
+  let rootRemotePath = '';
+  if (isRemote) {
+    const sshInfo = parseSshUri(workspaceRoot);
+    rootRemotePath = sshInfo.remotePath || '/';
+    rootPath = workspaceRoot;
+  } else {
+    rootPath = path.resolve(workspaceRoot);
+  }
 
   let regex;
   try {
@@ -62,7 +75,7 @@ async function searchFiles(args, context) {
 
     let entries;
     try {
-      entries = await fs.promises.readdir(dir, { withFileTypes: true });
+      entries = await fsAdapter.readDirectory(dir);
     } catch {
       return;
     }
@@ -73,10 +86,10 @@ async function searchFiles(args, context) {
       if (IGNORED_DIRS.has(entry.name)) continue;
       if (entry.name.startsWith('.')) continue;
 
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
+      const fullPath = isRemote ? entry.uri : path.join(dir, entry.name);
+      if (entry.kind === 'directory') {
         await walk(fullPath);
-      } else if (entry.isFile()) {
+      } else if (entry.kind === 'file') {
         const ext = path.extname(entry.name).toLowerCase();
         if (IGNORED_EXTS.has(ext)) continue;
         if (allowedExts && !allowedExts.has(ext)) continue;
@@ -84,15 +97,18 @@ async function searchFiles(args, context) {
         scannedFiles++;
         try {
           // 大文件保护：跳过超大文件，防止 readFile 触发 Invalid string length
-          const stat = await fs.promises.stat(fullPath);
-          if (stat.size > MAX_SEARCH_FILE_SIZE) continue;
+          const stat = await fsAdapter.stat(fullPath);
+          if (!stat || stat.size > MAX_SEARCH_FILE_SIZE) continue;
 
-          const content = await fs.promises.readFile(fullPath, 'utf-8');
+          const raw = await fsAdapter.readFile(fullPath);
+          const content = typeof raw === 'string' ? raw : raw.toString('utf-8');
           const lines = content.split('\n');
           for (let i = 0; i < lines.length; i++) {
             regex.lastIndex = 0;
             if (regex.test(lines[i])) {
-              const relPath = path.relative(rootPath, fullPath);
+              const relPath = isRemote
+                ? (rootRemotePath && fullPath.startsWith(rootRemotePath) ? fullPath.slice(rootRemotePath.length + 1) : fullPath)
+                : path.relative(rootPath, fullPath);
               matches.push({
                 file: relPath,
                 line: i + 1,
@@ -117,6 +133,18 @@ async function searchFiles(args, context) {
     scannedFiles,
     matchCount: matches.length,
     matches,
+  };
+}
+
+function createLocalFsAdapter() {
+  return {
+    readDirectory: (dir) => fs.promises.readdir(dir, { withFileTypes: true }).then((dirents) => dirents.map((d) => ({
+      name: d.name,
+      kind: d.isDirectory() ? 'directory' : 'file',
+      uri: path.join(dir, d.name),
+    }))),
+    stat: (p) => fs.promises.stat(p).then((s) => ({ isDirectory: s.isDirectory(), size: s.size })),
+    readFile: (p) => fs.promises.readFile(p, 'utf-8'),
   };
 }
 

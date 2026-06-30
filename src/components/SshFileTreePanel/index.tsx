@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
-import { useAppDispatch, useAppSelector } from '../../store/hooks';
-import { setFileContent, openFile, loadDirectory, clearWorkspaceFolders } from '../../store/slices/workspaceSlice';
+import { useAppDispatch } from '../../store/hooks';
+import { setFileContent, openFile, loadDirectory, clearWorkspaceFolders, setSshConnection } from '../../store/slices/workspaceSlice';
 import { terminalSDK } from '../../services/terminalSDK';
 import { getExtensionBridge } from '../../plugin/extensionBridge';
 import ContextMenu, { type MenuItem } from '../ContextMenu';
@@ -138,9 +138,6 @@ function getUniqueName(parent: FileTreeNode, name: string): string {
 
 export default function SshFileTreePanel({ content, fileId }: SshFileTreePanelProps) {
   const dispatch = useAppDispatch();
-  const gitWebviewPanel = useAppSelector((state) =>
-    state.extensionUI.webviewPanels.find((p) => p.viewType === 'git.changesView')
-  );
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; node: FileTreeNode } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [inputDialog, setInputDialog] = useState<{
@@ -343,6 +340,9 @@ export default function SshFileTreePanel({ content, fileId }: SshFileTreePanelPr
         `${conn.username}@${conn.host}`,
         `cd ${escaped} && exec $SHELL -l`,
       ],
+      // §需求：标识为 SSH 远程终端——不进 BottomPanel tab 列表，modal 关闭时
+      //   也不创建底部 tab / editor tab。SSH 终端的归宿只在 SSH 面板。
+      isSSH: true,
     };
     if (conn.authType === 'password' && conn.password) {
       options.input = conn.password;
@@ -361,25 +361,30 @@ export default function SshFileTreePanel({ content, fileId }: SshFileTreePanelPr
     const uri = `ssh://${data.connectionId}${node.path}`;
     // 重新初始化目录结构：清空现有远程根目录与 Git 状态，并将选中目录加载为主工作区
     dispatch(clearWorkspaceFolders());
+    // §需求：把 SSH 连接信息写入 Redux，让后续"在终端中打开"右键菜单能取出
+    //  连接信息构造 ssh 命令（authority 是 connectionId，从 connection 还原 host/user）。
+    dispatch(setSshConnection({
+      id: data.connectionId,
+      name: data.connection.name,
+      host: data.connection.host,
+      port: data.connection.port,
+      username: data.connection.username,
+      authType: data.connection.authType,
+    }));
     dispatch(
       loadDirectory({
         source: uri,
         name: `${data.connection.name} · ${node.name}`,
       })
     );
-    // 立即清空 Git WebView 面板中的旧仓库文件，避免扩展 host 轮询延迟导致残留
-    const bridge = getExtensionBridge();
-    if (bridge && gitWebviewPanel) {
-      bridge.postMessageToWebView(gitWebviewPanel.id, {
-        type: 'state',
-        rootPath: null,
-        repoRoot: null,
-        isRepo: false,
-        gitAvailable: true,
-        state: null,
-        lastError: null,
-      });
-    }
+    // §之前这里会主动向 Git WebView 推送 isRepo: false（用来"清空旧仓库"），
+    // 但这会覆盖 git 扩展对自己检测结果的推送——即使 git 扩展通过 SSH 在远程
+    // 检测出是仓库并 pushState(isRepo: true)，我们的强制 false 也会随后把它
+    // 覆盖回 false，导致用户看到"当前文件夹不是 Git 仓库"。
+    // 修复：完全去掉这里的强制推送。git 扩展的 _subscribeWorkspaceRoot 在 rootSource
+    // 变化时已经自动调用 ext.invoke('ideacode-git', 'openWorkspace', ...)，由 git
+    // 扩展自己负责推送正确的 isRepo 状态（SSH 路径走 findRemoteRepoRoot 真正
+    // 远程检测 git rev-parse --show-toplevel，命中后 isRepo=true）。
     showNotice('已重新加载目录结构');
   };
 

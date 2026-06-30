@@ -1,5 +1,7 @@
 /* ─── WebView ←→ Extension Host 消息类型 ─── */
 
+import type { PlanStep } from './components/agent/PlanChecklist';
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'system';
@@ -14,6 +16,8 @@ export interface ChatMessage {
   incomplete?: boolean;
   /** 检测到的截断原因（用于 UI 显示） */
   incompleteReasons?: string[];
+  /** 待办任务列表：随消息持久化，切换历史不丢失 */
+  todos?: PlanStep[];
 }
 
 export type FileStatus = 'modified' | 'created' | 'deleted';
@@ -371,9 +375,13 @@ export type ExtensionMessage =
   // §需求9：任务拆解 — Planner 生成计划后下发，前端渲染 checklist
   | { type: 'planGenerated'; steps: Array<{ step: number; tool: string; args: Record<string, unknown>; reason: string }> }
   // §需求9：计划步骤状态变更（pending/running/done/error/skipped）
-  | { type: 'planStepUpdate'; index: number; status: 'pending' | 'running' | 'done' | 'error' | 'skipped'; summary?: string }
+  | { type: 'planStepUpdate'; index: number; status: 'pending' | 'running' | 'done' | 'error' | 'skipped'; summary?: string; startTime?: number; endTime?: number }
   // §撤销修改：文件恢复完成通知
   | { type: 'filesReverted'; filePaths: string[]; success: boolean; message?: string }
+  // §Agent 自动创建目录/文件等系统级反馈
+  | { type: 'systemMessage'; content: string }
+  // §shell 命令产生的文件变更（如 npx create-vite）
+  | { type: 'shellFileChanges'; cwd: string; created: string[]; modified: string[]; deleted: string[] }
   | { type: 'error'; message: string };
 
 /* ─── VSCode API 类型 ─── */

@@ -9,6 +9,7 @@
 
 const fs = require('fs').promises;
 const path = require('path');
+const { isRemoteUri } = require('../../sshUri');
 
 // Agent 编辑场景单文件大小上限。超大文件（minified bundle、生成代码、大日志）
 // 不适合 Agent 直接查找替换，且 readFile + indexOf 循环 + replaceAll 会消耗大量内存。
@@ -83,29 +84,32 @@ async function applyEdit(args, context) {
   }
 
   const workspaceRoot = context.workspaceRoot || '';
-  let targetPath = filePathInput;
-  if (!path.isAbsolute(targetPath) && workspaceRoot) {
-    targetPath = path.join(workspaceRoot, targetPath);
-  }
-  targetPath = path.resolve(targetPath);
+  const fsAdapter = context.fs || {
+    stat: (p) => fs.stat(p),
+    readFile: (p) => fs.readFile(p, 'utf-8'),
+    resolvePath: (p) => resolveLocalPath(p, workspaceRoot),
+  };
 
-  // 路径边界检查
-  if (workspaceRoot && !targetPath.startsWith(path.resolve(workspaceRoot))) {
-    return { success: false, error: `拒绝修改工作区外的文件: ${filePathInput}` };
+  let targetPath;
+  try {
+    targetPath = fsAdapter.resolvePath(filePathInput);
+  } catch (err) {
+    return { success: false, error: `路径解析失败: ${err.message}` };
   }
 
   // 读取当前文件内容以验证 original 是否存在
   let currentContent = '';
   try {
     // 大文件保护：超大文件不适合 Agent 查找替换，拒绝操作防止 Invalid string length
-    const stat = await fs.stat(targetPath);
-    if (stat.size > MAX_EDIT_FILE_SIZE) {
+    const stat = await fsAdapter.stat(filePathInput);
+    if (!stat || stat.size > MAX_EDIT_FILE_SIZE) {
       return {
         success: false,
-        error: `文件过大（${(stat.size / 1024 / 1024).toFixed(1)}MB），超过 ${MAX_EDIT_FILE_SIZE / 1024 / 1024}MB 编辑上限。请手动修改该文件。`,
+        error: `文件过大（${stat ? (stat.size / 1024 / 1024).toFixed(1) : '?'}MB），超过 ${MAX_EDIT_FILE_SIZE / 1024 / 1024}MB 编辑上限。请手动修改该文件。`,
       };
     }
-    currentContent = await fs.readFile(targetPath, 'utf-8');
+    const raw = await fsAdapter.readFile(filePathInput);
+    currentContent = typeof raw === 'string' ? raw : raw.toString('utf-8');
   } catch (err) {
     return { success: false, error: `无法读取文件: ${err.message}` };
   }
@@ -212,6 +216,14 @@ async function applyEdit(args, context) {
     matchType, // 'exact' | 'normalized'，用于 UI 提示
     message: `已生成修改建议（${matchType === 'exact' ? '精确匹配' : '规范化匹配'}），等待用户在 UI 中确认后才会应用。`,
   };
+}
+
+function resolveLocalPath(inputPath, workspaceRoot) {
+  let targetPath = inputPath;
+  if (!path.isAbsolute(targetPath) && workspaceRoot && !isRemoteUri(workspaceRoot)) {
+    targetPath = path.join(workspaceRoot, targetPath);
+  }
+  return path.resolve(targetPath);
 }
 
 module.exports = applyEdit;

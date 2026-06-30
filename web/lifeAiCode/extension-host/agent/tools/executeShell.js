@@ -2,7 +2,8 @@
  * Tool: execute_shell
  *
  * 执行 shell 命令并返回**完整输出**（包括 stdout + stderr）。
- * - 优先使用 context.executeShell + context.waitShellCompletion（Extension.js 中的完整实现）
+ * - 本地工作区：优先使用 context.executeShell + context.waitShellCompletion（Extension.js 中的完整实现）
+ * - SSH 远程工作区：通过 ssh.internal.execute 在远端会话中执行
  * - 否则使用内部简化实现（异步 spawn + 累积输出）
  *
  * 输出上限统一 64KB（与 Extension.js 内部一致）；超出部分截断尾部并标记。
@@ -13,12 +14,49 @@
 
 const { spawn } = require('child_process');
 const path = require('path');
+const vscode = require('../../api');
 const { isShellCommand } = require('../../shellDetect.cjs');
+const { isRemoteUri, parseSshUri } = require('../../sshUri');
 const MAX_OUTPUT_BYTES = 64 * 1024; // 与 Extension.js 内的 MAX_OUTPUT_BYTES 一致
 // 累积过程上限（字符数）。truncateOutput 只在返回前截断到 64KB，
 // 但累积 `stdout += chunk` 过程中可能先触发 V8 字符串上限（约 256MB）。
 // 设 8MB 上限，超限后停止追加，防止 RangeError: Invalid string length。
 const MAX_ACCUM_CHARS = 8 * 1024 * 1024;
+
+async function directoryExists(dirPath, context) {
+  if (!dirPath) return false;
+  if (context.fs && typeof context.fs.stat === 'function') {
+    try {
+      const stat = await context.fs.stat(dirPath);
+      return !!stat;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+async function ensureDirectory(dirPath, context) {
+  if (!dirPath) return false;
+  if (context.fs && typeof context.fs.createDirectory === 'function') {
+    try {
+      await context.fs.createDirectory(dirPath);
+      return true;
+    } catch (err) {
+      // 目录已存在或其他可忽略错误
+      if (err?.code !== 'EEXIST') {
+        console.warn('[LifeAiCode][executeShell] ensureDirectory:', err.message);
+      }
+    }
+  }
+  return false;
+}
+
+async function postSystemMessage(context, text) {
+  if (typeof context.postToWebView === 'function') {
+    context.postToWebView({ type: 'systemMessage', content: text });
+  }
+}
 
 async function executeShell(args, context) {
   const { command, cwd, timeout = 60000 } = args || {};
@@ -38,20 +76,8 @@ async function executeShell(args, context) {
   }
 
   const workspaceRoot = context.workspaceRoot || '';
-  let workingDir = cwd || workspaceRoot || process.cwd();
-  if (!path.isAbsolute(workingDir) && workspaceRoot) {
-    workingDir = path.join(workspaceRoot, workingDir);
-  }
-  workingDir = path.resolve(workingDir);
 
-  // 路径边界检查
-  if (workspaceRoot && !workingDir.startsWith(path.resolve(workspaceRoot))) {
-    return { success: false, error: `拒绝在工作区外执行命令: ${cwd}` };
-  }
-
-  // 危险命令检查
-  // Bug 12: 补全危险命令清单：原列表遗漏 rm -rf 系统目录、chmod -R 777 /、
-  // shutdown/reboot/halt/poweroff、rm -rf * 等。
+  // 危险命令检查（本地/远程统一拦截）
   const dangerousPatterns = [
     { pattern: /rm\s+-rf\s*\//, reason: '递归删除根目录' },
     { pattern: /rm\s+-rf\s+~/, reason: '递归删除用户目录' },
@@ -76,6 +102,36 @@ async function executeShell(args, context) {
     if (pattern.test(command)) {
       return { success: false, error: `检测到危险命令（${reason}），已拦截: ${command}` };
     }
+  }
+
+  // §SSH 远程工作区：通过 ssh.internal.execute 在远端执行
+  if (isRemoteUri(workspaceRoot)) {
+    return executeRemoteShell(command, cwd, workspaceRoot, timeout, context);
+  }
+
+  let workingDir = cwd || workspaceRoot || process.cwd();
+  if (!path.isAbsolute(workingDir) && workspaceRoot) {
+    workingDir = path.join(workspaceRoot, workingDir);
+  }
+  workingDir = path.resolve(workingDir);
+
+  // 路径边界检查
+  if (workspaceRoot && !workingDir.startsWith(path.resolve(workspaceRoot))) {
+    return { success: false, error: `拒绝在工作区外执行命令: ${cwd}` };
+  }
+
+  // §自动创建工作目录：命令里的 cwd 不存在时先 mkdir -p，避免 cd 失败。
+  // 同时向聊天框发送一条系统消息，让用户知道目录被自动创建。
+  try {
+    const existed = await directoryExists(workingDir, context);
+    if (!existed) {
+      const created = await ensureDirectory(workingDir, context);
+      if (created) {
+        postSystemMessage(context, `📁 已自动创建工作目录：\`${workingDir}\``);
+      }
+    }
+  } catch (err) {
+    postSystemMessage(context, `⚠️ 无法为 shell 命令创建工作目录：${workingDir}（${err.message}）`);
   }
 
   // 优先使用 context 中的完整实现
@@ -106,10 +162,72 @@ async function executeShell(args, context) {
 }
 
 /**
+ * 在 SSH 远程工作区执行 shell 命令
+ */
+async function executeRemoteShell(command, cwd, workspaceRoot, timeout, context) {
+  const { connectionId, remotePath } = parseSshUri(workspaceRoot);
+  if (!connectionId) {
+    return { success: false, error: '无法解析 SSH 工作区 URI' };
+  }
+
+  let remoteCwd = remotePath;
+  if (cwd) {
+    if (cwd.startsWith('/')) {
+      remoteCwd = cwd;
+    } else if (context.fs && typeof context.fs.resolvePath === 'function') {
+      const resolvedUri = context.fs.resolvePath(cwd);
+      const info = parseSshUri(resolvedUri);
+      remoteCwd = info.remotePath || remotePath;
+    } else {
+      remoteCwd = path.posix.join(remotePath, cwd);
+    }
+  }
+
+  // 边界检查：禁止访问工作区之外
+  if (!remoteCwd.startsWith(remotePath)) {
+    return { success: false, error: `拒绝在工作区外执行命令: ${cwd}` };
+  }
+
+  // §自动创建远程工作目录
+  try {
+    const existed = await directoryExists(remoteCwd, context);
+    if (!existed) {
+      const created = await ensureDirectory(remoteCwd, context);
+      if (created) {
+        postSystemMessage(context, `📁 已自动创建远程工作目录：\`${remoteCwd}\``);
+      }
+    }
+  } catch (err) {
+    postSystemMessage(context, `⚠️ 无法为远程 shell 命令创建工作目录：${remoteCwd}（${err.message}）`);
+  }
+
+  try {
+    const result = await vscode.commands.executeCommand('ssh.internal.execute', {
+      id: connectionId,
+      command,
+      cwd: remoteCwd,
+    });
+
+    const stdout = typeof result.stdout === 'string' ? result.stdout : '';
+    const stderr = typeof result.stderr === 'string' ? result.stderr : '';
+    const code = typeof result.code === 'number' ? result.code : (result.success ? 0 : -1);
+    const output = truncateOutput(stdout + (stderr ? `\n${stderr}` : ''));
+
+    return {
+      success: code === 0,
+      command,
+      cwd: remoteCwd,
+      exitCode: code,
+      output,
+      error: code !== 0 ? (result.error || stderr || '命令执行失败') : undefined,
+    };
+  } catch (err) {
+    return { success: false, error: `远程命令执行失败: ${err.message}` };
+  }
+}
+
+/**
  * 截断输出到 64KB，保留尾部并标记
- * Bug 13: 原代码用 output.length（字符数）和 MAX_OUTPUT_BYTES（字节数）比较，
- * 对多字节 UTF-8 字符（如中文）会低估实际字节数，导致超长输出未被截断。
- * 改用 Buffer.byteLength 按字节判断，并按字节边界截断。
  */
 function truncateOutput(output) {
   const byteLen = Buffer.byteLength(output, 'utf8');

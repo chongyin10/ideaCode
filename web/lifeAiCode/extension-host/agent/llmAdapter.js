@@ -36,6 +36,10 @@ class LlmAdapter {
     if (useNativeTools) {
       return `你是 LifeAiCode Agent，运行在 IDEACODE IDE 中。你可以调用工具完成用户任务。
 
+## 语言要求
+- 始终使用中文进行思考、推理和回复。
+- <step> 标签内的描述文字、<think> 标签内的推理内容、以及最终总结，都必须使用中文。
+
 ## 核心原则
 - 你只能读取、搜索、执行命令或生成修改建议，不会直接修改文件。
 - 修改文件前，必须先调用 read_file 读取当前内容，再调用 apply_edit 生成建议。
@@ -68,6 +72,10 @@ class LlmAdapter {
     }
 
     return `你是 LifeAiCode Agent，运行在 IDEACODE IDE 中。你可以调用工具完成用户任务。
+
+## 语言要求
+- 始终使用中文进行思考、推理和回复。
+- <step> 标签内的描述文字、<think> 标签内的推理内容、以及最终总结，都必须使用中文。
 
 ## 核心原则
 - 你只能读取、搜索、执行命令或生成修改建议，不会直接修改文件。
@@ -287,7 +295,9 @@ ${toolSchemas}
       return msg;
     }
     // prompt-based：把 tool_call 渲染为 system prompt 约定的文本协议
-    const toolCallText = `${JSON.stringify({ name: toolName, arguments: args }, null, 2)}`;
+    // 必须用 <tool_call> 标签包裹，与 parseToolCall 的解析正则保持一致，
+    // 否则 LLM 多轮对话中看到自己上一轮的裸 JSON 会产生格式漂移。
+    const toolCallText = `<tool_call>\n${JSON.stringify({ name: toolName, arguments: args }, null, 2)}\n</tool_call>`;
     const content = reasoningContent
       ? `${reasoningContent}\n\n${toolCallText}`
       : toolCallText;

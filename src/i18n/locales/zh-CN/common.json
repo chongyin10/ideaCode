@@ -195,7 +195,7 @@
       "deleteFailed": "删除 \"{{name}}\" 失败: {{message}}"
     },
     "confirm": {
-      "delete": "确定要删除 \"{{names}}\" 吗？"
+      "delete": "确认要删除选中的文件吗？"
     },
     "contextMenu": {
       "newFile": "新建文件",

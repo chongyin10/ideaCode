@@ -287,6 +287,38 @@ export async function writeFile(fileSource: FileSource, content: string): Promis
 
 /* ─── 扩展宿主 RPC ─── */
 
+/* ─── 文件删除 ─── */
+
+export async function deleteFile(fileSource: FileSource, options?: { recursive?: boolean }): Promise<void> {
+  if (isRemoteUri(fileSource)) {
+    const provider = getFileSystemProvider(fileSource);
+    if (!provider) {
+      throw new Error(`未找到远程文件系统 provider: ${fileSource}`);
+    }
+    await provider.delete(fileSource, options);
+    return;
+  }
+
+  if (isElectron() && isPath(fileSource)) {
+    const ok = await window.electronAPI!.fs.delete(fileSource);
+    if (!ok) {
+      throw new Error('删除文件失败（文件可能不存在或无权限）');
+    }
+    return;
+  }
+
+  if (isHandle(fileSource) && fileSource.kind === 'file') {
+    // FileSystemFileHandle 没有标准删除方法，清空内容作为近似删除
+    const writable = await (fileSource as FileSystemFileHandle).createWritable();
+    await writable.write('');
+    await writable.close();
+    return;
+  }
+  throw new Error('无法删除文件：不支持的文件源');
+}
+
+/* ─── 扩展宿主 RPC ─── */
+
 export async function extensionRpc<T = unknown>(
   method: string,
   params: unknown

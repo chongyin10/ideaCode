@@ -19,6 +19,10 @@ export interface TerminalTab {
   bookmarks: TerminalBookmark[];
   isBroadcastReceiver: boolean;
   isEditorTerminal: boolean;
+  /** §需求：标识此终端为 SSH 远程终端。
+   *  SSH 终端在用户点击"嵌入到标签页"时不应该出现在底部面板 tab 列表中——它的归宿是 editor area 或 modal。
+   *  true = 跳过 addTab 到 panelLayout（modal 模式已经做到），以及 handleExpandToTab 时不做 moveToEditor。 */
+  isSSH?: boolean;
 }
 
 export interface TerminalBookmark {
@@ -176,8 +180,8 @@ const terminalSlice = createSlice({
   initialState,
   reducers: {
     /* — 终端 Tab 生命周期 — */
-    addTab(state, action: PayloadAction<{ id?: string; name?: string; profile?: TerminalProfile; isEditor?: boolean; isModal?: boolean; processId?: number; outputFilter?: string }>) {
-      const { id: providedId, name, profile, isEditor, isModal, processId, outputFilter } = action.payload;
+    addTab(state, action: PayloadAction<{ id?: string; name?: string; profile?: TerminalProfile; isEditor?: boolean; isModal?: boolean; isSSH?: boolean; processId?: number; outputFilter?: string }>) {
+      const { id: providedId, name, profile, isEditor, isModal, isSSH, processId, outputFilter } = action.payload;
       const id = providedId || nextTabId();
       const tab: TerminalTab = {
         id,
@@ -190,6 +194,7 @@ const terminalSlice = createSlice({
         bookmarks: [],
         isBroadcastReceiver: false,
         isEditorTerminal: !!isEditor,
+        isSSH: !!isSSH,
       };
       state.tabs[id] = tab;
 

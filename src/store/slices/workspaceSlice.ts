@@ -31,6 +31,18 @@ export interface WorkspaceRoot {
   source: FileSource;
 }
 
+/** §SSH 远程连接信息：从 SshFileTreePanel "添加到资源管理器" 时写入，
+ *  资源管理器在右键 "在终端中打开" 时读取它来构造 SSH 终端命令。 */
+export interface SshConnectionInfo {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  username: string;
+  /** password / key 暂不持久化（终端需要时再由 SshFileTreePanel 提供） */
+  authType: 'password' | 'key';
+}
+
 export interface ClipboardItem {
   source: FileSource;
   name: string;
@@ -105,6 +117,9 @@ interface WorkspaceState {
   gitBranch: string | null;
   /** 外部文件变更通知（如 git discard），触发资源管理器精准刷新 */
   externalFileChange: { paths: string[]; timestamp: number } | null;
+  /** §SSH 连接缓存：key=connectionId，value=连接元信息。供"在终端中打开"
+   *  在已加载到资源管理器的 SSH 工作区路径上发起远程终端命令时使用。 */
+  sshConnections: Record<string, SshConnectionInfo>;
 }
 
 const initialState: WorkspaceState = {
@@ -135,6 +150,7 @@ const initialState: WorkspaceState = {
   gitStatus: {},
   gitBranch: null,
   externalFileChange: null,
+  sshConnections: {},
 };
 
 /* ─── 工具函数 ─── */
@@ -550,6 +566,18 @@ const workspaceSlice = createSlice({
       state.externalFileChange = action.payload as { paths: string[]; timestamp: number } | null;
     },
     /**
+     * §缓存 SSH 连接信息：当 SshFileTreePanel 点击"添加到资源管理器"时调用，
+     * 把连接写入 Redux；之后"在终端中打开"右键菜单能直接取出连接信息构造 ssh 命令。
+     */
+    setSshConnection: (state, action) => {
+      const conn = action.payload as SshConnectionInfo;
+      state.sshConnections[conn.id] = conn;
+    },
+    removeSshConnection: (state, action) => {
+      const id = action.payload as string;
+      delete state.sshConnections[id];
+    },
+    /**
      * 清空所有远程工作区根目录，同时清除关联的 Git 状态，
      * 避免切换到非 Git 远程目录时仍显示旧仓库信息。
      */
@@ -557,6 +585,8 @@ const workspaceSlice = createSlice({
       state.remoteRoots = [];
       state.gitStatus = {};
       state.gitBranch = null;
+      // §同时清空 SSH 连接缓存，避免内存泄漏（旧连接仍指向已关闭的 SSH 会话）
+      state.sshConnections = {};
     },
     closeFile: (state, action) => {
       const payload = action.payload;
@@ -1141,6 +1171,8 @@ export const {
   setGitStatus,
   setGitBranch,
   setExternalFileChange,
+  setSshConnection,
+  removeSshConnection,
   clearWorkspaceFolders,
 } = workspaceSlice.actions;
 

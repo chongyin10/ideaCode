@@ -1,9 +1,9 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
 import {
   Brain, Bot, Pencil, Terminal, FileText, Search, Info,
-  ChevronDown, Copy, Check, Loader2,
+  ChevronDown, Copy, Check, Loader2, X,
   GitBranch,
-  AlertTriangle, RefreshCw,
+  AlertTriangle, RefreshCw, Network,
 } from 'lucide-react';
 import type { ContentBlock as ContentBlockType, FileStatus, StepType, StepStatus } from '../types';
 import { MarkdownContent } from './MarkdownContent';
@@ -221,7 +221,7 @@ interface ContentBlocksProps {
   onExecuteShell?: (id: string, command: string) => void;
   onKillShell?: (id: string) => void;
   onOptionClick?: (text: string) => void;
-  onCopy?: (text: string) => void;
+
   onContinue?: () => void;
   incomplete?: boolean;
   incompleteReasons?: string[];
@@ -230,6 +230,8 @@ interface ContentBlocksProps {
   modelLabel?: string;
   /** Provider ID（用于多厂商标签归一化） */
   provider?: ProviderId;
+  /** 当前 Agent 执行状态，用于卡片标题左侧展示动态图标 */
+  agentStatus?: { status: string; message?: string; stepType?: string } | null;
 }
 
 export function ContentBlocks({
@@ -239,7 +241,6 @@ export function ContentBlocks({
   onExecuteShell,
   onKillShell,
   onOptionClick,
-  onCopy,
   onContinue,
   incomplete,
   incompleteReasons,
@@ -247,6 +248,7 @@ export function ContentBlocks({
   providerLabel,
   modelLabel,
   provider = 'custom',
+  agentStatus,
 }: ContentBlocksProps) {
   const blocks = useMemo(() => parseContentBlocks(content, provider), [content, provider]);
   const title = useMemo(() => extractTitle(blocks), [blocks]);
@@ -284,11 +286,11 @@ export function ContentBlocks({
       status={status}
       providerLabel={providerLabel}
       modelLabel={modelLabel}
-      onCopy={onCopy ? () => onCopy(content) : undefined}
       onContinue={onContinue}
       incomplete={incomplete}
       incompleteReasons={incompleteReasons}
-      showActions={completed && !incomplete}
+      showActions={false}
+      agentStatus={agentStatus}
     >
       {blocks.map((block, idx) => {
         const isLastBlock = idx === blocks.length - 1;
@@ -342,6 +344,29 @@ function UserBubble({ content }: { content: string }) {
 /*  Message Card (collapsible, the centerpiece)                      */
 /* ─────────────────────────────────────────────────────────────────── */
 
+const CARD_STATUS_VARIANTS = {
+  thinking:  { Icon: Brain,    text: '思考中' },
+  reading:   { Icon: FileText, text: '读取文件' },
+  editing:   { Icon: Pencil,   text: '编辑文件' },
+  running:   { Icon: Terminal, text: '执行 shell' },
+  planning:  { Icon: Network,  text: '计划任务' },
+  recovering:{ Icon: RefreshCw, text: '恢复中' },
+  done:      { Icon: Check,    text: '已完成' },
+  default:   { Icon: Loader2,  text: '回复中' },
+} as const;
+
+function resolveCardStatusVariant(stepType?: string, message?: string) {
+  const msg = message || '';
+  if (stepType === 'done') return CARD_STATUS_VARIANTS.done;
+  if (stepType === 'think' || /思考/.test(msg)) return CARD_STATUS_VARIANTS.thinking;
+  if (stepType === 'read' || /读取|读文件/.test(msg)) return CARD_STATUS_VARIANTS.reading;
+  if (stepType === 'edit' || /编辑|修改/.test(msg)) return CARD_STATUS_VARIANTS.editing;
+  if (stepType === 'run' || /执行|命令|shell/.test(msg)) return CARD_STATUS_VARIANTS.running;
+  if (stepType === 'agent' || /分配|工具|计划/.test(msg)) return CARD_STATUS_VARIANTS.planning;
+  if (/恢复|中断/.test(msg)) return CARD_STATUS_VARIANTS.recovering;
+  return CARD_STATUS_VARIANTS.default;
+}
+
 interface MessageCardProps {
   title: string;
   status: 'running' | 'done' | 'error';
@@ -349,39 +374,32 @@ interface MessageCardProps {
   providerLabel?: string;
   modelLabel?: string;
   showActions?: boolean;
-  onCopy?: () => void;
   onContinue?: () => void;
   incomplete?: boolean;
   incompleteReasons?: string[];
   defaultCollapsed?: boolean;
+  agentStatus?: { status: string; message?: string; stepType?: string } | null;
 }
 
 function MessageCard({
   title, status, children,
   providerLabel, modelLabel,
   showActions = false,
-  onCopy, onContinue,
+  onContinue,
   incomplete, incompleteReasons,
   defaultCollapsed = false,
+  agentStatus,
 }: MessageCardProps) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
-  const [copied, setCopied] = useState(false);
 
-  const handleCopy = async () => {
-    if (onCopy) {
-      onCopy();
-    } else {
-      try {
-        await navigator.clipboard.writeText(title);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
-      } catch { /* ignore */ }
-    }
-  };
-
-  const statusLabel = status === 'running' ? '进行中' : status === 'error' ? '出错' : '已完成';
   const statusClass = `ai-card--${status}`;
   const badgeClass = `ai-card__badge--${status}`;
+  const badgeIcon = status === 'running'
+    ? <Loader2 size={10} strokeWidth={2.5} className="ai-card__badge-spinner" />
+    : status === 'error'
+      ? <X size={10} strokeWidth={2.5} />
+      : <Check size={10} strokeWidth={2.5} />;
+  const badgeTitle = status === 'running' ? '进行中' : status === 'error' ? '出错' : '已完成';
 
   return (
     <div className={`ai-card ${statusClass} ${incomplete ? 'ai-card--incomplete' : ''}`}>
@@ -392,7 +410,15 @@ function MessageCard({
         title={collapsed ? '展开' : '折叠'}
       >
         <span className="ai-card__status-dot" />
-        <span className="ai-card__title">{title}</span>
+        {agentStatus?.status === 'running' ? (() => {
+          const { Icon, text } = resolveCardStatusVariant(agentStatus.stepType, agentStatus.message);
+          return (
+            <span className="ai-card__status-title" title={text}>
+              <Icon size={12} strokeWidth={2} className={text === '回复中' ? 'ai-card__status-title-spinner' : ''} />
+              <span>{text}</span>
+            </span>
+          );
+        })() : <span className="ai-card__title">{title}</span>}
         {(providerLabel || modelLabel) && (
           <span className="ai-card__meta" style={{ fontSize: 11, color: 'var(--text-tertiary)', flexShrink: 0 }}>
             {providerLabel}{modelLabel ? ` · ${modelLabel}` : ''}
@@ -403,7 +429,7 @@ function MessageCard({
             <AlertTriangle size={10} strokeWidth={2.2} /> 不完整
           </span>
         )}
-        <span className={`ai-card__badge ${badgeClass}`}>{statusLabel}</span>
+        <span className={`ai-card__badge ${badgeClass}`} title={badgeTitle}>{badgeIcon}</span>
         <span className={`ai-card__chevron ${collapsed ? 'ai-card__chevron--collapsed' : ''}`}>
           <ChevronDown size={14} strokeWidth={2} />
         </span>
@@ -446,19 +472,7 @@ function MessageCard({
               )}
             </div>
 
-            {/* Action bar — 与 ai-card__body 并排（同一个 row 容器内），对话完成时显示 */}
-            {/* 仅保留复制：主流大模型 API 无公开点赞/点踩反馈端点，故隐藏 */}
-            {showActions && onCopy && (
-              <div className="ai-card__actions">
-                <button
-                  className={`ai-card__action-btn ${copied ? 'ai-card__action-btn--active' : ''}`}
-                  onClick={(e) => { e.stopPropagation(); handleCopy(); }}
-                  title={copied ? '已复制' : '复制'}
-                >
-                  {copied ? <Check size={14} strokeWidth={2} /> : <Copy size={14} strokeWidth={1.8} />}
-                </button>
-              </div>
-            )}
+            {/* Action bar — 复制按钮已上移到 assistant-header，卡片内不再重复显示 */}
           </div>
         </>
       )}
@@ -517,27 +531,17 @@ function BlockRenderer({ block, shellOutputs, onExecuteShell, onKillShell, onOpt
 function ReasoningBlock({ content }: { content: string }) {
   const [open, setOpen] = useState(false);
 
-  // Preview text — first non-empty line trimmed
-  const preview = useMemo(() => {
-    const firstLine = content.split('\n').map((l) => l.trim()).find(Boolean) || '';
-    return firstLine.slice(0, 80) + (firstLine.length > 80 ? '…' : '');
-  }, [content]);
-
   return (
-    <div className="reasoning" style={{ padding: '6px 10px' }}>
+    <div className="reasoning">
       <button
         className="reasoning-header"
         onClick={() => setOpen(!open)}
         aria-expanded={open}
       >
         <span className="reasoning-icon">
-          <Brain size={14} strokeWidth={1.8} />
+          <Brain size={12} strokeWidth={1.8} />
         </span>
-        {open ? (
-          <span className="reasoning-label">推理过程</span>
-        ) : (
-          <span className="reasoning-preview">{preview}</span>
-        )}
+        <span className="reasoning-label">推理</span>
         <span className={`reasoning-chevron ${open ? 'reasoning-chevron--open' : ''}`}>
           <ChevronDown size={14} strokeWidth={2} />
         </span>
@@ -557,7 +561,7 @@ function ReasoningBlock({ content }: { content: string }) {
 
 function EditSummary({ filePath, additions, deletions }: { filePath: string; additions: number; deletions: number }) {
   return (
-    <div className="edit-summary" style={{ margin: '0 20px 8px' }}>
+    <div className="edit-summary">
       <span className="edit-summary__icon">
         <Pencil size={14} strokeWidth={1.8} />
       </span>
@@ -626,7 +630,7 @@ function ToolCall({
     );
 
   return (
-    <div className="tool-call" style={{ margin: '8px 20px' }}>
+    <div className="tool-call">
       <div className={`tool-call-header tool-call--${status}`}>
         <div className="tool-call-dots">
           <span className="tool-call-dots__dot tool-call-dots__dot--red" />
@@ -668,7 +672,7 @@ function FileStatusRow({ filePath, status }: { filePath: string; status: FileSta
   }[status];
 
   return (
-    <div className={`file-status file-status--${status}`} style={{ margin: '0 20px 6px' }}>
+    <div className={`file-status file-status--${status}`}>
       <span className="file-status__icon">{meta.icon}</span>
       <span className="file-status__main" title={filePath}>{filePath}</span>
       <span className="file-status__label">{meta.label}</span>
@@ -727,7 +731,7 @@ function StepRow({ stepType, target, params, label, status, completed }: {
 /* ─────────────────────────────────────────────────────────────────── */
 
 export function StepList({ children }: { children: React.ReactNode }) {
-  return <div className="step-list" style={{ padding: '6px 20px 6px 32px' }}>{children}</div>;
+  return <div className="step-list">{children}</div>;
 }
 
 /* ─────────────────────────────────────────────────────────────────── */
@@ -748,7 +752,7 @@ interface StepTimelineProps {
 export function StepTimeline({ steps, completed }: StepTimelineProps) {
   if (steps.length === 0) return null;
   return (
-    <div className="step-list" style={{ padding: '8px 20px 8px 32px' }}>
+    <div className="step-list">
       {steps.map((s, i) => (
         <StepRow
           key={i}

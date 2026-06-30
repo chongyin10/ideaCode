@@ -1,6 +1,7 @@
 import type { ToolCallInfo } from '../../types';
 import { ToolCallCard } from './ToolCallCard';
 import { ReadFileGroup } from './ReadFileGroup';
+import { ShellGroup } from './ShellGroup';
 
 interface ToolCallLogProps {
   toolCalls: ToolCallInfo[];
@@ -18,38 +19,77 @@ const FILE_OP_TOOLS = new Set([
   'delete_file',
 ]);
 
+type Row =
+  | { type: 'readGroup'; calls: ToolCallInfo[] }
+  | { type: 'shellGroup'; calls: ToolCallInfo[]; merged?: boolean }
+  | { type: 'card'; call: ToolCallInfo };
+
 export function ToolCallLog({ toolCalls }: ToolCallLogProps) {
   if (toolCalls.length === 0) return null;
 
-  // 将连续的文件操作类调用聚合成组，减少界面占用
-  const rows: Array<{ type: 'readGroup'; calls: ToolCallInfo[] } | { type: 'card'; call: ToolCallInfo }> = [];
+  // 分组策略：
+  // 1. FILE_OP_TOOLS → ReadFileGroup（保持原顺序）
+  // 2. execute_shell running → ShellGroup（实时展开）
+  // 3. execute_shell 已完成/失败 → 统一合并到末尾的 ShellGroup（自动折叠，如图 5）
+  // 4. 其他 → ToolCallCard
+  const rows: Row[] = [];
   let currentReadGroup: ToolCallInfo[] = [];
+  let currentRunningShellGroup: ToolCallInfo[] = [];
+  let completedShells: ToolCallInfo[] = [];
 
-  for (const call of toolCalls) {
-    if (FILE_OP_TOOLS.has(call.tool)) {
-      currentReadGroup.push(call);
-      continue;
-    }
+  const flushReadGroup = () => {
     if (currentReadGroup.length > 0) {
       rows.push({ type: 'readGroup', calls: currentReadGroup });
       currentReadGroup = [];
     }
+  };
+  const flushRunningShellGroup = () => {
+    if (currentRunningShellGroup.length > 0) {
+      rows.push({ type: 'shellGroup', calls: currentRunningShellGroup });
+      currentRunningShellGroup = [];
+    }
+  };
+
+  for (const call of toolCalls) {
+    if (FILE_OP_TOOLS.has(call.tool)) {
+      flushRunningShellGroup();
+      currentReadGroup.push(call);
+      continue;
+    }
+    if (call.tool === 'execute_shell') {
+      flushReadGroup();
+      if (call.status === 'running') {
+        currentRunningShellGroup.push(call);
+      } else {
+        flushRunningShellGroup();
+        completedShells.push(call);
+      }
+      continue;
+    }
+    flushReadGroup();
+    flushRunningShellGroup();
     rows.push({ type: 'card', call });
   }
-  if (currentReadGroup.length > 0) {
-    rows.push({ type: 'readGroup', calls: currentReadGroup });
+  flushReadGroup();
+  flushRunningShellGroup();
+
+  // 所有已完成的 shell 合并成一个面板，放在最后
+  if (completedShells.length > 0) {
+    rows.push({ type: 'shellGroup', calls: completedShells, merged: true });
   }
 
   return (
     <div className="tool-call-log">
       <div className="tool-call-log__header">Tool 调用记录</div>
-      {rows.map((row, index) =>
-        row.type === 'readGroup' ? (
-          <ReadFileGroup key={`read-${index}`} calls={row.calls} />
-        ) : (
-          <ToolCallCard key={`card-${index}`} toolCall={row.call} />
-        )
-      )}
+      {rows.map((row, index) => {
+        if (row.type === 'readGroup') {
+          return <ReadFileGroup key={`read-${index}`} calls={row.calls} />;
+        }
+        if (row.type === 'shellGroup') {
+          return <ShellGroup key={`shell-${index}`} calls={row.calls} merged={row.merged} />;
+        }
+        return <ToolCallCard key={`card-${index}`} toolCall={row.call} />;
+      })}
     </div>
   );
 }

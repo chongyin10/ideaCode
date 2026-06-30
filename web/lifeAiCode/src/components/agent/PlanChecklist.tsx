@@ -11,6 +11,11 @@ export interface PlanStep {
   reason: string;
   status?: PlanStepStatus;
   summary?: string;
+  /** §待办任务：执行起止时间戳，用于显示执行时长 */
+  startTime?: number;
+  endTime?: number;
+  /** §待办任务：任务显示名称（优先于 tool） */
+  title?: string;
 }
 
 interface PlanChecklistProps {

@@ -7,11 +7,13 @@
  * 典型用法：
  *   先用 read_file_outline 获取文件结构，找到目标行号，
  *   再用本工具精读该行范围。
+ * §SSH 远程工作区支持：无法流式_seek，直接读取全文后截取行范围。
  */
 
 const path = require('path');
 const SafeFileReader = require('../safeFileReader.cjs');
 const tokenBudget = require('../tokenBudget.cjs');
+const { isRemoteUri } = require('../../sshUri');
 
 const MAX_LINES_PER_CALL = 500;
 
@@ -36,6 +38,12 @@ async function readFileLines(args, context) {
   }
 
   const workspaceRoot = context.workspaceRoot || '';
+
+  // §SSH 远程工作区：无法本地流式 seek，读取全文后截取
+  if (isRemoteUri(workspaceRoot)) {
+    return readRemoteLines(filePathInput, startLine, endLine, context);
+  }
+
   let targetPath = filePathInput;
   if (!path.isAbsolute(targetPath) && workspaceRoot) {
     targetPath = path.join(workspaceRoot, targetPath);
@@ -56,32 +64,58 @@ async function readFileLines(args, context) {
       maxLines: MAX_LINES_PER_CALL,
     });
 
-    // 将行数组格式化为带行号的文本
-    const content = result.lines
-      .map((l) => `${String(l.line).padStart(6, ' ')}│ ${l.content}`)
-      .join('\n');
-
-    // Token 预算检查
-    const maxTokens = tokenBudget.getSafeReturnLimit(context);
-    const checked = tokenBudget.checkAndTruncate(content, maxTokens);
-
-    return {
-      success: true,
-      path: filePathInput,
-      startLine: result.startLine,
-      endLine: result.endLine,
-      actualLines: result.lines.length,
-      totalLines: result.totalLines,
-      content: checked.content,
-      truncated: checked.truncated,
-      hasMore: result.endLine < result.totalLines,
-      suggestion: result.endLine < result.totalLines
-        ? `文件共 ${result.totalLines} 行，当前读取了 L${result.startLine}-L${result.endLine}。继续读取请使用 startLine=${result.endLine + 1}。`
-        : undefined,
-    };
+    return formatResult(filePathInput, result);
   } catch (err) {
     return { success: false, error: `读取文件行范围失败: ${err.message}` };
   }
+}
+
+async function readRemoteLines(filePathInput, startLine, endLine, context) {
+  const fsAdapter = context.fs || { readFile: () => { throw new Error('fs adapter not available'); } };
+  try {
+    const raw = await fsAdapter.readFile(filePathInput);
+    const content = typeof raw === 'string' ? raw : raw.toString('utf-8');
+    const allLines = content.split('\n');
+    const totalLines = allLines.length;
+    const s = Math.max(1, Math.floor(startLine));
+    const e = Math.min(Math.floor(endLine), totalLines);
+    const lines = [];
+    for (let i = s; i <= e; i++) {
+      lines.push({ line: i, content: allLines[i - 1] || '' });
+    }
+    return formatResult(filePathInput, {
+      lines,
+      startLine: s,
+      endLine: e,
+      totalLines,
+    });
+  } catch (err) {
+    return { success: false, error: `读取远程文件行范围失败: ${err.message}` };
+  }
+}
+
+function formatResult(filePathInput, result) {
+  const content = result.lines
+    .map((l) => `${String(l.line).padStart(6, ' ')}│ ${l.content}`)
+    .join('\n');
+
+  const maxTokens = tokenBudget.getSafeReturnLimit();
+  const checked = tokenBudget.checkAndTruncate(content, maxTokens);
+
+  return {
+    success: true,
+    path: filePathInput,
+    startLine: result.startLine,
+    endLine: result.endLine,
+    actualLines: result.lines.length,
+    totalLines: result.totalLines,
+    content: checked.content,
+    truncated: checked.truncated,
+    hasMore: result.endLine < result.totalLines,
+    suggestion: result.endLine < result.totalLines
+      ? `文件共 ${result.totalLines} 行，当前读取了 L${result.startLine}-L${result.endLine}。继续读取请使用 startLine=${result.endLine + 1}。`
+      : undefined,
+  };
 }
 
 module.exports = readFileLines;

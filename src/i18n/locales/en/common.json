@@ -195,7 +195,7 @@
       "deleteFailed": "Delete \"{{name}}\" failed: {{message}}"
     },
     "confirm": {
-      "delete": "Are you sure you want to delete \"{{names}}\"?"
+      "delete": "Are you sure you want to delete the selected files?"
     },
     "contextMenu": {
       "newFile": "New File",

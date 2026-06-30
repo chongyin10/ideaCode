@@ -7,10 +7,12 @@
  * 保护措施：
  * - 文件大小限制（默认 5MB），超过拒绝
  * - 路径必须在工作区内
+ * §SSH 远程工作区支持：使用 context.fs 统一适配器读取/写入文件。
  */
 
 const fs = require('fs').promises;
 const path = require('path');
+const { isRemoteUri } = require('../../sshUri');
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 
 async function writeFile(args, context) {
@@ -30,28 +32,31 @@ async function writeFile(args, context) {
   }
 
   const workspaceRoot = context.workspaceRoot || '';
-  let targetPath = filePathInput;
-  if (!path.isAbsolute(targetPath) && workspaceRoot) {
-    targetPath = path.join(workspaceRoot, targetPath);
-  }
-  targetPath = path.resolve(targetPath);
+  const fsAdapter = context.fs || {
+    readFile: (p) => fs.readFile(p, 'utf-8'),
+    resolvePath: (p) => resolveLocalPath(p, workspaceRoot),
+  };
 
-  // 路径边界检查
-  if (workspaceRoot && !targetPath.startsWith(path.resolve(workspaceRoot))) {
-    return { success: false, error: `拒绝写入工作区外的文件: ${filePathInput}` };
+  let targetPath;
+  try {
+    targetPath = fsAdapter.resolvePath(filePathInput);
+  } catch (err) {
+    return { success: false, error: `路径解析失败: ${err.message}` };
   }
 
   // Bug 15: 使用异步 fs 操作避免阻塞 Extension Host 事件循环
   let fileExists = false;
   let original = '';
   try {
-    original = await fs.readFile(targetPath, 'utf-8');
+    original = await fsAdapter.readFile(filePathInput);
+    original = typeof original === 'string' ? original : original.toString('utf-8');
     fileExists = true;
   } catch (err) {
-    if (err.code !== 'ENOENT') {
+    // 文件不存在或读取失败，视为新文件
+    if (!isRemoteUri(workspaceRoot) && err?.code !== 'ENOENT') {
       return { success: false, error: `无法读取文件: ${err.message}` };
     }
-    // ENOENT → 文件不存在，fileExists = false
+    // 远程环境下没有 ENOENT code，直接视为不存在
   }
 
   const editId = `agent-write-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -82,6 +87,14 @@ async function writeFile(args, context) {
     filePath: filePathInput,
     message: `已生成${fileExists ? '覆盖' : '创建'}文件建议（${(Buffer.byteLength(content, 'utf8') / 1024).toFixed(1)}KB），等待用户在 UI 中确认后才会应用。`,
   };
+}
+
+function resolveLocalPath(inputPath, workspaceRoot) {
+  let targetPath = inputPath;
+  if (!path.isAbsolute(targetPath) && workspaceRoot && !isRemoteUri(workspaceRoot)) {
+    targetPath = path.join(workspaceRoot, targetPath);
+  }
+  return path.resolve(targetPath);
 }
 
 module.exports = writeFile;

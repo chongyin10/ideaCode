@@ -3,12 +3,16 @@ import type { ChatMessage, CodeContext, WebViewRequest, ExtensionMessage, LlmCon
 import { PROVIDER_META, getConnectionStatusColor, getModelContextWindow } from '../types';
 import { SuggestionList } from './SuggestionList';
 import { ContentBlocks } from './ContentBlocks';
-import { AgentModeToggle } from './agent/AgentModeToggle';
 import { AgentStatusBar } from './agent/AgentStatusBar';
 import { ToolCallLog } from './agent/ToolCallLog';
 import { DiffConfirmDialog } from './agent/DiffConfirmDialog';
-import { PlanChecklist, type PlanStep } from './agent/PlanChecklist';
-import { ShieldCheck, Brain, ArrowDown, User, Sparkles, Paperclip, Send, MessageSquare, Loader2, Check, Square, ChevronDown, X, GripVertical, Pencil, MoreHorizontal, FileText, Terminal, RefreshCw, Network, Lightbulb, GitCompare, Trash2, Archive, MapPin, Undo2 } from 'lucide-react';
+import type { PlanStep } from './agent/PlanChecklist';
+import { TodoDropdown } from './agent/TodoDropdown';
+import { AgentStatusSummary } from './agent/AgentStatusSummary';
+import { PlanTaskPanel } from './agent/PlanTaskPanel';
+import { TodoListBlock } from './agent/TodoListBlock';
+import { InputPlanBar } from './agent/InputPlanBar';
+import { ShieldCheck, Brain, Pencil, ArrowDown, User, Sparkles, Paperclip, Send, MessageSquare, Loader2, Check, Square, ChevronDown, X, GripVertical, Code2, MessageCircleQuestion, FileText, Terminal, RefreshCw, Network, Lightbulb, GitCompare, Trash2, Archive, MapPin, Undo2, Info, Copy } from 'lucide-react';
 
 /** 预处理：检测并补齐未闭合的 markdown 结构（供 chatResponse 处理时使用） */
 function groupConfigsByProviderOrder(configs: LlmConfig[]) {
@@ -79,6 +83,27 @@ function generateId(): string {
  * - < 1h 显示 "NmSs"
  * - ≥ 1h 显示 "NhMmSs"
  */
+function AssistantCopyButton({ content }: { content: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      className={`assistant-header__copy ${copied ? 'assistant-header__copy--active' : ''}`}
+      title={copied ? '已复制' : '复制整条回复'}
+      onClick={async (e) => {
+        e.stopPropagation();
+        try {
+          await navigator.clipboard.writeText(content);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        } catch { /* ignore */ }
+      }}
+    >
+      {copied ? <Check size={12} strokeWidth={2} /> : <Copy size={12} strokeWidth={1.8} />}
+    </button>
+  );
+}
+
 function formatDuration(ms: number): string {
   const totalSec = Math.max(0, Math.floor(ms / 1000));
   if (totalSec < 1) return '<1s';
@@ -157,9 +182,15 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
   // 之前用 useState 初次化后再不更新，导致切换文件后 AI 仍拿到旧 context。
   const context = initialContext || null;
   const [error, setError] = useState<string | null>(null);
+  // §模式选择：Code = agent+thinking+edit 全开；Ask = thinking 开，其他关
+  // 默认 Code 模式。底层三个 boolean 默认值要与 mode='code' 保持一致，
+  // 否则首次发送消息时 sendMessage 仍读 agentMode=false，路由到普通 processMessage 而非 runAgentTask。
   const [aiEditMode, setAiEditMode] = useState(true);
   const [autoAccept, setAutoAccept] = useState(false);
   const [thinkingEnabled, setThinkingEnabled] = useState(true);
+  const [agentMode, setAgentMode] = useState(true);
+  const [mode, setMode] = useState<'code' | 'ask'>('code');
+  const [showModePicker, setShowModePicker] = useState(false);
   const [showConfigPicker, setShowConfigPicker] = useState(false);
   const [history, setHistory] = useState<ChatHistoryItem[]>(loadHistory);
   const [showHistory, setShowHistory] = useState(false);
@@ -169,7 +200,6 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
   const [historyDropTarget, setHistoryDropTarget] = useState<{ id: string; after: boolean } | null>(null);
   const [shellOutputs, setShellOutputs] = useState<Record<string, { output: string; status: 'running' | 'success' | 'error' | 'killed'; longRunning?: boolean }>>({});
   const [notice, setNotice] = useState<{ level: 'info' | 'success' | 'warning' | 'error'; message: string; id: number } | null>(null);
-  const [agentMode, setAgentMode] = useState(false);
   const [agentStatus, setAgentStatus] = useState<{ status: string; message: string; stepType?: string } | null>(null);
   const [toolCalls, setToolCalls] = useState<ToolCallInfo[]>([]);
   // Bug 4: 改为数组队列，支持多个 pending 编辑同时存在
@@ -177,6 +207,8 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
   const [pendingAgentEdits, setPendingAgentEdits] = useState<Array<{ editId: string; filePath: string; original: string; modified: string }>>([]);
   // 持久记录本次会话中所有被 AI 修改过的文件（包括 suggestion 和 agent edit）
   const [agentEditedFiles, setAgentEditedFiles] = useState<SuggestionChange[]>([]);
+  // §shell 命令产生的文件变更（如 npx create-vite 创建的文件）
+  const [shellChangedFiles, setShellChangedFiles] = useState<SuggestionChange[]>([]);
   // §需求9：当前 Agent 任务的 plan steps（含状态），任务结束后保留供查看
   const [planSteps, setPlanSteps] = useState<PlanStep[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -186,10 +218,15 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
   const [userScrolledUp, setUserScrolledUp] = useState(false);
   // §需求1：使用 ref 实时跟踪是否吸附在底部，避免 React state 延迟导致自动滚动与用户滚动冲突
   const isPinnedRef = useRef(true);
+  // §滚动空闲计时器：用户上滑停止 3 秒后自动回到底部
+  const scrollIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isAutoScrollingRef = useRef(false);
   const configPickerRef = useRef<HTMLDivElement>(null);
   const historyRef = useRef<HTMLDivElement>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const actionOverflowRef = useRef<HTMLDivElement>(null);
+  // §模式选择器：Code/Ask 下拉的容器 ref
+  const modePickerRef = useRef<HTMLDivElement>(null);
   // §需求2：动态测量 input-tags / input-actions 的宽度来判断是否需要紧凑模式
   const inputTagsRef = useRef<HTMLDivElement>(null);
   const inputActionsRef = useRef<HTMLDivElement>(null);
@@ -207,8 +244,30 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
   // 避免每次 autoAccept/pendingAgentEdit 变化时重订阅（重订阅期间到达的消息可能丢失）。
   const autoAcceptRef = useRef(autoAccept);
   autoAcceptRef.current = autoAccept;
+  // §Agent 模式：用户授权"增删改查读"，前端不再弹 DiffConfirmDialog，
+  //   收到 agentEditPending 时直接转发 confirmAgentEdit 给后端。
+  const agentModeRef = useRef(agentMode);
+  agentModeRef.current = agentMode;
   // autoAccept 绑定到 aiEditMode：编辑模式开启时自动接受建议，关闭时手动接受
   useEffect(() => { setAutoAccept(aiEditMode); }, [aiEditMode]);
+
+  // §模式选择：当 mode 变化时同步设置底层三个 boolean。
+  //   Code = agent+thinking+edit 全开；Ask = thinking 开，其他关。
+  //   这样所有下游逻辑（agentEditPending 自动确认 / sendMessage thinkingEnabled / autoAccept）都按当前模式工作。
+  // 注：不再调用 toggleEditMode，因为它是相对 toggle，无法保证后端 aiEditMode 与当前 mode 一致；
+  // 后端 aiEditMode 实际只影响 SuggestionList 的 autoAccept，不影响 runAgentTask 工具调用。
+  const handleModeChange = useCallback((next: 'code' | 'ask') => {
+    setMode(next);
+    if (next === 'code') {
+      setAgentMode(true);
+      setThinkingEnabled(true);
+      setAiEditMode(true);
+    } else {
+      setAgentMode(false);
+      setThinkingEnabled(true);
+      setAiEditMode(false);
+    }
+  }, []);
   const pendingAgentEditsRef = useRef(pendingAgentEdits);
   pendingAgentEditsRef.current = pendingAgentEdits;
   const onOpenConfigRef = useRef(onOpenConfig);
@@ -290,6 +349,9 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
       if (showActionOverflow && actionOverflowRef.current && !actionOverflowRef.current.contains(e.target as Node)) {
         setShowActionOverflow(false);
       }
+      if (showModePicker && modePickerRef.current && !modePickerRef.current.contains(e.target as Node)) {
+        setShowModePicker(false);
+      }
     };
     document.addEventListener('mousedown', close);
     // §iframe 失焦兜底：webview 在 iframe 内，点击 IDE 区域不会触发 iframe 的 mousedown，
@@ -298,13 +360,14 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
       if (showHistory) setShowHistory(false);
       if (showConfigPicker) setShowConfigPicker(false);
       if (showActionOverflow) setShowActionOverflow(false);
+      if (showModePicker) setShowModePicker(false);
     };
     window.addEventListener('blur', handleBlur);
     return () => {
       document.removeEventListener('mousedown', close);
       window.removeEventListener('blur', handleBlur);
     };
-  }, [showConfigPicker, showHistory, showActionOverflow]);
+  }, [showConfigPicker, showHistory, showActionOverflow, showModePicker]);
 
   // §需求2：响应式 input-actions — 动态测量 input-tags 内容是否溢出，
   // 仅当空间确实不足（input-tags 右边界被触碰）时才把次要按钮收进 ... 溢出菜单，
@@ -347,6 +410,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
     const handleBlur = () => {
       setShowConfigPicker(false);
       setShowHistory(false);
+      setShowModePicker(false);
     };
     window.addEventListener('blur', handleBlur);
     return () => window.removeEventListener('blur', handleBlur);
@@ -354,22 +418,24 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
 
   // 自动滚动到底部：用 rAF 节流 + 直接设置 scrollTop，避免高频 scrollIntoView 导致抖动
   // §需求1：改用 ref 而非 state 判断是否吸附底部，避免 React 渲染延迟导致
-  // 自动滚动与用户向上滚动冲突（用户需大力滑动才能克服自动滚动）
-  // §需求1（连续修复）：当 isProcessing（LLM 正在回复）时，无论 isPinnedRef 是什么
-  // 都强制跟随底部。解决“用户在历史中浏览过、然后发新消息时 auto-scroll 不生效”的问题。
+  // 自动滚动与用户向上滚动冲突。
+  // §需求5：LLM 回复中允许用户上滑浏览；只要用户未主动离开底部（isPinnedRef=true），
+  // 内容更新时继续跟随。若用户已上滑，则不强制拉回，由 scroll 空闲计时器处理。
   useEffect(() => {
     const el = messagesContainerRef.current;
     if (!el) return;
-    // 非回复态且用户已离开底部较远时，不强制滚动
-    if (!isPinnedRef.current && !isProcessing) return;
+    if (!isPinnedRef.current) return;
     if (scrollRafRef.current != null) cancelAnimationFrame(scrollRafRef.current);
     scrollRafRef.current = requestAnimationFrame(() => {
-      // rAF 回调中再次检查 ref——用户可能在此帧内滚动了
-      // 但只要在 isProcessing（LLM 回复中），始终保持跟随底部
-      if (isPinnedRef.current || isProcessing) {
+      if (isPinnedRef.current) {
+        isAutoScrollingRef.current = true;
         el.scrollTop = el.scrollHeight;
         // 连续跟随：实际滚动后保持 pinned，让后续 content 能继续跟随
-        isPinnedRef.current = true;
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            isAutoScrollingRef.current = false;
+          });
+        });
       }
       scrollRafRef.current = null;
     });
@@ -381,16 +447,11 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
     };
   }, [messages, toolCalls, agentStatus, isProcessing]);
 
-  // §需求1：监听 wheel/touch/scroll 事件，实时检测用户滚动方向
-  // wheel/touchmove 在 scroll 之前触发，能立即将 isPinnedRef 置 false，
-  // 避免自动滚动覆盖用户的向上滚动操作，实现丝滑滚动
+  // §需求5：监听 wheel/touch/scroll 事件，实时检测用户滚动方向。
+  // LLM 回复中也允许用户上滑；上滑后启动 3 秒空闲计时器，停止滚动 3 秒后自动回底。
   useEffect(() => {
     const el = messagesContainerRef.current;
     if (!el) return;
-    // §需求1（连续修复）：threshold 从 40 提升到 120。
-    // 原阈值太严格，LLM 输出中微小高度变化（如 <p> 增加一个字符、
-    // 代码块渲染高度跳变）会让 distance 短暂超 40 误判为“离开底部”，
-    // 进而 auto-scroll 提前退出。
     const threshold = 120;
 
     const updatePinned = () => {
@@ -398,13 +459,43 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
       const pinned = distance <= threshold;
       isPinnedRef.current = pinned;
       setUserScrolledUp(!pinned);
+      return pinned;
+    };
+
+    const scrollToBottom = () => {
+      isAutoScrollingRef.current = true;
+      el.scrollTop = el.scrollHeight;
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          isAutoScrollingRef.current = false;
+        });
+      });
+    };
+
+    const clearIdleTimer = () => {
+      if (scrollIdleTimerRef.current) {
+        clearTimeout(scrollIdleTimerRef.current);
+        scrollIdleTimerRef.current = null;
+      }
+    };
+
+    const startIdleTimer = () => {
+      clearIdleTimer();
+      // §需求5- refine：只有大模型正在输出时才启动回底计时器；
+      // 若 5 秒内模型已回答完毕，不再自动拉回底部。
+      if (!isProcessingRef.current) return;
+      scrollIdleTimerRef.current = setTimeout(() => {
+        scrollIdleTimerRef.current = null;
+        if (!isProcessingRef.current) return;
+        isPinnedRef.current = true;
+        setUserScrolledUp(false);
+        scrollToBottom();
+      }, 5000);
     };
 
     // wheel 事件：用户向上滚动时立即取消吸附
-    // §需求1（连续修复）：需考虑 isProcessing 中——此时不取消 pinned，
-    // 避免 LLM 回复中鼠标微动 / 边缘 wheel 事件误中断 auto-scroll
     const handleWheel = (e: WheelEvent) => {
-      if (e.deltaY < 0 && isPinnedRef.current && !isProcessing) {
+      if (e.deltaY < 0 && isPinnedRef.current) {
         isPinnedRef.current = false;
         setUserScrolledUp(true);
       }
@@ -417,21 +508,21 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
     };
     const handleTouchMove = (e: TouchEvent) => {
       const deltaY = touchStartY - (e.touches[0]?.clientY ?? 0);
-      if (deltaY < 0 && isPinnedRef.current && !isProcessing) {
+      if (deltaY < 0 && isPinnedRef.current) {
         isPinnedRef.current = false;
         setUserScrolledUp(true);
       }
     };
 
     const handleScroll = () => {
-      // §需求1（连续修复）：isProcessing 中程序触发的滚动（auto-scroll 设置的
-      // scrollTop）不应被当作“用户离开底部”。仅在非回复态下才根据 distance
-      // 更新 pinned。回复中始终保持 pinned=true。
-      if (isProcessing) {
-        isPinnedRef.current = true;
-        return;
+      // 忽略程序触发的滚动（auto-scroll）
+      if (isAutoScrollingRef.current) return;
+      const pinned = updatePinned();
+      if (pinned) {
+        clearIdleTimer();
+      } else {
+        startIdleTimer();
       }
-      updatePinned();
     };
 
     el.addEventListener('wheel', handleWheel, { passive: true });
@@ -445,8 +536,10 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
       el.removeEventListener('touchstart', handleTouchStart);
       el.removeEventListener('touchmove', handleTouchMove);
       el.removeEventListener('scroll', handleScroll);
+      clearIdleTimer();
     };
-  }, [isProcessing]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // 聚焦输入框
   useEffect(() => {
@@ -593,6 +686,43 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
           setAiEditMode(msg.enabled);
           break;
         }
+        case 'systemMessage': {
+          // §Agent 自动创建目录/文件等系统级反馈，以 system 角色渲染在聊天框中
+          if (msg.content) {
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: generateId(),
+                role: 'system',
+                content: msg.content,
+                timestamp: Date.now(),
+              },
+            ]);
+          }
+          break;
+        }
+        case 'shellFileChanges': {
+          // §shell 命令产生的文件变更（如 npx create-vite）：合并到底部变更列表
+          const { cwd, created = [], modified = [], deleted = [] } = msg;
+          const next: SuggestionChange[] = [];
+          for (const p of created) {
+            next.push({ filePath: `${cwd}/${p}`, original: '', modified: '[created]', explanation: '由 shell 命令创建', startLine: 0, endLine: 0, status: 'completed' });
+          }
+          for (const p of modified) {
+            next.push({ filePath: `${cwd}/${p}`, original: '[before]', modified: '[after]', explanation: '由 shell 命令修改', startLine: 0, endLine: 0, status: 'completed' });
+          }
+          for (const p of deleted) {
+            next.push({ filePath: `${cwd}/${p}`, original: '[deleted]', modified: '', explanation: '由 shell 命令删除', startLine: 0, endLine: 0, status: 'completed' });
+          }
+          if (next.length > 0) {
+            setShellChangedFiles((prev) => {
+              const seen = new Map<string, SuggestionChange>(prev.map((c) => [c.filePath, c]));
+              for (const c of next) seen.set(c.filePath, c);
+              return Array.from(seen.values());
+            });
+          }
+          break;
+        }
         case 'newChat': {
           // 保存当前对话到历史并清空
           setMessages((prevMessages) => {
@@ -629,6 +759,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
           // 新建会话时清空历史跟踪状态与执行记录
           setCurrentHistoryId(null);
           setAgentEditedFiles([]);
+          setShellChangedFiles([]);
           setAgentStatus(null);
           setToolCalls([]);
           setPendingAgentEdits([]);
@@ -735,6 +866,18 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
           break;
         }
         case 'agentEditPending': {
+          // 持久记录被 AI 修改的文件（用于"文件变更"列表），无论模式
+          setAgentEditedFiles((prev) => {
+            const change: SuggestionChange = { filePath: msg.filePath, original: msg.original, modified: msg.modified, explanation: '', startLine: 0, endLine: 0 };
+            const filtered = prev.filter((c) => c.filePath !== change.filePath);
+            return [...filtered, change];
+          });
+          // §Agent 模式：后端 registerPendingEdit 时已自动落盘，
+          //   webview 只需把文件变更记录到列表，不再发 confirmAgentEdit。
+          if (agentModeRef.current) {
+            break;
+          }
+          // 非 agent 模式（理论上 message listener 不会到这里，保留兜底）：
           // Bug 4: 追加到队列而非覆盖
           setPendingAgentEdits((prev) => [...prev, {
             editId: msg.editId,
@@ -742,12 +885,6 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
             original: msg.original,
             modified: msg.modified,
           }]);
-          // 持久记录被 AI 修改的文件（用于"文件变更"列表）
-          setAgentEditedFiles((prev) => {
-            const change: SuggestionChange = { filePath: msg.filePath, original: msg.original, modified: msg.modified, explanation: '', startLine: 0, endLine: 0 };
-            const filtered = prev.filter((c) => c.filePath !== change.filePath);
-            return [...filtered, change];
-          });
           break;
         }
         case 'agentEditStatus': {
@@ -789,15 +926,22 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
         }
         case 'planGenerated': {
           // §需求9：Planner 下发计划，初始化所有 step 为 pending
-          setPlanSteps(
-            msg.steps.map((s) => ({
-              step: s.step,
-              tool: s.tool,
-              args: s.args,
-              reason: s.reason,
-              status: 'pending' as const,
-            }))
-          );
+          const initSteps: PlanStep[] = msg.steps.map((s) => ({
+            step: s.step,
+            tool: s.tool,
+            args: s.args,
+            reason: s.reason,
+            status: 'pending' as const,
+          }));
+          setPlanSteps(initSteps);
+          // §待办任务：同步写入最后一条 assistant 消息的 todos，随消息持久化
+          setMessages((prev) => {
+            const idx = prev.length - 1;
+            if (idx < 0 || prev[idx].role !== 'assistant') return prev;
+            const next = prev.slice();
+            next[idx] = { ...next[idx], todos: initSteps };
+            return next;
+          });
           break;
         }
         case 'planStepUpdate': {
@@ -809,7 +953,18 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
               ...next[msg.index],
               status: msg.status,
               summary: msg.summary ?? next[msg.index].summary,
+              ...(msg.startTime != null ? { startTime: msg.startTime } : {}),
+              ...(msg.endTime != null ? { endTime: msg.endTime } : {}),
             };
+            // §待办任务：同步更新最后一条 assistant 消息的 todos
+            const updatedTodos = next;
+            setMessages((prevMsgs) => {
+              const mIdx = prevMsgs.length - 1;
+              if (mIdx < 0 || prevMsgs[mIdx].role !== 'assistant') return prevMsgs;
+              const nextMsgs = prevMsgs.slice();
+              nextMsgs[mIdx] = { ...nextMsgs[mIdx], todos: updatedTodos };
+              return nextMsgs;
+            });
             return next;
           });
           break;
@@ -870,6 +1025,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
     // 恢复历史时清空执行状态与文件变更记录，避免上一次会话的残留干扰
     setAgentStatus({ status: 'done', message: '历史会话已恢复', stepType: 'done' });
     setAgentEditedFiles([]);
+    setShellChangedFiles([]);
     setToolCalls([]);
     setPlanSteps([]);
     setPendingAgentEdits([]);
@@ -964,6 +1120,11 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
     // 现在发新消息，必须让 auto-scroll 重新生效才能跟随 LLM 输出
     isPinnedRef.current = true;
     setUserScrolledUp(false);
+    isAutoScrollingRef.current = false;
+    if (scrollIdleTimerRef.current) {
+      clearTimeout(scrollIdleTimerRef.current);
+      scrollIdleTimerRef.current = null;
+    }
     const userMsg: ChatMessage = { id: generateId(), role: 'user', content: text.trim(), timestamp: Date.now() };
     // 占位消息：填充用户提交到 AI 返回第一个字符之间的时间空隙
     const placeholderMsg: ChatMessage = {
@@ -1095,13 +1256,13 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
   // 这两类 entry 通常是流式占位/LLM 抖动产物，列在弹窗里会让计数虚高、误导用户。
   const allChanges = useMemo<SuggestionChange[]>(() => {
     const seen = new Map<string, SuggestionChange>();
-    for (const c of [...collectedChanges, ...agentEditedFiles]) {
+    for (const c of [...collectedChanges, ...agentEditedFiles, ...shellChangedFiles]) {
       if (!c || !c.filePath) continue;
       if (c.original !== undefined && c.modified !== undefined && c.original === c.modified) continue;
       seen.set(c.filePath, c);
     }
     return Array.from(seen.values());
-  }, [collectedChanges, agentEditedFiles]);
+  }, [collectedChanges, agentEditedFiles, shellChangedFiles]);
 
   // §需求8：估算本次对话的 token 使用情况（token 数 + 百分比 + context window）
   // 用当前选中模型的 context window 代替硬编码 128K
@@ -1378,14 +1539,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
                     <div className="message-body">
                       {showAgentPanel && (
                         <>
-                          {agentStatus && (
-                            <AgentStatusBar
-                              status={agentStatus.status}
-                              message={agentStatus.message}
-                              onCancel={agentStatus.status === 'running' ? handleCancelAgent : undefined}
-                            />
-                          )}
-                          {agentMode && planSteps.length > 0 && <PlanChecklist steps={planSteps} />}
+                          {agentMode && planSteps.length > 0 && <TodoListBlock steps={planSteps} defaultExpanded />}
                           {agentMode && <ToolCallLog toolCalls={toolCalls} />}
                         </>
                       )}
@@ -1399,6 +1553,10 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
             if (msg.role === 'assistant' && !msg.content.trim() && msg.streaming && !showAgentPanel) {
               return null;
             }
+            // 去掉独立的“任务完成”占位卡片，状态由 status-indicator-zone 统一展示
+            if (msg.role === 'assistant' && msg.content.trim() === '任务完成' && !msg.streaming) {
+              return null;
+            }
             return (
             <div key={msg.id} id={`msg-${msg.id}`} className={`message-row message-row--${msg.role}`}>
               <div className="message-inner">
@@ -1406,6 +1564,10 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
                 {msg.role === 'assistant' ? (
                   <div className="message-avatar message-avatar--assistant">
                     <Sparkles size={16} strokeWidth={2} />
+                  </div>
+                ) : msg.role === 'system' ? (
+                  <div className="message-avatar message-avatar--system">
+                    <Info size={13} strokeWidth={2} />
                   </div>
                 ) : (
                   <div className="message-avatar message-avatar--user">
@@ -1427,22 +1589,20 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
                           <span className="assistant-header__meta">{providerLabel}</span>
                         </>
                       )}
+                      <AssistantCopyButton content={msg.content} />
                     </div>
                   )}
 
                   {/* Agent 执行过程（嵌入到当前 AI 回复中，保持从上到下的流程） */}
                   {showAgentPanel && (
                     <>
-                      {agentStatus && (
-                        <AgentStatusBar
-                          status={agentStatus.status}
-                          message={agentStatus.message}
-                          onCancel={agentStatus.status === 'running' ? handleCancelAgent : undefined}
-                        />
-                      )}
-                      {agentMode && planSteps.length > 0 && <PlanChecklist steps={planSteps} />}
                       {agentMode && <ToolCallLog toolCalls={toolCalls} />}
                     </>
+                  )}
+
+                  {/* §待办任务：按消息持久化的任务清单（历史会话也保留） */}
+                  {msg.todos && msg.todos.length > 0 && (
+                    <TodoListBlock steps={msg.todos} defaultExpanded={index === messages.length - 1} />
                   )}
 
                   {/* Content */}
@@ -1454,7 +1614,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
                     providerLabel={msg.role === 'assistant' ? providerLabel : undefined}
                     modelLabel={msg.role === 'assistant' ? modelLabel : undefined}
                     provider={activeConfig?.provider || 'custom'}
-                    onCopy={msg.role === 'assistant' ? (text) => navigator.clipboard.writeText(text).catch(() => {}) : undefined}
+                    agentStatus={msg.role === 'assistant' && index === messages.length - 1 ? agentStatus : undefined}
                     onContinue={msg.role === 'assistant' && msg.incomplete ? () => handleContinue(msg.id) : undefined}
                     onExecuteShell={(id, shellCommand) => {
                       vscode?.postMessage({ command: 'executeShell', id, shellCommand, cwd: context?.workspaceRoot || '' } as WebViewRequest);
@@ -1509,6 +1669,15 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
             userQuestions={userQuestions}
             onLocateMessage={handleLocateMessage}
           />
+          {/* §运行中动态状态 + 停止按钮：从消息体顶部迁移到底部状态栏 */}
+          {agentStatus?.status === 'running' && (
+            <AgentStatusBar
+              status="running"
+              message={agentStatus.message}
+              onCancel={handleCancelAgent}
+              inline
+            />
+          )}
           {/* §需求4：status-indicator-zone 右侧显示回复耗时——
               等待中（isResponseTimerActive=true）实时跳动；已结束时显示最终耗时；
               未发问时不渲染。 */}
@@ -1520,6 +1689,15 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
               {formatDuration(lastResponseDuration)}
             </span>
           )}
+          {/* §待办任务：状态区按钮，点击展开任务列表 Dropdown。置于最右侧 */}
+          <TodoDropdown steps={planSteps} />
+        </div>
+      )}
+
+      {/* §底部计划任务面板：显示当前执行到第几步及每步状态 */}
+      {planSteps.length > 0 && (
+        <div className="agent-summary-zone">
+          <PlanTaskPanel steps={planSteps} />
         </div>
       )}
 
@@ -1531,6 +1709,11 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
           onClick={() => {
             isPinnedRef.current = true;
             setUserScrolledUp(false);
+            isAutoScrollingRef.current = false;
+            if (scrollIdleTimerRef.current) {
+              clearTimeout(scrollIdleTimerRef.current);
+              scrollIdleTimerRef.current = null;
+            }
             messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
           }}
         >
@@ -1555,6 +1738,9 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
           还有 {pendingAgentEdits.length - 1} 个编辑待确认
         </div>
       )}
+
+      {/* 输入框上方计划任务条：有任务时默认展开 */}
+      <InputPlanBar steps={planSteps} />
 
       {/* Input bar */}
       <div className="input-bar">
@@ -1581,6 +1767,50 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
                   {fileName}
                 </button>
               )}
+              {/* §模式选择器：Code / Ask —— 放在模型选择器左侧，点击弹出下拉 */}
+              <div className={`mode-selector ${isProcessing ? 'mode-selector--disabled' : ''}`} ref={modePickerRef} style={{ position: 'relative' }}>
+                <button
+                  className="input-tag input-tag--mode"
+                  title={isProcessing ? '当前正在对话中，功能暂不可用' : `当前模式：${mode === 'code' ? 'Code' : 'Ask'}`}
+                  disabled={isProcessing}
+                  onClick={() => !isProcessing && setShowModePicker((v) => !v)}
+                >
+                  {mode === 'code'
+                    ? <Code2 size={11} strokeWidth={2} />
+                    : <MessageCircleQuestion size={11} strokeWidth={2} />}
+                  <span className="mode-selector__label">{mode === 'code' ? 'Code' : 'Ask'}</span>
+                  <ChevronDown size={12} strokeWidth={2} className={`mode-selector__chevron ${showModePicker ? 'mode-selector__chevron--open' : ''}`} />
+                </button>
+
+                {showModePicker && !isProcessing && (
+                  <div className="mode-dropdown">
+                    <button
+                      className={`mode-dropdown__item ${mode === 'code' ? 'mode-dropdown__item--active' : ''}`}
+                      onClick={() => { handleModeChange('code'); setShowModePicker(false); }}
+                    >
+                      <span className="mode-dropdown__item-title">
+                        <Code2 size={14} strokeWidth={2} />
+                        <span>Code</span>
+                      </span>
+                      <span className="mode-dropdown__item-desc">
+                        The default agent. Executes tools based on configured permissions.
+                      </span>
+                    </button>
+                    <button
+                      className={`mode-dropdown__item ${mode === 'ask' ? 'mode-dropdown__item--active' : ''}`}
+                      onClick={() => { handleModeChange('ask'); setShowModePicker(false); }}
+                    >
+                      <span className="mode-dropdown__item-title">
+                        <MessageCircleQuestion size={14} strokeWidth={2} />
+                        <span>Ask</span>
+                      </span>
+                      <span className="mode-dropdown__item-desc">
+                        Get answers and explanations without making changes to the codebase.
+                      </span>
+                    </button>
+                  </div>
+                )}
+              </div>
               {/* Model selector */}
               <div className={`kc-config-selector ${isProcessing ? 'kc-config-selector--disabled' : ''}`} ref={configPickerRef} style={{ position: 'relative' }}>
                 <button
@@ -1643,76 +1873,19 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
               </div>
             </div>
             <div className="input-actions" ref={inputActionsRef}>
-              <div title={isProcessing ? '当前正在对话中，功能暂不可用' : undefined} style={{ display: 'inline-flex' }}>
-                <AgentModeToggle enabled={agentMode} onToggle={() => !isProcessing && setAgentMode(!agentMode)} disabled={isProcessing} />
-              </div>
-              {!compactActions && (
-                <>
-                  <button
-                    className={`input-icon-btn ${thinkingEnabled ? 'input-icon-btn--active' : ''} ${isProcessing ? 'input-icon-btn--disabled' : ''}`}
-                    title={isProcessing ? '当前正在对话中，功能暂不可用' : (thinkingEnabled ? '思考模式已开启' : '思考模式已关闭')}
-                    disabled={isProcessing}
-                    onClick={() => !isProcessing && setThinkingEnabled(!thinkingEnabled)}
-                  >
-                    <Brain size={15} strokeWidth={1.8} />
-                  </button>
-                  <button
-                    className={`input-icon-btn ${aiEditMode ? 'input-icon-btn--active' : ''} ${isProcessing ? 'input-icon-btn--disabled' : ''}`}
-                    title={isProcessing ? '当前正在对话中，功能暂不可用' : (aiEditMode ? '编辑模式已开启（AI 可直接修改代码，自动接受建议）' : '只读模式已开启（AI 仅提供建议，不修改代码）')}
-                    disabled={isProcessing}
-                    onClick={() => {
-                      if (!isProcessing) vscode?.postMessage({ command: 'toggleEditMode' } as WebViewRequest);
-                    }}
-                  >
-                    <Pencil size={15} strokeWidth={1.8} />
-                  </button>
-                </>
-              )}
-              {compactActions && (
-                <div className="action-overflow" ref={actionOverflowRef} style={{ position: 'relative' }}>
-                  <button
-                    className={`input-icon-btn ${showActionOverflow ? 'input-icon-btn--active' : ''} ${isProcessing ? 'input-icon-btn--disabled' : ''}`}
-                    title={isProcessing ? '当前正在对话中，功能暂不可用' : '更多操作'}
-                    disabled={isProcessing}
-                    onClick={() => !isProcessing && setShowActionOverflow(!showActionOverflow)}
-                  >
-                    <MoreHorizontal size={15} strokeWidth={1.8} />
-                  </button>
-                  {showActionOverflow && !isProcessing && (
-                    <div className="action-overflow-menu">
-                      <button
-                        className={`action-overflow-menu__item ${thinkingEnabled ? 'action-overflow-menu__item--active' : ''}`}
-                        onClick={() => { setThinkingEnabled(!thinkingEnabled); }}
-                      >
-                        <Brain size={14} strokeWidth={1.8} />
-                        <span>思考模式</span>
-                        <span className="action-overflow-menu__state">{thinkingEnabled ? '开' : '关'}</span>
-                      </button>
-                      <button
-                        className={`action-overflow-menu__item ${aiEditMode ? 'action-overflow-menu__item--active' : ''}`}
-                        onClick={() => { vscode?.postMessage({ command: 'toggleEditMode' } as WebViewRequest); }}
-                      >
-                        <Pencil size={14} strokeWidth={1.8} />
-                        <span>编辑模式</span>
-                        <span className="action-overflow-menu__state">{aiEditMode ? '开' : '关'}</span>
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
               <button
-                className={`input-send ${isProcessing ? 'input-send--stop' : ''}`}
+                className={`input-send ${isProcessing || agentStatus?.status === 'running' ? 'input-send--stop' : ''}`}
                 onClick={() => {
-                  if (isProcessing) {
+                  if (isProcessing || agentStatus?.status === 'running') {
                     handleAbort();
                   } else {
                     sendMessage(input);
                   }
                 }}
-                disabled={!isProcessing && !input.trim()}
-                title={isProcessing ? '停止生成' : '发送'}
+                disabled={!(isProcessing || agentStatus?.status === 'running') && !input.trim()}
+                title={isProcessing || agentStatus?.status === 'running' ? '停止生成' : '发送'}
               >
-                {isProcessing ? <Square size={15} strokeWidth={2} fill="currentColor" /> : <Send size={15} strokeWidth={2} />}
+                {isProcessing || agentStatus?.status === 'running' ? <Square size={15} strokeWidth={2} /> : <Send size={15} strokeWidth={2} />}
               </button>
             </div>
           </div>
@@ -1903,146 +2076,7 @@ function PreparingPlaceholder({
     if (!onRejectChanges || pendingChanges.length === 0) return;
     onRejectChanges(pendingChanges);
   };
-  // 任务完成：静态无动画，使用 status-card--done 停止 iconPulse/iconSpin
-  if (isDone) {
-    return (
-      <div className="status-card status-card--done" style={{ position: 'relative' }}>
-        <span className="status-card__icon">
-          <Check size={12} strokeWidth={2} />
-        </span>
-        <span className="status-card__text">任务完成</span>
-        {changes.length > 0 && onOpenDiff && (
-          <button
-            className={`status-card__action ${showChanges ? 'status-card__action--active' : ''}`}
-            onClick={() => { setShowChanges(!showChanges); setShowQuestionNav(false); }}
-            title="查看代码变更"
-          >
-            <GitCompare size={11} strokeWidth={1.8} />
-            <span>代码变更</span>
-            <span className="status-card__action-count">{changes.length}</span>
-          </button>
-        )}
-        {userQuestions && userQuestions.length > 0 && onLocateMessage && (
-          <button
-            className={`status-card__action ${showQuestionNav ? 'status-card__action--active' : ''}`}
-            onClick={() => { setShowQuestionNav(!showQuestionNav); setShowChanges(false); }}
-            title="定位到提问"
-          >
-            <MapPin size={11} strokeWidth={1.8} />
-            <span>提问</span>
-            <span className="status-card__action-count">{userQuestions.length}</span>
-          </button>
-        )}
-        {tokenUsage && tokenUsage.tokens > 0 && (
-          <span className="status-card__token" title={`上下文 Token 使用率（估算）\n当前: ${tokenUsage.tokens.toLocaleString()} / ${tokenUsage.contextWindow.toLocaleString()}\n占比: ${tokenUsage.percent.toFixed(1)}%`}>
-            Token {formatK(tokenUsage.tokens)}/{formatK(tokenUsage.contextWindow)}
-            <span className={`status-card__token-percent ${tokenUsage.percent > 80 ? 'status-card__token-percent--high' : ''}`}>
-              {tokenUsage.percent.toFixed(0)}%
-            </span>
-            {onCompact && (
-              <button
-                className="status-card__compact-btn"
-                onClick={onCompact}
-                title="压缩上下文：生成历史摘要替换早期消息"
-              >
-                <Archive size={11} strokeWidth={1.8} />
-              </button>
-            )}
-          </span>
-        )}
-        {showChanges && changes.length > 0 && (
-          <div className="status-changes-popup">
-            <div className="status-changes-popup__header">
-              {/* §左侧：仅 isDone 状态卡才暴露“拒绝/接受”动作，
-                  进行中弹窗仅作只读列表展示 */}
-              {(onAcceptChanges || onRejectChanges) && isDone ? (
-                <div className="status-changes-popup__header-actions" role="group" aria-label="批量接受/拒绝">
-                  <button
-                    type="button"
-                    className="status-changes-popup__action-btn status-changes-popup__action-btn--reject"
-                    onClick={handleRejectAll}
-                    disabled={pendingChanges.length === 0}
-                    title={`拒绝所有变更（将文件恢复到修改前）${pendingChanges.length > 0 ? `，共 ${pendingChanges.length} 个未决项` : '，无未决项'}`}
-                  >
-                    <Undo2 size={11} strokeWidth={1.8} />
-                    <span>拒绝</span>
-                    {pendingChanges.length > 0 && <span className="status-changes-popup__action-count">{pendingChanges.length}</span>}
-                  </button>
-                  <button
-                    type="button"
-                    className="status-changes-popup__action-btn status-changes-popup__action-btn--accept"
-                    onClick={handleAcceptAll}
-                    disabled={pendingChanges.length === 0}
-                    title={`接受所有变更（仅更新状态为“已应用”，文件已同步到磁盘）${pendingChanges.length > 0 ? `，共 ${pendingChanges.length} 个未决项` : '，无未决项'}`}
-                  >
-                    <Check size={11} strokeWidth={2} />
-                    <span>接受</span>
-                    {pendingChanges.length > 0 && <span className="status-changes-popup__action-count">{pendingChanges.length}</span>}
-                  </button>
-                </div>
-              ) : (
-                <span>变更文件</span>
-              )}
-              <span className="status-changes-popup__count">{changes.length}</span>
-            </div>
-            <div className="status-changes-popup__list">
-              {changes.map((change, idx) => {
-                const stats = computeChangeStats(change);
-                const fileName = change.filePath.split(/[\\/]/).pop() || change.filePath;
-                const tag = resolveChangeStatus(change, { isProcessing: !isDone });
-                return (
-                  <button
-                    key={idx}
-                    className={`status-changes-popup__item status-changes-popup__item--${tag.status}`}
-                    onClick={() => { onOpenDiff?.(change); setShowChanges(false); }}
-                    title={change.filePath}
-                  >
-                    <span className="status-changes-popup__file">{fileName}</span>
-                    <span className="status-changes-popup__path">{change.filePath}</span>
-                    <span className="status-changes-popup__stats">
-                      {stats.added > 0 && <span className="status-changes-popup__added">+{stats.added}</span>}
-                      {stats.removed > 0 && <span className="status-changes-popup__removed">-{stats.removed}</span>}
-                    </span>
-                    {/* §变更文件状态标签：已完成/已应用/已撤销/读写中/排队中/失败 */}
-                    <span
-                      className={`status-tag status-tag--${tag.status}`}
-                      title={tag.title}
-                      data-status={tag.status}
-                    >
-                      {tag.status === 'reading' && <span className="status-tag__dot" aria-hidden="true" />}
-                      {tag.label}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
-        {showQuestionNav && userQuestions && userQuestions.length > 0 && (
-          <div className="status-question-nav" ref={questionNavRef}>
-            <div className="status-question-nav__header">
-              <span>会话提问</span>
-              <span className="status-question-nav__count">{userQuestions.length}</span>
-            </div>
-            <div className="status-question-nav__list">
-              {userQuestions.map((q, idx) => (
-                <button
-                  key={q.id}
-                  className="status-question-nav__item"
-                  onClick={() => { onLocateMessage?.(q.id); setShowQuestionNav(false); }}
-                  title={q.content}
-                >
-                  <span className="status-question-nav__index">{idx + 1}</span>
-                  <span className="status-question-nav__text">{q.content}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  }
-  const { Icon, text, variant } = resolveStatusVariant(agentStatus?.stepType, agentStatus?.message);
+  const { Icon, text, variant } = resolveStatusVariant(isDone ? 'done' : agentStatus?.stepType, agentStatus?.message);
   return (
     <div className={`status-card status-card--${variant}`} style={{ position: 'relative' }}>
       <span className="status-card__icon">
@@ -2077,9 +2111,11 @@ function PreparingPlaceholder({
           )}
         </span>
       )}
-      <span className="status-card__dots">
-        <span /><span /><span />
-      </span>
+      {!isDone && (
+        <span className="status-card__dots">
+          <span /><span /><span />
+        </span>
+      )}
       {showChanges && changes.length > 0 && (
         <div className="status-changes-popup">
           <div className="status-changes-popup__header">

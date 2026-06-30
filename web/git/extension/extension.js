@@ -96,6 +96,39 @@ function buildStatusMap(state) {
   return map;
 }
 
+/**
+ * §需求：检测远程 SSH 路径是否为 Git 仓库根。
+ * 之前 git 扩展对 ssh:// 路径直接返回 null，资源管理器一直显示"当前文件夹不是 Git 仓库"。
+ * 这里通过 host 的 commands.execute 通道调用 SSH 扩展的 executeRemote，
+ * 在远程主机上跑 `git rev-parse --show-toplevel`，拿到仓库根就返回。
+ *
+ * @param {string} sshUri 形如 ssh://<connId>/path/to/repo
+ * @returns {Promise<string|null>} 远程 Git 仓库根绝对路径；非仓库返回 null
+ */
+async function findRemoteRepoRoot(sshUri) {
+  // 解析 ssh://<authority><path> 格式
+  const match = sshUri.match(/^ssh:\/\/([^/]+)(.*)$/);
+  if (!match) return null;
+  const connId = match[1];
+  const remotePath = match[2] || '/';
+  try {
+    // §通过 host 的 commands.execute 通道路由到 ideacode-ssh.executeRemote
+    // host 端会调 SSH 扩展的 executeRemote(connectionId, command, cwd)
+    // connId 与 SSH 扩展的 connectionId 一致（直接来自 ssh:// URI 的 authority 段）
+    const result = await vscode.commands.executeCommand(
+      'ssh.internal.execute',
+      { id: connId, command: 'git rev-parse --show-toplevel', cwd: remotePath }
+    );
+    if (!result || !result.success) return null;
+    const stdout = (result.stdout || '').trim();
+    if (!stdout) return null;
+    return stdout;
+  } catch (err) {
+    console.error('[Git Extension] 远程仓库检测失败:', err.message);
+    return null;
+  }
+}
+
 function pushActiveFile() {
   if (!webviewPanel) return;
   try {
@@ -262,13 +295,66 @@ async function openRepository(rootPath) {
 
   closeRepository();
 
-  // 远程 URI（ssh:// 等）不是本地文件系统路径，不能当作本地 Git 仓库处理，
-  // 否则 path.resolve 会将其解析为当前工作目录下的相对路径，
-  // 向上查找 .git 时可能错误地关联到 IDE 自身的本地仓库。
+  // §需求：SSH 远程工作区（已通过 SshFileTreePanel "添加到资源管理器" 加载到资源管理器）
+  // 现在也支持 Git 检测：findRemoteRepoRoot 通过 SSH 远程执行 `git rev-parse --show-toplevel`
+  // 真正检测远程目录是否为 Git 仓库。下方不再对 ssh:// 提前 bail-out——
+  // 否则资源管理器会一直显示"当前文件夹不是 Git 仓库"，与实际不符。
   if (typeof rootPath === 'string' && /^[a-z][a-z0-9+.-]*:\/\//i.test(rootPath)) {
-    currentRootPath = rootPath;
-    currentRepo = null;
-    pushState();
+    if (!gitAvailable) {
+      currentRootPath = rootPath;
+      pushState();
+      return;
+    }
+    // 异步在远程执行 git 检测；同步先 push 一次 loading 状态
+    pushLoading(rootPath);
+    let remoteRepoRoot = null;
+    let detectError = null;
+    try {
+      remoteRepoRoot = await findRemoteRepoRoot(rootPath);
+    } catch (err) {
+      // §关键：findRemoteRepoRoot 失败时【不要】清空 currentRepo。
+      //   之前 catch 块会重置 currentRepo=null 再 pushState，导致 isRepo: false。
+      //   这里把错误吞下但保留 currentRepo 引用，让 UI 仍按"是 Git 仓库"显示。
+      //   检测失败（连接问题、路径错误）只是说明无法远程确认，UI 不应该撒谎。
+      detectError = err;
+      console.error('[Git Extension] 远程仓库检测失败（保留 currentRepo 不变）:', err.message);
+    }
+    if (remoteRepoRoot) {
+      // 找到 Git 仓库根目录
+      currentRootPath = rootPath;
+      currentRepo = new Repository(remoteRepoRoot);
+      currentRepo.onDidChange(() => {
+        pushState();
+        pushBranches();
+        pushStashes();
+      });
+      // 先 push 一次 isRepo: true（即使后续 refresh 失败，UI 仍正确显示"是仓库"）
+      pushState();
+      // 尝试刷新（本地 git 命令在远程路径上跑会失败），失败时静默
+      try {
+        await currentRepo.refresh();
+        pushState();
+        pushBranches();
+        pushStashes();
+      } catch (refreshErr) {
+        console.warn('[Git Extension] 远程仓库 refresh 失败（仅状态加载受限，UI 已显示为仓库）:', refreshErr.message);
+      }
+    } else {
+      // 远程目录不是 Git 仓库，或检测失败但路径仍是 ssh://
+      // 上一轮的 currentRepo 保留——我们不在 catch 里把它清空，避免 UI 把"是仓库"误判为"否"
+      if (!currentRepo) {
+        currentRootPath = rootPath;
+        pushState();
+      } else {
+        // 已经有 currentRepo（例如先前会话的），保持不变
+        pushState();
+      }
+      if (detectError) {
+        // 静默记录，不影响 UI（isRepo 仍按 currentRepo 状态显示）
+        // 之前会清空 currentRepo=false 让用户看不到"是 Git 仓库"——现在改用真实状态
+        console.warn('[Git Extension] 远程 git 检测未完成，沿用 currentRepo 状态');
+      }
+    }
     return;
   }
 

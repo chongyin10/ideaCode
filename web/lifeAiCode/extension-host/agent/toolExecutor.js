@@ -175,7 +175,7 @@ class ToolExecutor {
       else if (result.matches !== undefined) summary = `找到 ${result.matchCount || result.totalMatches || 0} 处匹配`;
       else if (result.content !== undefined) summary = `共 ${result.content.length} 字符`;
       else if (result.tree !== undefined) summary = `共 ${result.fileCount || 0} 个文件/目录`;
-      else if (result.output !== undefined) summary = result.output.slice(0, 200);
+      else if (typeof result.output === 'string' && result.output.length > 0) summary = result.output.slice(0, 200);
       else if (result.pending) summary = '待确认';
       else if (result.message) summary = result.message;
     }
@@ -187,22 +187,26 @@ class ToolExecutor {
       status,
       duration,
       summary,
-      result: this._sanitizeResult(result),
+      result: this._sanitizeResult(result, name),
     });
   }
 
   /**
    * 清理结果中不适合推给 UI 的过大字段
+   * @param {object} result - 工具执行结果
+   * @param {string} toolName - 工具名（用于按工具调整截断限制）
    */
-  _sanitizeResult(result) {
+  _sanitizeResult(result, toolName = '') {
     if (!result || typeof result !== 'object') return result;
     const clone = { ...result };
+    // execute_shell 的 output 需要更大限制（2000 字符），让用户能看到完整命令输出
+    const outputLimit = toolName === 'execute_shell' ? 2000 : 1000;
     // 大字段保留但限制长度/数量，避免推给 WebView 的消息过大导致渲染卡顿
     // matches（searchFiles 返回）可能包含大量匹配项，单独处理数组截断
     for (const key of ['content', 'output', 'tree', 'matches', 'outline', 'symbols', 'imports', 'exports']) {
       const v = clone[key];
-      if (typeof v === 'string' && v.length > 1000) {
-        clone[key] = v.slice(0, 1000) + '\n...（已截断）...';
+      if (typeof v === 'string' && v.length > outputLimit) {
+        clone[key] = v.slice(0, outputLimit) + '\n...（已截断）...';
       } else if (Array.isArray(v) && v.length > 20) {
         clone[key] = v.slice(0, 20).concat([`...（共 ${v.length} 项，已截断）...`]);
       }

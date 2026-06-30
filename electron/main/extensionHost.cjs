@@ -487,8 +487,9 @@ class ExtensionHostManager {
           case 'webviewView.register':
           case 'webviewView.unregister':
           case 'terminal.create':
-          case 'lifeAiCode.applyChanges': {
-            // 广播到渲染进程处理 WebView / 终端
+          case 'lifeAiCode.applyChanges':
+          case 'lifeAiCode.fileChanged': {
+            // 广播到渲染进程处理 WebView / 终端 / 文件变更刷新
             this.windowManager.broadcast(Channels.EXTENSION_MESSAGE, {
               method,
               params,

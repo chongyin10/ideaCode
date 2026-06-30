@@ -81,7 +81,11 @@ function registerFsHandlers() {
   });
 
   /* ── 写入文件 ── */
+  // §AI 创建新文件（如 agent 模式下 write_file）可能落在尚未存在的目录里，
+  // 直接 fs.writeFile 会抛 ENOENT。这里先 mkdir -p 父目录（已存在时为 no-op），
+  // 让 AI 生成全新文件路径时不再因目录缺失而失败。
   ipcMain.handle(Channels.FS_WRITE_FILE, async (_event, filePath, content) => {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, content, 'utf-8');
     return true;
   });
@@ -103,6 +107,7 @@ function registerFsHandlers() {
 
   /* ── 新建文件 ── */
   ipcMain.handle(Channels.FS_CREATE_FILE, async (_event, filePath) => {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, '', 'utf-8');
     return true;
   });

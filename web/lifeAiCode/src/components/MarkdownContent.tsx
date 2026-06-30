@@ -53,15 +53,21 @@ export function MarkdownContent({
   onExecuteShell, onKillShell, shellOutputs,
   fileHint,
 }: MarkdownContentProps) {
+  // §需求：LLM 经常在中文/英文混排中产生多余空格（如 "用了  node:module  等"），
+  //   渲染后表现为生硬的额外空白 / 偶发换行。统一压缩相邻空白为单空格，
+  //   避免视觉上"本来一行的被弄成两行"。注意：仅压缩普通文本段，
+  //   保留 ``` 围栏代码块（不应被改）、保留 `` 行内 code 内的原始内容。
+  const normalized = useMemo(() => normalizeWhitespaceOutsideCode(content), [content]);
+
   // 防御性处理：preprocessMarkdown 抛错时回退到原始内容，避免整面板黑屏
   const { processed, incomplete, reasons } = useMemo(() => {
     try {
-      return preprocessMarkdown(content, fileHint);
+      return preprocessMarkdown(normalized, fileHint);
     } catch (err) {
       console.error('[MarkdownContent] preprocess failed:', err);
-      return { processed: content, incomplete: false, reasons: [] as string[] };
+      return { processed: normalized, incomplete: false, reasons: [] as string[] };
     }
-  }, [content, fileHint]);
+  }, [normalized, fileHint]);
 
   const optionList = useMemo(() => {
     if (!enableOptions || !onOptionClick) return null;
@@ -354,6 +360,48 @@ function stripRedundantPreCodeWrapper(content: string): string {
     .replace(/&nbsp;/g, ' ')
     .replace(/&amp;/g, '&');
   return unescaped.trim();
+}
+
+/**
+ * 压缩 markdown 文本中"代码段以外"的多余空白。
+ * - ``` 围栏代码块、行内 `code`、HTML 标签 内的内容完全不动
+ * - 其他位置：把连续 ≥2 个空格 / \t / 换行 压缩成单个空格
+ * - 保留前后的换行（避免把段落合并成一行）
+ *
+ * 背景：LLM 经常输出 "用了  node:module  等" 这种多空格文本，渲染后产生
+ * 视觉上"本来一行的被生硬地弄成两行"的破折感（用户多次反馈）。此函数
+ * 在解析前先做归一化，配合 inline code 的 word-break: break-all 让长
+ * 单词在合理位置断开，整体阅读体验更顺。
+ */
+function normalizeWhitespaceOutsideCode(content: string): string {
+  if (!content) return content;
+  // 用占位符保护代码段，避免归一化进入其中
+  const codeBlocks: string[] = [];
+  const inlineCodes: string[] = [];
+  let masked = content
+    // ``` 围栏代码块（支持语言标识）
+    .replace(/```[\s\S]*?```/g, (m) => {
+      codeBlocks.push(m);
+      return `\u0000CODEBLOCK${codeBlocks.length - 1}\u0000`;
+    })
+    // 行内 `code`（不支持嵌套反引号，但 LLM 输出基本不会嵌套）
+    .replace(/`[^`\n]+`/g, (m) => {
+      inlineCodes.push(m);
+      return `\u0000INLINE${inlineCodes.length - 1}\u0000`;
+    });
+
+  // 压缩普通文本中的多空格 / 制表符为单空格（换行保留，避免段落被合并）
+  masked = masked
+    .replace(/[ \t]{2,}/g, ' ')
+    // 连续换行 ≥3 个压缩为 2 个（保留段落间隔）
+    .replace(/\n{3,}/g, '\n\n');
+
+  // 还原代码段
+  masked = masked
+    .replace(/\u0000INLINE(\d+)\u0000/g, (_, idx) => inlineCodes[Number(idx)])
+    .replace(/\u0000CODEBLOCK(\d+)\u0000/g, (_, idx) => codeBlocks[Number(idx)]);
+
+  return masked;
 }
 
 /**

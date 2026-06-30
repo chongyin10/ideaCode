@@ -19,7 +19,12 @@ import type { Store } from '@reduxjs/toolkit';
 import type { RootState, AppDispatch } from '../store';
 import { openFile, openVirtualFile, addWorkspaceFolder, removeWorkspaceFolder, setFileContent, markFileSaved, toggleAiEditMode, setGitStatus, setGitBranch, setExternalFileChange, reloadFilesFromDisk, closeFile } from '../store/slices/workspaceSlice';
 import { addPanelToOrder, removePanelFromOrder, registerDockableItem, unregisterDockableItem, switchRightItem, setDockableItemBadge } from '../store/slices/layoutSlice';
-import { readFile as fsReadFile, writeFile as fsWriteFile, isPath } from '../services/fileService';
+import {
+  readFile as fsReadFile,
+  writeFile as fsWriteFile,
+  deleteFile as fsDeleteFile,
+  isPath,
+} from '../services/fileService';
 import { getMonacoEditorActions } from '../services/monacoEditorBridge';
 import { getPluginManager } from './core';
 import type { PluginManifest } from './types';
@@ -739,21 +744,22 @@ export class ExtensionBridge {
         return { success: false, error: '没有打开工作区' };
       }
 
-      // §需求：AI 修改文件时 extension-host 传入的 filePath 可能是相对路径
-      // （如 "src/pages/Home.tsx"），与绝对工作区根路径拼接后做前缀校验。
-      // 注意：浏览器环境不能用 Node 的 path.resolve，用 normalizePathForCompare
-      // 规范化后比较。
-      // 先用 startsWith('/' | '\\\\') 粗略判断"是否已经是绝对路径"（兼容 Windows 盘符），
-      // 不复用 isPath() 类型守卫——它对 string 类型推断为 never，会报类型错误。
-      const looksAbsolute = /^[a-zA-Z]:[\\\\/]/.test(filePath) || filePath.startsWith('/');
-      const resolvedFilePath = looksAbsolute
+      // §SSH 远程工作区：filePath 直接是 ssh:// URI，无需与工作区根拼接
+      const isRemote = filePath.startsWith('ssh://');
+      const looksAbsolute = isRemote || /^[a-zA-Z]:[\\\\/]/.test(filePath) || filePath.startsWith('/');
+      const resolvedFilePath = isRemote
         ? filePath
-        : `${workspaceRoot.replace(/[/\\]+$/, '')}/${filePath.replace(/^[/\\]+/, '')}`;
-      const normalizedTarget = normalizePathForCompare(resolvedFilePath);
-      const normalizedRoot = normalizePathForCompare(workspaceRoot);
-      if (!normalizedTarget.startsWith(normalizedRoot)) {
-        console.error('[LifeAiCode] applyChanges: 拒绝写入工作区外', filePath);
-        return { success: false, error: '拒绝写入工作区外' };
+        : looksAbsolute
+          ? filePath
+          : `${workspaceRoot.replace(/[/\\\\]+$/, '')}/${filePath.replace(/^[/\\\\]+/, '')}`;
+
+      if (!isRemote) {
+        const normalizedTarget = normalizePathForCompare(resolvedFilePath);
+        const normalizedRoot = normalizePathForCompare(workspaceRoot);
+        if (!normalizedTarget.startsWith(normalizedRoot)) {
+          console.error('[LifeAiCode] applyChanges: 拒绝写入工作区外', filePath);
+          return { success: false, error: '拒绝写入工作区外' };
+        }
       }
 
       try {
@@ -845,25 +851,26 @@ export class ExtensionBridge {
         return { success: false, error: '没有打开工作区' };
       }
 
-      const looksAbsolute = /^[a-zA-Z]:[\\/]/.test(filePath) || filePath.startsWith('/');
-      const resolvedFilePath = looksAbsolute
+      // §SSH 远程工作区：filePath 直接是 ssh:// URI，无需与工作区根拼接
+      const isRemote = filePath.startsWith('ssh://');
+      const looksAbsolute = isRemote || /^[a-zA-Z]:[\\\\/]/.test(filePath) || filePath.startsWith('/');
+      const resolvedFilePath = isRemote
         ? filePath
-        : `${workspaceRoot.replace(/[/\\]+$/, '')}/${filePath.replace(/^[/\\]+/, '')}`;
-      const normalizedTarget = normalizePathForCompare(resolvedFilePath);
-      const normalizedRoot = normalizePathForCompare(workspaceRoot);
-      if (!normalizedTarget.startsWith(normalizedRoot)) {
-        console.error('[LifeAiCode] deleteFile: 拒绝删除工作区外文件', filePath);
-        return { success: false, error: '拒绝删除工作区外文件' };
+        : looksAbsolute
+          ? filePath
+          : `${workspaceRoot.replace(/[/\\\\]+$/, '')}/${filePath.replace(/^[/\\\\]+/, '')}`;
+
+      if (!isRemote) {
+        const normalizedTarget = normalizePathForCompare(resolvedFilePath);
+        const normalizedRoot = normalizePathForCompare(workspaceRoot);
+        if (!normalizedTarget.startsWith(normalizedRoot)) {
+          console.error('[LifeAiCode] deleteFile: 拒绝删除工作区外文件', filePath);
+          return { success: false, error: '拒绝删除工作区外文件' };
+        }
       }
 
       try {
-        if (!window.electronAPI?.fs?.delete) {
-          return { success: false, error: '当前环境不支持删除文件' };
-        }
-        const ok = await window.electronAPI.fs.delete(resolvedFilePath);
-        if (!ok) {
-          return { success: false, error: '删除文件失败（文件可能不存在或无权限）' };
-        }
+        await fsDeleteFile(resolvedFilePath);
 
         // 从编辑器关闭该文件标签（如已打开）
         const state = this.store.getState().workspace;
@@ -1131,6 +1138,12 @@ export class ExtensionBridge {
     // 处理 host.ready 通知
     if (msg.method === 'host.ready') {
       console.log('[ExtensionBridge] Extension Host 已就绪');
+      return;
+    }
+
+    // §lifeAiCode.fileChanged 由 useElectronEvents 统一处理（分发到 Redux 触发 Explorer 刷新），
+    //   bridge 这里只做 swallow，避免重复触发或 unhandled 警告。
+    if (msg.method === 'lifeAiCode.fileChanged') {
       return;
     }
 

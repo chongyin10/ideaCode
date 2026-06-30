@@ -20861,6 +20861,23 @@ async function getRemoteFileTree(connectionId) {
   const tree = buildRemoteTree(result.stdout.split("\n"));
   return { rootPath: tree.path, tree };
 }
+async function executeRemote(connectionId, command, cwd) {
+  const conn = findConnection(connectionId);
+  if (!conn) throw new Error("SSH \u8FDE\u63A5\u4E0D\u5B58\u5728: " + connectionId);
+  const session = findConnectedSession(connectionId);
+  if (!session) throw new Error("SSH \u6CA1\u6709\u5DF2\u8FDE\u63A5\u7684\u4F1A\u8BDD: " + connectionId);
+  const finalCommand = cwd ? `cd ${shellEscape(cwd)} && ${command}` : command;
+  const result = await vscode.commands.executeCommand("ssh.internal.execute", {
+    id: session.id,
+    command: finalCommand
+  });
+  return {
+    success: result.success === true && result.code === 0,
+    stdout: typeof result.stdout === "string" ? result.stdout : "",
+    stderr: typeof result.stderr === "string" ? result.stderr : "",
+    code: typeof result.code === "number" ? result.code : -1
+  };
+}
 async function handleFileOperation(payload) {
   const { operation, connectionId } = payload;
   const conn = findConnection(connectionId);
@@ -21094,6 +21111,10 @@ async function activate(context) {
           executable: "ssh",
           args: ["-p", String(conn.port || 22), `${conn.username}@${conn.host}`],
           isModal: true,
+          // §需求：标识为 SSH 远程终端——前端 TerminalModal.handleExpandToTab
+          // 检测到 isSSH=true 时只关闭 modal，不再走 moveToEditor（避免在 BottomPanel
+          // tab 列表 / editor area 出现 SSH 终端）。SSH 终端的归宿只在 modal / SSH 面板。
+          isSSH: true,
           profile: { name: "ssh", path: "ssh" }
         };
         if (conn.authType === "password" && conn.password) {
@@ -21247,4 +21268,4 @@ function deactivate() {
   }
   sessions.clear();
 }
-module.exports = { activate, deactivate, getRemoteFileTree, handleFileOperation, callFileSystemProvider };
+module.exports = { activate, deactivate, getRemoteFileTree, handleFileOperation, callFileSystemProvider, executeRemote };

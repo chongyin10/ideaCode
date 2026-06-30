@@ -166,8 +166,8 @@ export const ShellSkill: CodeBlockSkill = {
            shellResult?.status === 'running' ? <Loader2 size={12} className="codeblock-icon-spin" /> :
            shellResult?.status === 'success' ? <Check size={13} strokeWidth={2.5} /> :
            shellResult?.status === 'error' ? <X size={13} strokeWidth={2.5} /> :
-           shellResult?.status === 'killed' ? <Square size={11} fill="currentColor" /> :
-           <Play size={12} fill="currentColor" />}
+           shellResult?.status === 'killed' ? <Square size={11} strokeWidth={2} /> :
+           <Play size={12} strokeWidth={2} />}
         </button>
         {isRunning && onKillShell && (
           <button
@@ -175,7 +175,7 @@ export const ShellSkill: CodeBlockSkill = {
             onClick={handleKill}
             title="停止执行（终止子进程）"
           >
-            <Square size={11} fill="currentColor" />
+            <Square size={11} strokeWidth={2} />
           </button>
         )}
       </>

@@ -514,14 +514,16 @@ class LlmClient extends EventEmitter {
                     break;
                 }
 
-                // reasoning_content（DeepSeek）单独字段，不在 content 流中。
-                // 把 reasoningDelta 包装成 🧠...</thinking> 标签 emit 给前端，
-                // 让 llmTags.ts 能实时解析并展示思维链。
-                // fullContent / fullReasoningContent 仍只累加纯内容（不含标签），不影响返回值。
+                // reasoning_content（DeepSeek 等）单独字段，不在 content 流中。
+                // §Bug：原 emit 的是 emoji `🧠` 开头 + `</thinking>` 结尾，前后不对称；
+                //   llmTags.ts 的解析正则 `<think>...</think>` 永远匹配不到这段，
+                //   🧠 字符直接泄漏到前端可见文本（用户截图里"脑"图标就是这样来的）。
+                //   修复：开头改成与 close 标签配对的 `<think>`，让正则正常解析，
+                //   思维链被提取为独立的 reasoning 块，不在用户正文里残留。
                 if (reasoningDelta) {
                   if (!inReasoning) {
                     inReasoning = true;
-                    this.emit('token', '🧠');
+                    this.emit('token', '<think>');
                   }
                   fullReasoningContent += reasoningDelta;
                   this.emit('token', reasoningDelta);

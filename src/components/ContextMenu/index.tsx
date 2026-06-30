@@ -51,10 +51,13 @@ const ContextMenu = ({ items, x, y, visible, onClose }: ContextMenuProps) => {
     const winH = window.innerHeight;
     let nx = x;
     let ny = y;
-    if (nx + rect.width > winW) nx = winW - rect.width - 8;
-    if (ny + rect.height > winH) ny = winH - rect.height - 8;
-    if (nx < 0) nx = 8;
-    if (ny < 0) ny = 8;
+    // §需求：增加边距到 16px，避免菜单被窗口边框轻微遮罩。
+    // 原值 8px 在 box-shadow / padding 渲染时仍会贴边；用 16px 留出视觉缓冲。
+    const MARGIN = 16;
+    if (nx + rect.width > winW) nx = winW - rect.width - MARGIN;
+    if (ny + rect.height > winH) ny = winH - rect.height - MARGIN;
+    if (nx < 0) nx = MARGIN;
+    if (ny < 0) ny = MARGIN;
     setPos({ x: nx, y: ny });
   }, [visible, x, y]);
 

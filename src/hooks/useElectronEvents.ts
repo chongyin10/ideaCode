@@ -1,9 +1,11 @@
 import { useEffect } from 'react';
-import { useAppDispatch } from '../store/hooks';
-import { loadDirectory, openFile } from '../store/slices/workspaceSlice';
+import { useAppDispatch, useAppSelector } from '../store/hooks';
+import { loadDirectory, openFile, setExternalFileChange } from '../store/slices/workspaceSlice';
 import { openDirectory } from '../services/fileService';
 import type { FileEntry } from '../services/fileService';
+import type { ExtensionMessage } from '../types/electron';
 import { eventBus } from '../utils/eventBus';
+import { normalizePathForCompare } from '../utils/pathNormalize';
 
 /**
  * 监听 Electron 主进程推送的系统级事件
@@ -13,6 +15,7 @@ import { eventBus } from '../utils/eventBus';
  */
 export function useElectronEvents() {
   const dispatch = useAppDispatch();
+  const rootSource = useAppSelector((state) => state.workspace.rootSource);
 
   useEffect(() => {
     if (!window.electronAPI?.isElectron) return;
@@ -86,13 +89,43 @@ export function useElectronEvents() {
     cleanups.push(unsubQuit);
 
     /* ── 扩展消息 ── */
-    const unsubExtension = api.extension.onMessage(() => {
-      // 扩展消息（暂不处理）
+    // §需求：AI Agent 完成 shell 命令（如 `npm create vite@latest`）后，
+    //   后端会通过 lifeAiCode.fileChanged 通知渲染进程刷新"资源管理器"。
+    //   ExplorerContent 监听 externalFileChange 变化后精准刷新受影响目录
+    //   （不全量重建，避免 GPU/CPU 卡顿）。
+    const unsubExtension = api.extension.onMessage((msg: ExtensionMessage) => {
+      if (msg?.method === 'lifeAiCode.fileChanged' && msg.params) {
+        // msg.params 是 unknown；按契约是 { paths?: string[]; cwds?: string[] }，这里做运行时安全降级
+        const params = (msg.params && typeof msg.params === 'object') ? msg.params as { paths?: string[]; cwds?: string[] } : {};
+        // 合并 paths + cwds 一起作为刷新路径集合。
+        // cwd 用于触发父目录 refreshDirectory 重建 entries；具体 path 用于精准通知。
+        const all = [...(params.paths || []), ...(params.cwds || [])];
+        if (all.length === 0) return;
+        // 后端传的是绝对路径（如 /Users/foo/project），需要转成相对工作区根的路径，
+        // ExplorerContent 才会正确构建祖先目录链。
+        const normalizedRoot = rootSource ? normalizePathForCompare(String(rootSource)) : '';
+        const refreshPaths = all
+          .map((p) => {
+            if (!p) return null;
+            const np = normalizePathForCompare(p);
+            if (normalizedRoot && np.startsWith(normalizedRoot + '/')) {
+              return np.substring(normalizedRoot.length + 1);
+            }
+            if (normalizedRoot && np === normalizedRoot) {
+              return '';
+            }
+            return p; // 不在工作区内的路径透传，ExplorerContent 会忽略
+          })
+          .filter((p): p is string => p !== null);
+        if (refreshPaths.length > 0) {
+          dispatch(setExternalFileChange({ paths: refreshPaths, timestamp: Date.now() }));
+        }
+      }
     });
     cleanups.push(unsubExtension);
 
     return () => {
       cleanups.forEach((fn) => fn());
     };
-  }, [dispatch]);
+  }, [dispatch, rootSource]);
 }
