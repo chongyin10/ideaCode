@@ -403,7 +403,7 @@ input:focus, textarea:focus {
 
 .git-commit-box__input {
   width: 100%;
-  min-height: 50px;
+  min-height: 25px;
   resize: vertical;
   font-family: inherit;
 }

@@ -40,7 +40,6 @@ import {
   isSameSource,
   isRemoteUri,
 } from '../../services/fileService';
-import { parseRemoteUri } from '../../services/fileSystemProvider';
 import {
   exists,
   createFile,
@@ -58,6 +57,7 @@ import {
   clearFileClipboard,
 } from '../../services/fileClipboard';
 import { terminalSDK } from '../../services/terminalSDK';
+import { getSshConnection, getSshRemotePath, buildSshTerminalArgs } from '../../services/sshWorkspace';
 import FileTree, { type PendingCreate, type PendingRename, type LastOperation, getCurrentDrag, currentDragExists, clearCurrentDrag } from './FileTree';
 import ContextMenu, { type MenuItem } from '../ContextMenu';
 import InlineInput from '../InlineInput';
@@ -173,9 +173,12 @@ const ExplorerContent = () => {
   const [cloneRepoOpen, setCloneRepoOpen] = useState(false);
   const [timelineExpanded, setTimelineExpanded] = useState(false);
 
-  // §打开的编辑器：当从空状态首次打开文件时自动展开，方便查看
+  // §打开的编辑器：当从空状态首次打开文件时自动展开，方便查看；
+  // 当所有文件关闭后（列表为空）自动收起，避免空区域占用空间
   useEffect(() => {
-    if (visibleOpenedFiles.length > 0 && !openEditorsExpanded) {
+    if (visibleOpenedFiles.length === 0) {
+      setOpenEditorsExpanded(false);
+    } else if (!openEditorsExpanded) {
       setOpenEditorsExpanded(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -349,40 +352,29 @@ const ExplorerContent = () => {
 
   // §"在终端中打开"：右键条目时触发
   //   - 本地路径：直接用 entry.source 作为 cwd，createTerminal 启动本地 shell
-  //   - SSH 远程路径：解析 ssh://<connId><path>，从 Redux 取出连接信息，
-  //     构造 ssh -t user@host "cd <path> && exec $SHELL -l" 命令（与 SshFileTreePanel
-  //     "在终端中打开" 行为一致），由 terminalSDK.createTab 统一调度
-  const sshConnections = useAppSelector((s) => s.workspace.sshConnections);
+  //   - SSH 远程路径：通过 sshWorkspace 工具统一检测连接信息并构造 ssh 命令，
+  //     与 BottomPanel/SshFileTreePanel 行为一致，由 terminalSDK.createTab 调度
   const handleOpenInTerminal = useCallback(async (entry: FileEntry) => {
     const source = entry.source;
-    // SSH 远程条目：构造 ssh 命令
-    if (isPath(source) && isRemoteUri(source)) {
-      const parts = parseRemoteUri(String(source));
-      if (!parts || parts.scheme !== 'ssh') {
-        alert('无法解析该远程 URI（仅支持 ssh://）');
-        return;
-      }
-      const conn = sshConnections[parts.authority];
+    if (!isPath(source)) return;
+    // SSH 远程条目：通过 sshWorkspace 工具获取连接信息并构造 ssh 命令
+    if (isRemoteUri(source)) {
+      const conn = getSshConnection(source);
       if (!conn) {
         alert('未找到对应的 SSH 连接信息。请重新在"SSH 远程目录结构"中加载该目录。');
         return;
       }
       // 智能判断：右键文件夹 → 切到该目录；右键文件 → 进入父目录
-      const remotePath = parts.path || '/';
+      const remotePath = getSshRemotePath(source) || '/';
       const targetDir = entry.kind === 'directory'
         ? remotePath
         : remotePath.replace(/\/[^/]*$/, '') || '/';
-      const escapedDir = `'${targetDir.replace(/'/g, "'\\''")}'`;
       try {
+        const sshArgs = buildSshTerminalArgs(conn, targetDir);
         await terminalSDK.createTab({
-          name: `${conn.name} · ${conn.username}@${conn.host}`,
-          executable: 'ssh',
-          args: [
-            '-p', String(conn.port || 22),
-            '-t',
-            `${conn.username}@${conn.host}`,
-            `cd ${escapedDir} && exec $SHELL -l`,
-          ],
+          name: sshArgs.name,
+          executable: sshArgs.executable,
+          args: sshArgs.args,
         });
       } catch (err) {
         alert(`打开 SSH 终端失败: ${err instanceof Error ? err.message : String(err)}`);
@@ -390,18 +382,16 @@ const ExplorerContent = () => {
       return;
     }
     // 本地路径：cwd 设为 entry.source（若点击文件则用父目录）
-    if (isPath(source)) {
-      const localPath = String(source);
-      const targetDir = entry.kind === 'directory'
-        ? localPath
-        : localPath.replace(/[/\\][^/\\]*$/, '') || localPath;
-      try {
-        await terminalSDK.createTab({ cwd: targetDir });
-      } catch (err) {
-        alert(`打开终端失败: ${err instanceof Error ? err.message : String(err)}`);
-      }
+    const localPath = String(source);
+    const targetDir = entry.kind === 'directory'
+      ? localPath
+      : localPath.replace(/[/\\][^/\\]*$/, '') || localPath;
+    try {
+      await terminalSDK.createTab({ cwd: targetDir });
+    } catch (err) {
+      alert(`打开终端失败: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [sshConnections]);
+  }, []);
 
   const handleItemSelect = useCallback((entry: FileEntry, parentSource: FileSource, isMultiSelect: boolean) => {
     if (isMultiSelect) {

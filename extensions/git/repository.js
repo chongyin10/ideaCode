@@ -27,6 +27,9 @@ function shellEscapeArg(arg) {
 // 兜底轮询间隔：fs.watch 已覆盖 99% 实时场景，这里仅作 fs.watch 漏报兜底。
 // 从 2s 放宽到 30s，避免与 fs.watch 重复触发导致 git status 子进程执行 2~3 次/保存。
 const STATUS_POLL_INTERVAL = 30000;
+// §远程仓库无 fs.watch，轮询是唯一刷新手段，但每次轮询触发多次 SSH execute，
+// 30s 太频繁会导致 CPU 占用高。远程仓库使用 60s 间隔。
+const REMOTE_STATUS_POLL_INTERVAL = 60000;
 const FAST_POLL_INTERVAL = 500;          // 操作后快速刷新窗口
 const FAST_POLL_DURATION = 5000;          // 快速刷新持续时间
 const WATCHER_DEBOUNCE_MS = 300;          // 文件变更去抖，避免频繁刷 git status
@@ -68,11 +71,13 @@ class Repository {
       this._setupWatcher();
     }
 
-    // 轮询作为兜底（简单可靠）
+    // §轮询作为兜底（简单可靠）。远程仓库使用更长间隔（60s），
+    // 因为每次轮询通过 SSH 执行多次 git 命令，频繁轮询会导致 CPU 占用高。
+    const pollInterval = this._isRemote ? REMOTE_STATUS_POLL_INTERVAL : STATUS_POLL_INTERVAL;
     this._watchInterval = setInterval(() => {
       if (this._disposed) return;
       this._maybeRefresh('poll');
-    }, STATUS_POLL_INTERVAL);
+    }, pollInterval);
   }
 
   /**
@@ -356,6 +361,10 @@ class Repository {
 
   /** 操作完成后快速刷新一段时间 */
   _fastPoll() {
+    // §远程仓库跳过快速轮询：每次 refresh 触发多次 SSH execute，
+    // 500ms 间隔的快速轮询会导致 SSH 命令密集执行，CPU 飙升。
+    // 远程仓库操作后单次 refresh 已足够，不需要 fastPoll 补偿。
+    if (this._isRemote) return;
     if (this._fastPollTimer) clearTimeout(this._fastPollTimer);
     const sinceLast = Date.now() - (this._lastFastPollAt || 0);
     if (sinceLast > FAST_POLL_DURATION) {
@@ -736,6 +745,48 @@ class Repository {
       this._gitWatcher = null;
     }
     this._changeListeners.clear();
+  }
+
+  /**
+   * §按需激活机制：暂停轮询和定时器。
+   *
+   * 当源代码管理面板不可见时调用，停止所有轮询（远程仓库的 SSH execute 降为 0）。
+   * 本地仓库的 fs.watch 保持运行（零成本），仅暂停轮询兜底。
+   * 不 dispose Repository 实例，保持状态缓存，resume 后立即可用。
+   */
+  pause() {
+    if (this._disposed) return;
+    if (this._watchInterval) {
+      clearInterval(this._watchInterval);
+      this._watchInterval = null;
+    }
+    if (this._slowPollTimer) {
+      clearTimeout(this._slowPollTimer);
+      this._slowPollTimer = null;
+    }
+    if (this._fastPollTimer) {
+      clearTimeout(this._fastPollTimer);
+      this._fastPollTimer = null;
+    }
+  }
+
+  /**
+   * §按需激活机制：恢复轮询并立即刷新一次。
+   *
+   * 当源代码管理面板重新可见时调用，恢复轮询定时器并立即触发一次 refresh，
+   * 让用户立即看到最新状态（面板不可见期间可能有变更）。
+   */
+  resume() {
+    if (this._disposed) return;
+    if (!this._watchInterval) {
+      const pollInterval = this._isRemote ? REMOTE_STATUS_POLL_INTERVAL : STATUS_POLL_INTERVAL;
+      this._watchInterval = setInterval(() => {
+        if (this._disposed) return;
+        this._maybeRefresh('poll');
+      }, pollInterval);
+    }
+    // 立即触发一次刷新，同步面板不可见期间的变更
+    this._maybeRefresh('resume');
   }
 }
 

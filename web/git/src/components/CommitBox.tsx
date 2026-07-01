@@ -30,19 +30,19 @@ export default function CommitBox({ onCommit, disabled }: Props) {
             handleCommit();
           }
         }}
-        rows={3}
-        disabled={disabled}
+        rows={2}
       />
       <div className="git-commit-box__row">
-        <label className="git-commit-box__amend">
+        {/* <label className="git-commit-box__amend">
           <input type="checkbox" checked={amend} onChange={(e) => setAmend(e.target.checked)} />
           <span>修改上一次提交 (amend)</span>
-        </label>
+        </label> */}
         <button
           className="git-btn git-btn--primary"
           onClick={handleCommit}
-          disabled={disabled || !message.trim()}
+          disabled={!message.trim()}
           title="提交"
+          style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', width: '100%' }}
         >
           <Check size={14} />
           <span>提交</span>

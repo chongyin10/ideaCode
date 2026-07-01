@@ -880,6 +880,16 @@ async function activate(context) {
   context.subscriptions.push({
     dispose: () => clearInterval(pollTimer),
   });
+
+  // §按需激活 - 第二层：SSH 连接断开时清理远程仓库（"关闭则 kill"）
+  // SSH 扩展在 client.on('close') 时通过 vscode.commands.executeCommand 调用此命令。
+  // 检查当前仓库是否在断开的连接上，匹配则 dispose 远程仓库，停止轮询。
+  vscode.commands.registerCommand('git.onSshConnectionClosed', ({ connectionId }) => {
+    if (currentRootPath && currentRootPath.startsWith(`ssh://${connectionId}/`)) {
+      console.log('[Git Extension] SSH 连接已关闭，清理远程仓库:', connectionId);
+      closeRepository();
+    }
+  });
 }
 
 function deactivate() {
@@ -926,5 +936,16 @@ module.exports = {
       workspaceChangeTimer = null;
     }
     await openRepository(rootPath);
+  },
+  // §按需激活：源代码管理面板可见性变化时通知 Git 扩展
+  // 面板不可见时 pause 远程仓库轮询（SSH execute 降为 0），
+  // 面板恢复可见时 resume 轮询并立即刷新一次
+  onScmPanelVisibilityChange({ visible }) {
+    if (!currentRepo) return;
+    if (visible) {
+      currentRepo.resume();
+    } else {
+      currentRepo.pause();
+    }
   },
 };

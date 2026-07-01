@@ -7,6 +7,7 @@ import { clearSearchHighlight } from '../../store/slices/workspaceSlice';
 import type { SearchHighlight, EditorSnapshot } from '../../store/slices/workspaceSlice';
 import { tsService } from '../../services/tsLanguageService';
 import type { TsSemanticTokens } from '../../services/tsLanguageService';
+import { isRemoteUri } from '../../services/fileService';
 import { ensureLanguage } from '../../services/languageLoader';
 import { eventBus } from '../../utils/eventBus';
 import { registerMonacoEditor, unregisterMonacoEditor } from '../../services/monacoEditorBridge';
@@ -684,7 +685,10 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const isBrowser = !window.electronAPI?.tsserver;
+  // §SSH 远程文件的 path 是 ssh:// URI，本地 tsserver 无法处理（主进程会盲目拼接
+  // file:// 生成畸形 URI）。将远程路径等同于"无 tsserver"处理，跳过所有 LSP 调用，
+  // 仅依赖 Monaco 内置 tokenizer 提供基础语法高亮。
+  const isBrowser = !window.electronAPI?.tsserver || (path ? isRemoteUri(path) : false);
 
   const applyDiagnostics = useCallback(
     (editor: typeof editorRef.current, monaco: typeof monacoRef.current, diags: Array<{ start: { line: number; column: number }; end: { line: number; column: number }; message: string; category: number; code?: number }>) => {
@@ -895,8 +899,17 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
         // 解决首次打开 tsx/jsx 时 Monaco worker 尚未就绪导致无高亮的问题。
         const model = editor.getModel();
         if (model) {
-          if (model.getLanguageId() !== language) {
-            monaco.editor.setModelLanguage(model, language);
+          // §远程 tsx/jsx 文件覆盖为 typescriptreact/javascriptreact 语言 ID，
+          // 让 TS worker 提供更完整的 JSX tokenization（含 JSX 属性、表达式等）。
+          // 本地文件保持 typescript/javascript，有 Monarch tokenizer 提供基础高亮兜底，
+          // 避免 typescriptreact 无 Monarch tokenizer 导致本地文件一片灰色。
+          let modelLanguage = language;
+          if (isBrowser) {
+            if (language === 'typescript') modelLanguage = 'typescriptreact';
+            else if (language === 'javascript') modelLanguage = 'javascriptreact';
+          }
+          if (model.getLanguageId() !== modelLanguage) {
+            monaco.editor.setModelLanguage(model, modelLanguage);
           }
           // 仅重置一次 tokenization：触发 Monaco 重新从 worker 请求基础语法高亮。
           // 注意：语义高亮（semantic tokens）由 Monaco 内部自动调度，provider 注册后

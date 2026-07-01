@@ -20526,6 +20526,11 @@ function attemptConnect(id, connConfig, password) {
       if (sshClients.get(id) === client) {
         sshClients.delete(id);
       }
+      const closedSession = sessions.get(id);
+      if (closedSession && closedSession.connectionId) {
+        vscode.commands.executeCommand("git.onSshConnectionClosed", { connectionId: closedSession.connectionId }).catch(() => {
+        });
+      }
     });
     client.on("keyboard-interactive", (name, instructions, instructionsLang, prompts, finish) => {
       if (password && prompts.length > 0) {
@@ -20607,7 +20612,6 @@ function registerSshCommands() {
     return new Promise((resolve) => {
       const { id, command, usePty = false } = config;
       const client = sshClients.get(id);
-      log("log", "[SSH Extension] execute \u8BF7\u6C42:", id, "client \u5B58\u5728:", !!client);
       if (!client) {
         log("error", "[SSH Extension] execute \u4F1A\u8BDD\u4E0D\u5B58\u5728:", id, "\u5F53\u524D\u4F1A\u8BDD:", Array.from(sshClients.keys()));
         return resolve({ success: false, error: "\u4F1A\u8BDD\u4E0D\u5B58\u5728\u6216\u5DF2\u65AD\u5F00" });

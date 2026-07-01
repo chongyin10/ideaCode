@@ -560,6 +560,7 @@ var require_repository = __commonJS({
       return "'" + String(arg).replace(/'/g, "'\\''") + "'";
     }
     var STATUS_POLL_INTERVAL = 3e4;
+    var REMOTE_STATUS_POLL_INTERVAL = 6e4;
     var FAST_POLL_INTERVAL = 500;
     var FAST_POLL_DURATION = 5e3;
     var WATCHER_DEBOUNCE_MS = 300;
@@ -598,10 +599,11 @@ var require_repository = __commonJS({
         if (!this._isRemote) {
           this._setupWatcher();
         }
+        const pollInterval = this._isRemote ? REMOTE_STATUS_POLL_INTERVAL : STATUS_POLL_INTERVAL;
         this._watchInterval = setInterval(() => {
           if (this._disposed) return;
           this._maybeRefresh("poll");
-        }, STATUS_POLL_INTERVAL);
+        }, pollInterval);
       }
       /**
        * 启动仓库文件监听
@@ -841,6 +843,7 @@ var require_repository = __commonJS({
       }
       /** 操作完成后快速刷新一段时间 */
       _fastPoll() {
+        if (this._isRemote) return;
         if (this._fastPollTimer) clearTimeout(this._fastPollTimer);
         const sinceLast = Date.now() - (this._lastFastPollAt || 0);
         if (sinceLast > FAST_POLL_DURATION) {
@@ -1191,6 +1194,45 @@ var require_repository = __commonJS({
           this._gitWatcher = null;
         }
         this._changeListeners.clear();
+      }
+      /**
+       * §按需激活机制：暂停轮询和定时器。
+       *
+       * 当源代码管理面板不可见时调用，停止所有轮询（远程仓库的 SSH execute 降为 0）。
+       * 本地仓库的 fs.watch 保持运行（零成本），仅暂停轮询兜底。
+       * 不 dispose Repository 实例，保持状态缓存，resume 后立即可用。
+       */
+      pause() {
+        if (this._disposed) return;
+        if (this._watchInterval) {
+          clearInterval(this._watchInterval);
+          this._watchInterval = null;
+        }
+        if (this._slowPollTimer) {
+          clearTimeout(this._slowPollTimer);
+          this._slowPollTimer = null;
+        }
+        if (this._fastPollTimer) {
+          clearTimeout(this._fastPollTimer);
+          this._fastPollTimer = null;
+        }
+      }
+      /**
+       * §按需激活机制：恢复轮询并立即刷新一次。
+       *
+       * 当源代码管理面板重新可见时调用，恢复轮询定时器并立即触发一次 refresh，
+       * 让用户立即看到最新状态（面板不可见期间可能有变更）。
+       */
+      resume() {
+        if (this._disposed) return;
+        if (!this._watchInterval) {
+          const pollInterval = this._isRemote ? REMOTE_STATUS_POLL_INTERVAL : STATUS_POLL_INTERVAL;
+          this._watchInterval = setInterval(() => {
+            if (this._disposed) return;
+            this._maybeRefresh("poll");
+          }, pollInterval);
+        }
+        this._maybeRefresh("resume");
       }
     };
     function findRepoRoot2(startPath) {
@@ -1895,6 +1937,12 @@ async function activate(context) {
   context.subscriptions.push({
     dispose: () => clearInterval(pollTimer)
   });
+  vscode.commands.registerCommand("git.onSshConnectionClosed", ({ connectionId }) => {
+    if (currentRootPath && currentRootPath.startsWith(`ssh://${connectionId}/`)) {
+      console.log("[Git Extension] SSH \u8FDE\u63A5\u5DF2\u5173\u95ED\uFF0C\u6E05\u7406\u8FDC\u7A0B\u4ED3\u5E93:", connectionId);
+      closeRepository();
+    }
+  });
 }
 function deactivate() {
   console.log("[Git Extension] \u5DF2\u505C\u7528");
@@ -1941,5 +1989,16 @@ module.exports = {
       workspaceChangeTimer = null;
     }
     await openRepository(rootPath);
+  },
+  // §按需激活：源代码管理面板可见性变化时通知 Git 扩展
+  // 面板不可见时 pause 远程仓库轮询（SSH execute 降为 0），
+  // 面板恢复可见时 resume 轮询并立即刷新一次
+  onScmPanelVisibilityChange({ visible }) {
+    if (!currentRepo) return;
+    if (visible) {
+      currentRepo.resume();
+    } else {
+      currentRepo.pause();
+    }
   }
 };

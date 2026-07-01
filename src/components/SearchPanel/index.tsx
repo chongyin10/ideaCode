@@ -14,6 +14,7 @@ import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { openFile, setSearchHighlight, setPendingSearchQuery } from '../../store/slices/workspaceSlice';
 import { isElectron } from '../../services/fileService';
 import type { FileEntry } from '../../services/fileService';
+import { getCurrentSshConfig, buildSshUri } from '../../services/sshWorkspace';
 import type { SearchMatch } from '../../utils/searchUtils';
 import { useSearch } from '../../hooks/useSearch';
 import './SearchPanel.css';
@@ -68,7 +69,13 @@ const SearchPanel = forwardRef<SearchPanelRef>((_props, ref) => {
   const handleMatchClick = useCallback(
     async (filePath: string, match: SearchMatch) => {
       if (isElectron() && rootSource && typeof rootSource === 'string') {
-        const absolutePath = rootSource + '/' + filePath;
+        // §需求：先通过 sshWorkspace 工具判断工作区类型，再构造文件 URI
+        // - SSH 工作区：使用 buildSshUri 构造远程 URI，避免隐式字符串拼接
+        // - 本地工作区：沿用 rootSource + '/' + filePath 的路径拼接
+        const sshConfig = getCurrentSshConfig();
+        const absolutePath = sshConfig
+          ? buildSshUri(sshConfig.connectionId, filePath, sshConfig.remotePath)
+          : rootSource + '/' + filePath;
         const entry: FileEntry = {
           name: filePath.slice(filePath.lastIndexOf('/') + 1),
           kind: 'file',

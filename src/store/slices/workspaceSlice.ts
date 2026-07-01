@@ -334,9 +334,13 @@ export const loadDirectory = createAsyncThunk(
       try { await addRecentProject(source, name); } catch { /* 忽略 */ }
       // 启动 tsserver 语言服务
       try { window.electronAPI?.tsserver?.start(source); } catch { /* tsserver 未可用 */ }
-      dispatch(refreshAllFilePaths(source));
       // Git 状态由 web/git 扩展自动监听 workspace 变更并刷新
       // （扩展轮询 workspace.getRootPath，发现路径变更后自动 openRepository）
+    }
+    // §SSH 远程工作区也需要填充文件列表（TopBar 搜索文件 / QuickOpen 依赖 allFilePaths）。
+    // refreshAllFilePaths 内部通过 FileSystemProvider 读取远程目录，对 SSH 可用。
+    if (isPath(source)) {
+      dispatch(refreshAllFilePaths(source));
     }
     return { source, name, entries };
   }

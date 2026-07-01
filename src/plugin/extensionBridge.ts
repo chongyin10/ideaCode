@@ -115,6 +115,7 @@ export class ExtensionBridge {
     this._setupIpcListeners();
     this._subscribeActiveFile();
     this._subscribeWorkspaceRoot();
+    this._subscribeScmPanelVisibility();
   }
 
   /**
@@ -165,6 +166,31 @@ export class ExtensionBridge {
           extId: 'ideacode-git',
           method: 'openWorkspace',
           args: [{ path: rootPath }],
+        }).catch(() => { /* git 扩展可能尚未激活，忽略 */ });
+      }
+    });
+  }
+
+  /**
+   * §按需激活：订阅源代码管理面板（workbench.scm）的可见性变化。
+   *
+   * 面板不可见时通知 Git 扩展 pause 远程仓库轮询（SSH execute 降为 0），
+   * 面板恢复可见时 resume 轮询并立即刷新。
+   * 同时考虑 sidePanelVisible：侧边栏整体隐藏时也视为面板不可见。
+   */
+  private _subscribeScmPanelVisibility(): void {
+    let lastVisible = true;
+    this.store.subscribe(() => {
+      const state = this.store.getState();
+      // 面板可见 = activePanel 是 scm 且侧边栏可见
+      const visible = state.layout.sidePanelVisible && state.layout.activePanel === 'workbench.scm';
+      if (visible !== lastVisible) {
+        lastVisible = visible;
+        if (!window.electronAPI?.extension?.rpc) return;
+        window.electronAPI.extension.rpc('ext.invoke', {
+          extId: 'ideacode-git',
+          method: 'onScmPanelVisibilityChange',
+          args: [{ visible }],
         }).catch(() => { /* git 扩展可能尚未激活，忽略 */ });
       }
     });

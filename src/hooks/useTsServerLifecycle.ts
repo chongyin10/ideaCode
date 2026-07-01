@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useAppSelector } from '../store/hooks';
-import { isPath } from '../services/fileService';
+import { isPath, isRemoteUri } from '../services/fileService';
 import { tsService } from '../services/tsLanguageService';
 
 /**
@@ -31,7 +31,9 @@ export function useTsServerLifecycle() {
   useEffect(() => {
     // rootSource 可能是 null（欢迎页）或 FileSystemHandle（浏览器 File System Access），
     // 这里只处理本地路径场景：Electron + 选择目录。
-    if (!rootSource || !isPath(rootSource)) {
+    // §SSH 远程路径（ssh:// URI）不启动本地 tsserver——主进程会盲目拼接 file:// 生成
+    // 畸形 URI，tsserver 无法找到文件。远程文件的语法高亮退化为 Monaco 内置 tokenizer。
+    if (!rootSource || !isPath(rootSource) || isRemoteUri(rootSource)) {
       // 没有 workspace（欢迎页等场景）：不启动 tsserver；如果之前启动过，主动停止。
       if (currentRef.current !== null) {
         currentRef.current = null;

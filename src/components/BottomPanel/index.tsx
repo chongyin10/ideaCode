@@ -27,6 +27,7 @@ import {
   TerminalTab,
 } from '../../store/slices/terminalSlice';
 import { useTerminalFileTreeSync } from '../../services/terminalFileTreeSync';
+import { getCurrentSshConfig, buildSshTerminalArgs } from '../../services/sshWorkspace';
 import {
   createTerminal, disposeTerminal,
   listProfiles, onTerminalOutput,
@@ -63,8 +64,6 @@ const BottomPanel = () => {
   const { bottomPanelVisible, activeBottomTab, dockableItems } = useAppSelector((s) => s.layout);
   const terminal = useAppSelector((s) => s.terminal);
   const rootSource = useAppSelector((s) => s.workspace.rootSource);
-  // §需求：SSH 项目时，底部终端需连接到远程主机。从 Redux 取连接信息构造 ssh 命令。
-  const sshConnections = useAppSelector((s) => s.workspace.sshConnections);
 
   // 按 dockableItems 过滤出的底部 tab 列表（底部不显示图标，避免多个 tab 图标重复）
   const bottomTabs = useMemo(() => {
@@ -187,8 +186,6 @@ const BottomPanel = () => {
   activeTabIdRef.current = activeTabIdMemo;
   const rootSourceRef = useRef(rootSource);
   rootSourceRef.current = rootSource;
-  const sshConnectionsRef = useRef(sshConnections);
-  sshConnectionsRef.current = sshConnections;
 
   /* ─── 终端 ↔ 文件树联动 ─── */
   useTerminalFileTreeSync(activeTabIdMemo);
@@ -247,31 +244,20 @@ const BottomPanel = () => {
     const profileToUse = profile || state.defaultProfile;
     const tabId = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
-    // §需求：当前工作区为 SSH 远程项目（rootSource 形如 ssh://<connId><path>）时，
-    // 底部终端应连接到远程主机，而非打开本地终端（否则 pwd 会指向本地项目路径）。
-    // 从 Redux sshConnections 取连接信息构造 ssh 命令；密码不持久化，需用户手动输入。
-    const root = rootSourceRef.current;
-    const sshMatch = typeof root === 'string' ? root.match(/^ssh:\/\/([^/]+)(.*)$/) : null;
-    const conn = sshMatch ? sshConnectionsRef.current[sshMatch[1]] : null;
+    // §需求：当前工作区为 SSH 远程项目时，底部终端应连接到远程主机。
+    // 通过 sshWorkspace 工具统一检测 SSH 连接状态，避免散落的正则匹配和重复代码。
+    const sshConfig = getCurrentSshConfig();
 
     let tabName: string;
     let createConfig: { cwd?: string; executable?: string; args?: string[] };
 
-    if (conn && sshMatch) {
-      const remotePath = sshMatch[2] || '/';
-      const escapedDir = `'${remotePath.replace(/'/g, "'\\''")}'`;
-      tabName = `${conn.name} · ${conn.username}@${conn.host}`;
-      createConfig = {
-        executable: 'ssh',
-        args: [
-          '-p', String(conn.port || 22),
-          '-t',
-          `${conn.username}@${conn.host}`,
-          `cd ${escapedDir} && exec $SHELL -l`,
-        ],
-      };
+    if (sshConfig) {
+      const sshArgs = buildSshTerminalArgs(sshConfig.conn, sshConfig.remotePath);
+      tabName = sshArgs.name;
+      createConfig = { executable: sshArgs.executable, args: sshArgs.args };
     } else {
       tabName = profileToUse?.name || 'Terminal';
+      const root = rootSourceRef.current;
       const cwd = typeof root === 'string' ? root : undefined;
       createConfig = { cwd, executable: profileToUse?.path, args: profileToUse?.args };
     }
@@ -389,24 +375,15 @@ const BottomPanel = () => {
         const profile = tab?.profile || nextState.defaultProfile;
 
         // §需求：SSH 项目分屏终端也需连接远程主机（与 handleCreateTab 一致）
-        const root = rootSourceRef.current;
-        const sshMatch = typeof root === 'string' ? root.match(/^ssh:\/\/([^/]+)(.*)$/) : null;
-        const conn = sshMatch ? sshConnectionsRef.current[sshMatch[1]] : null;
+        // 通过 sshWorkspace 工具统一检测，消除与 handleCreateTab 的重复代码
+        const sshConfig = getCurrentSshConfig();
 
         let createConfig: { cwd?: string; executable?: string; args?: string[] };
-        if (conn && sshMatch) {
-          const remotePath = sshMatch[2] || '/';
-          const escapedDir = `'${remotePath.replace(/'/g, "'\\''")}'`;
-          createConfig = {
-            executable: 'ssh',
-            args: [
-              '-p', String(conn.port || 22),
-              '-t',
-              `${conn.username}@${conn.host}`,
-              `cd ${escapedDir} && exec $SHELL -l`,
-            ],
-          };
+        if (sshConfig) {
+          const sshArgs = buildSshTerminalArgs(sshConfig.conn, sshConfig.remotePath);
+          createConfig = { executable: sshArgs.executable, args: sshArgs.args };
         } else {
+          const root = rootSourceRef.current;
           const cwd = typeof root === 'string' ? root : undefined;
           createConfig = { cwd, executable: profile?.path, args: profile?.args };
         }

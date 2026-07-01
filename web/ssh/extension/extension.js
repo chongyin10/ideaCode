@@ -121,6 +121,13 @@ function attemptConnect(id, connConfig, password) {
       if (sshClients.get(id) === client) {
         sshClients.delete(id);
       }
+      // §按需激活 - 第二层：连接关闭时通知 Git 扩展清理远程仓库（"关闭则 kill"）
+      // 无论主动断开还是网络断开，都通过此通知让 Git 扩展 dispose 远程仓库，
+      // 避免对已断开的连接继续轮询（产生错误日志和无效 IPC）
+      const closedSession = sessions.get(id);
+      if (closedSession && closedSession.connectionId) {
+        vscode.commands.executeCommand('git.onSshConnectionClosed', { connectionId: closedSession.connectionId }).catch(() => { /* git 扩展可能未激活，忽略 */ });
+      }
     });
 
     client.on('keyboard-interactive', (name, instructions, instructionsLang, prompts, finish) => {
@@ -216,7 +223,7 @@ function registerSshCommands() {
     return new Promise((resolve) => {
       const { id, command, usePty = false } = config;
       const client = sshClients.get(id);
-      log('log', '[SSH Extension] execute 请求:', id, 'client 存在:', !!client);
+      // §高频日志会导致控制台刷屏并占用 CPU/GPU，仅在异常时输出
       if (!client) {
         log('error', '[SSH Extension] execute 会话不存在:', id, '当前会话:', Array.from(sshClients.keys()));
         return resolve({ success: false, error: '会话不存在或已断开' });
