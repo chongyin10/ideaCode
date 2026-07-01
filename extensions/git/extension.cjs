@@ -379,6 +379,10 @@ var require_statusParser = __commonJS({
       const result = [];
       const aggregatedMap = /* @__PURE__ */ new Map();
       for (const c of changes) {
+        if (c.isSubmodule) {
+          result.push(c);
+          continue;
+        }
         const top = (c.path || "").split("/")[0];
         if (DEFAULT_IGNORE_DIRS.has(top)) {
           const entry = aggregatedMap.get(top);
@@ -454,6 +458,8 @@ var require_statusParser = __commonJS({
           const parts = line.split(" ");
           if (parts.length < 9) continue;
           const xy = parts[1];
+          const sub = parseInt(parts[2], 10) || 0;
+          const isSubmodule = sub > 0;
           const path2 = parts.slice(8).join(" ");
           const indexChar = xy[0] === "." ? " " : xy[0];
           const workingChar = xy[1] === "." ? " " : xy[1];
@@ -468,7 +474,8 @@ var require_statusParser = __commonJS({
               path: path2,
               originalPath: null,
               indexStatus: indexChar,
-              workingStatus: workingChar
+              workingStatus: workingChar,
+              isSubmodule
             });
             continue;
           }
@@ -476,7 +483,8 @@ var require_statusParser = __commonJS({
             path: path2,
             originalPath: null,
             indexStatus: indexChar,
-            workingStatus: workingChar
+            workingStatus: workingChar,
+            isSubmodule
           };
           if (indexChar !== " " && indexChar !== "?") {
             status.staged.push(change);
@@ -488,6 +496,8 @@ var require_statusParser = __commonJS({
           const parts = line.split(" ");
           if (parts.length < 10) continue;
           const xy = parts[1];
+          const sub = parseInt(parts[2], 10) || 0;
+          const isSubmodule = sub > 0;
           const indexChar = xy[0] === "." ? " " : xy[0];
           const workingChar = xy[1] === "." ? " " : xy[1];
           const path2 = parts.slice(9).join(" ");
@@ -496,7 +506,8 @@ var require_statusParser = __commonJS({
             path: path2,
             originalPath,
             indexStatus: indexChar,
-            workingStatus: workingChar
+            workingStatus: workingChar,
+            isSubmodule
           };
           if (indexChar !== " ") {
             status.staged.push(change);
@@ -663,8 +674,9 @@ var require_repository = __commonJS({
        */
       async _execGit(args, options = {}) {
         if (this._remoteExecutor) {
+          const cwd = options.cwd || this.rootPath;
           const cmd = ["git", "--no-pager", ...args.map(shellEscapeArg)].join(" ");
-          const result = await this._remoteExecutor(`GIT_PAGER=cat ${cmd}`, this.rootPath);
+          const result = await this._remoteExecutor(`GIT_PAGER=cat ${cmd}`, cwd);
           return result;
         }
         return execGit(args, { cwd: this.rootPath, ...options });
@@ -701,9 +713,94 @@ var require_repository = __commonJS({
           }
           this.state = parseStatus(output.stdout);
           this._lastError = null;
+          const mainRepoName = path2.basename(this.rootPath);
+          const mainBranch = this.state.branch;
+          const tagMain = (c) => {
+            if (!c.repoPath) {
+              c.repoPath = this.rootPath;
+              c.repoName = mainRepoName;
+              c.repoBranch = mainBranch;
+            }
+          };
+          this.state.staged.forEach(tagMain);
+          this.state.changes.forEach(tagMain);
+          this.state.merge.forEach(tagMain);
+          this.state.untracked.forEach(tagMain);
+          await this._refreshSubmodules();
           this._fire();
         } catch (err) {
           this._lastError = err.message;
+        }
+      }
+      /**
+       * §获取子模块列表。
+       * 解析 `git submodule status` 输出，返回 { path, name } 数组。
+       * 跳过未初始化的子模块（状态字符为 '-'），因为其目录无 .git 无法执行 git status。
+       * @returns {Promise<Array<{path: string, name: string}>>}
+       */
+      async _getSubmodules() {
+        const { code, stdout } = await this._execGit(["submodule", "status"], {});
+        if (code !== 0 || !stdout) return [];
+        const subs = [];
+        for (const line of stdout.split("\n")) {
+          if (!line.trim()) continue;
+          const statusChar = line[0];
+          if (statusChar === "-") continue;
+          const rest = line.slice(1).trim();
+          const spaceIdx = rest.indexOf(" ");
+          if (spaceIdx === -1) continue;
+          const remaining = rest.slice(spaceIdx + 1);
+          const subPath = remaining.split(" (")[0].trim();
+          if (subPath) {
+            subs.push({ path: subPath, name: subPath.split("/").pop() });
+          }
+        }
+        return subs;
+      }
+      /**
+       * §获取所有子模块的内部文件变更，合并到 this.state 中。
+       *
+       * 对每个子模块：
+       *   1. 在子模块目录下执行 git status --porcelain=v2 --branch
+       *   2. 解析子模块状态
+       *   3. 为每条变更打上 { repoPath, repoName, repoBranch } 标记
+       *   4. 合并到主仓库的 staged/changes/merge/untracked 数组中
+       *
+       * 子模块内部的路径是相对于子模块根的，UI 分组后用户能正确理解文件归属。
+       * 后续 stage/unstage/discard 等操作通过 repoPath（cwd）在正确的仓库下执行。
+       */
+      async _refreshSubmodules() {
+        let submodules;
+        try {
+          submodules = await this._getSubmodules();
+        } catch {
+          return;
+        }
+        if (submodules.length === 0) return;
+        for (const sub of submodules) {
+          try {
+            const subCwd = path2.join(this.rootPath, sub.path);
+            const output = await this._execGit(
+              ["status", "--porcelain=v2", "--branch", "--untracked-files=normal", "--ignored=no"],
+              { cwd: subCwd, timeout: 1e4 }
+            );
+            if (output.code !== 0) continue;
+            const subStatus = parseStatus(output.stdout);
+            const tagSub = (c) => {
+              c.repoPath = subCwd;
+              c.repoName = sub.name;
+              c.repoBranch = subStatus.branch || "";
+            };
+            subStatus.staged.forEach(tagSub);
+            subStatus.changes.forEach(tagSub);
+            subStatus.merge.forEach(tagSub);
+            subStatus.untracked.forEach(tagSub);
+            this.state.staged.push(...subStatus.staged);
+            this.state.changes.push(...subStatus.changes);
+            this.state.merge.push(...subStatus.merge);
+            this.state.untracked.push(...subStatus.untracked);
+          } catch {
+          }
         }
       }
       async _maybeRefresh(reason) {
@@ -759,19 +856,19 @@ var require_repository = __commonJS({
         }, FAST_POLL_INTERVAL);
       }
       /* ─── Git 操作 ─── */
-      async stage(paths) {
+      async stage(paths, cwd) {
         if (!paths || paths.length === 0) return { success: true };
         const args = ["add", "--", ...paths];
-        const { code, stderr } = await this._execGitMutating(args);
+        const { code, stderr } = await this._execGitMutating(args, cwd ? { cwd } : {});
         if (code !== 0) throw new GitError2(`stage failed: ${stderr}`);
         await this.refresh();
         this._fastPoll();
         return { success: true };
       }
-      async unstage(paths) {
+      async unstage(paths, cwd) {
         if (!paths || paths.length === 0) return { success: true };
         const args = ["reset", "HEAD", "--", ...paths];
-        const { code, stderr } = await this._execGitMutating(args);
+        const { code, stderr } = await this._execGitMutating(args, cwd ? { cwd } : {});
         if (code !== 0) throw new GitError2(`unstage failed: ${stderr}`);
         await this.refresh();
         this._fastPoll();
@@ -782,6 +879,17 @@ var require_repository = __commonJS({
         const args = ["add", "-A", "--", ".", ...excludeArgs];
         const { code, stderr } = await this._execGitMutating(args);
         if (code !== 0) throw new GitError2(`stageAll failed: ${stderr}`);
+        try {
+          const submodules = await this._getSubmodules();
+          for (const sub of submodules) {
+            try {
+              const subCwd = path2.join(this.rootPath, sub.path);
+              await this._execGitMutating(args, { cwd: subCwd });
+            } catch {
+            }
+          }
+        } catch {
+        }
         await this.refresh();
         this._fastPoll();
         return { success: true };
@@ -789,6 +897,17 @@ var require_repository = __commonJS({
       async unstageAll() {
         const { code, stderr } = await this._execGitMutating(["reset", "HEAD"]);
         if (code !== 0) throw new GitError2(`unstageAll failed: ${stderr}`);
+        try {
+          const submodules = await this._getSubmodules();
+          for (const sub of submodules) {
+            try {
+              const subCwd = path2.join(this.rootPath, sub.path);
+              await this._execGitMutating(["reset", "HEAD"], { cwd: subCwd });
+            } catch {
+            }
+          }
+        } catch {
+        }
         await this.refresh();
         this._fastPoll();
         return { success: true };
@@ -804,21 +923,22 @@ var require_repository = __commonJS({
         this._fastPoll();
         return { success: true, message: stdout };
       }
-      async discard(paths) {
+      async discard(paths, cwd) {
         if (!paths || paths.length === 0) return { success: true };
         const args = ["checkout", "--", ...paths];
-        const { code, stderr } = await this._execGitMutating(args);
+        const { code, stderr } = await this._execGitMutating(args, cwd ? { cwd } : {});
         if (code !== 0) throw new GitError2(`discard failed: ${stderr}`);
         await this.refresh();
         this._fastPoll();
         return { success: true };
       }
-      async deleteUntracked(paths) {
+      async deleteUntracked(paths, cwd) {
         if (!paths || paths.length === 0) return { success: true };
+        const baseCwd = cwd || this.rootPath;
         if (this._isRemote) {
           for (const p of paths) {
             try {
-              await this._remoteExecutor(`rm -rf -- ${shellEscapeArg(p)}`, this.rootPath);
+              await this._remoteExecutor(`rm -rf -- ${shellEscapeArg(p)}`, baseCwd);
             } catch {
             }
           }
@@ -827,7 +947,7 @@ var require_repository = __commonJS({
           return { success: true };
         }
         for (const p of paths) {
-          const full = path2.join(this.rootPath, p);
+          const full = path2.join(baseCwd, p);
           try {
             const stat = await fsp.lstat(full);
             if (stat.isDirectory()) {
@@ -846,18 +966,20 @@ var require_repository = __commonJS({
        * §读取工作区文件内容（用于 diff 视图的 modified 端）。
        * 本地：fs.readFileSync；远程：通过 SSH cat 读取。
        * @param {string} relPath 相对仓库根的路径
+       * @param {string} [cwd] 子模块的绝对路径（操作子模块内文件时传入）
        * @returns {Promise<{ content: string; isBinary: boolean }>}
        */
-      async readFile(relPath) {
+      async readFile(relPath, cwd) {
+        const baseCwd = cwd || this.rootPath;
         if (this._isRemote) {
           const { stdout } = await this._remoteExecutor(
             `cat -- ${shellEscapeArg(relPath)}`,
-            this.rootPath
+            baseCwd
           );
           const isBinary2 = stdout.includes("\0");
           return { content: isBinary2 ? "" : stdout, isBinary: isBinary2 };
         }
-        const full = path2.join(this.rootPath, relPath);
+        const full = path2.join(baseCwd, relPath);
         const buf = fs2.readFileSync(full);
         const isBinary = buf.includes(0);
         return { content: isBinary ? "" : buf.toString("utf8"), isBinary };
@@ -1030,18 +1152,18 @@ var require_repository = __commonJS({
       async getRemotes() {
         return this.listRemotes();
       }
-      async getOriginalContent(path3) {
+      async getOriginalContent(filePath, cwd) {
         const { stdout } = await this._execGit(
-          ["show", `HEAD:${path3}`],
-          { timeout: 1e4 }
+          ["show", `HEAD:${filePath}`],
+          { cwd, timeout: 1e4 }
         );
         return stdout;
       }
-      async getDiff(path3, staged = false) {
+      async getDiff(filePath, staged = false, cwd) {
         const args = ["diff", "--no-color"];
         if (staged) args.push("--cached");
-        if (path3) args.push("--", path3);
-        const { code, stdout } = await this._execGit(args, { timeout: 15e3 });
+        if (filePath) args.push("--", filePath);
+        const { code, stdout } = await this._execGit(args, { cwd, timeout: 15e3 });
         if (code !== 0 && code !== 1) return "";
         return stdout;
       }
@@ -1464,12 +1586,12 @@ async function handleWebviewMessage(message) {
         break;
       case "stage":
         if (!currentRepo) return reply({ success: false, error: "\u6CA1\u6709\u6253\u5F00\u7684\u4ED3\u5E93" });
-        await currentRepo.stage(message.paths || []);
+        await currentRepo.stage(message.paths || [], message.repoPath);
         reply({ success: true });
         break;
       case "unstage":
         if (!currentRepo) return reply({ success: false, error: "\u6CA1\u6709\u6253\u5F00\u7684\u4ED3\u5E93" });
-        await currentRepo.unstage(message.paths || []);
+        await currentRepo.unstage(message.paths || [], message.repoPath);
         reply({ success: true });
         break;
       case "stageAll":
@@ -1495,26 +1617,46 @@ async function handleWebviewMessage(message) {
       case "discard": {
         if (!currentRepo) return reply({ success: false, error: "\u6CA1\u6709\u6253\u5F00\u7684\u4ED3\u5E93" });
         const discardPaths = message.paths || [];
-        await currentRepo.discard(discardPaths);
+        const repoPath = message.repoPath;
+        await currentRepo.discard(discardPaths, repoPath);
         if (discardPaths.length > 0) {
-          send("git.filesChanged", { paths: discardPaths });
+          let notifyPaths = discardPaths;
+          if (repoPath && repoPath !== currentRepo.rootPath) {
+            const subRel = path.relative(currentRepo.rootPath, repoPath);
+            notifyPaths = discardPaths.map((p) => path.join(subRel, p));
+          }
+          send("git.filesChanged", { paths: notifyPaths });
         }
         reply({ success: true });
         break;
       }
       case "discardAll": {
         if (!currentRepo) return reply({ success: false, error: "\u6CA1\u6709\u6253\u5F00\u7684\u4ED3\u5E93" });
-        const paths = currentRepo.state.changes.map((c) => c.path);
-        await currentRepo.discard(paths);
-        if (paths.length > 0) {
-          send("git.filesChanged", { paths });
+        const pathsByRepo = /* @__PURE__ */ new Map();
+        for (const c of currentRepo.state.changes) {
+          const rp = c.repoPath || currentRepo.rootPath;
+          if (!pathsByRepo.has(rp)) pathsByRepo.set(rp, []);
+          pathsByRepo.get(rp).push(c.path);
+        }
+        const allNotifyPaths = [];
+        for (const [repoPath, paths] of pathsByRepo) {
+          await currentRepo.discard(paths, repoPath);
+          if (repoPath !== currentRepo.rootPath) {
+            const subRel = path.relative(currentRepo.rootPath, repoPath);
+            allNotifyPaths.push(...paths.map((p) => path.join(subRel, p)));
+          } else {
+            allNotifyPaths.push(...paths);
+          }
+        }
+        if (allNotifyPaths.length > 0) {
+          send("git.filesChanged", { paths: allNotifyPaths });
         }
         reply({ success: true });
         break;
       }
       case "deleteUntracked":
         if (!currentRepo) return reply({ success: false, error: "\u6CA1\u6709\u6253\u5F00\u7684\u4ED3\u5E93" });
-        await currentRepo.deleteUntracked(message.paths || []);
+        await currentRepo.deleteUntracked(message.paths || [], message.repoPath);
         reply({ success: true });
         break;
       case "checkoutBranch":
@@ -1575,21 +1717,22 @@ async function handleWebviewMessage(message) {
         break;
       case "getDiff":
         if (!currentRepo) return reply({ success: true, diff: "" });
-        const diff = await currentRepo.getDiff(message.path, !!message.staged);
+        const diff = await currentRepo.getDiff(message.path, !!message.staged, message.repoPath);
         reply({ success: true, diff });
         break;
       case "getOriginalContent":
         if (!currentRepo) return reply({ success: true, content: "" });
-        const content = await currentRepo.getOriginalContent(message.path);
+        const content = await currentRepo.getOriginalContent(message.path, message.repoPath);
         reply({ success: true, content });
         break;
       case "openFile": {
         if (!message.path) return reply({ success: false, error: "\u7F3A\u5C11 path" });
+        const repoPath = message.repoPath;
         try {
           let originalContent = "";
           if (currentRepo) {
             try {
-              originalContent = await currentRepo.getOriginalContent(message.path) || "";
+              originalContent = await currentRepo.getOriginalContent(message.path, repoPath) || "";
             } catch (e) {
             }
           }
@@ -1597,7 +1740,7 @@ async function handleWebviewMessage(message) {
           let isBinary = false;
           try {
             if (currentRepo) {
-              const result = await currentRepo.readFile(message.path);
+              const result = await currentRepo.readFile(message.path, repoPath);
               modifiedContent = result.content;
               isBinary = result.isBinary;
             } else {

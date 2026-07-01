@@ -97,10 +97,10 @@ export default function SourceControlView() {
     }
   };
 
-  const handleStage = async (paths: string[]) => {
+  const handleStage = async (paths: string[], repoPath?: string) => {
     setBusy(true);
     try {
-      await sendRpc('stage', { paths });
+      await sendRpc('stage', { paths, repoPath });
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -108,10 +108,10 @@ export default function SourceControlView() {
     }
   };
 
-  const handleUnstage = async (paths: string[]) => {
+  const handleUnstage = async (paths: string[], repoPath?: string) => {
     setBusy(true);
     try {
-      await sendRpc('unstage', { paths });
+      await sendRpc('unstage', { paths, repoPath });
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -141,11 +141,11 @@ export default function SourceControlView() {
     }
   };
 
-  const handleDiscard = async (paths: string[]) => {
+  const handleDiscard = async (paths: string[], repoPath?: string) => {
     if (!window.confirm(`确定要放弃 ${paths.length} 个文件的本地修改吗？`)) return;
     setBusy(true);
     try {
-      await sendRpc('discard', { paths });
+      await sendRpc('discard', { paths, repoPath });
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -166,11 +166,11 @@ export default function SourceControlView() {
     }
   };
 
-  const handleDeleteUntracked = async (paths: string[]) => {
+  const handleDeleteUntracked = async (paths: string[], repoPath?: string) => {
     if (!window.confirm(`确定要删除 ${paths.length} 个未跟踪的文件吗？`)) return;
     setBusy(true);
     try {
-      await sendRpc('deleteUntracked', { paths });
+      await sendRpc('deleteUntracked', { paths, repoPath });
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -267,8 +267,8 @@ export default function SourceControlView() {
     }
   };
 
-  const handleOpenFile = (path: string, staged = false) => {
-    sendRpc('openFile', { path, staged }).catch((e) =>
+  const handleOpenFile = (path: string, staged = false, repoPath?: string) => {
+    sendRpc('openFile', { path, staged, repoPath }).catch((e) =>
       setActionError(e instanceof Error ? e.message : String(e))
     );
   };
@@ -353,9 +353,9 @@ export default function SourceControlView() {
         actions={[
           { label: '全部取消暂存', handler: handleUnstageAll, disabled: status.staged.length === 0 },
         ]}
-        onUnstage={(p) => handleUnstage(p)}
-        onDiscard={(p) => handleDiscard(p)}
-        onOpen={(p) => handleOpenFile(p, true)}
+        onUnstage={(p, rp) => handleUnstage(p, rp)}
+        onDiscard={(p, rp) => handleDiscard(p, rp)}
+        onOpen={(p, rp) => handleOpenFile(p, true, rp)}
       />
 
       <ChangesSection
@@ -372,9 +372,9 @@ export default function SourceControlView() {
           { label: '全部暂存', handler: handleStageAll, disabled: status.changes.length === 0 },
           { label: '全部放弃', handler: handleDiscardAllChanges, disabled: status.changes.length === 0 },
         ]}
-        onStage={(p) => handleStage(p)}
-        onDiscard={(p) => handleDiscard(p)}
-        onOpen={(p) => handleOpenFile(p, false)}
+        onStage={(p, rp) => handleStage(p, rp)}
+        onDiscard={(p, rp) => handleDiscard(p, rp)}
+        onOpen={(p, rp) => handleOpenFile(p, false, rp)}
       />
 
       {status.merge.length > 0 && (
@@ -387,7 +387,7 @@ export default function SourceControlView() {
           defaultOpen
           emptyText="无合并冲突"
           activeFile={activeFile}
-          onOpen={(p) => handleOpenFile(p)}
+          onOpen={(p, rp) => handleOpenFile(p, false, rp)}
         />
       )}
 
@@ -405,13 +405,32 @@ export default function SourceControlView() {
             { label: '全部暂存', handler: handleStageAll, disabled: status.untracked.length === 0 },
             {
               label: '全部删除',
-              handler: () => handleDeleteUntracked(status.untracked.map((c: GitChange) => c.path)),
+              // §子模块场景下未跟踪文件分属不同仓库，需按 repoPath 分组逐个仓库删除
+              handler: async () => {
+                if (!window.confirm(`确定要删除全部 ${status.untracked.length} 个未跟踪的文件吗？`)) return;
+                setBusy(true);
+                try {
+                  const byRepo = new Map<string, string[]>();
+                  for (const c of status.untracked) {
+                    const rp = c.repoPath || '';
+                    if (!byRepo.has(rp)) byRepo.set(rp, []);
+                    byRepo.get(rp)!.push(c.path);
+                  }
+                  for (const [repoPath, paths] of byRepo) {
+                    await sendRpc('deleteUntracked', { paths, repoPath: repoPath || undefined });
+                  }
+                } catch (e) {
+                  setActionError(e instanceof Error ? e.message : String(e));
+                } finally {
+                  setBusy(false);
+                }
+              },
               disabled: status.untracked.length === 0,
             },
           ]}
-          onStage={(p) => handleStage(p)}
-          onDelete={(p) => handleDeleteUntracked(p)}
-          onOpen={(p) => handleOpenFile(p)}
+          onStage={(p, rp) => handleStage(p, rp)}
+          onDelete={(p, rp) => handleDeleteUntracked(p, rp)}
+          onOpen={(p, rp) => handleOpenFile(p, false, rp)}
         />
       )}
 

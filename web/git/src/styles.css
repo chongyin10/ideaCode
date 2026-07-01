@@ -139,7 +139,7 @@ input:focus, textarea:focus {
 
 .git-repo-header {
   position: relative;
-  padding: 8px 10px 6px;
+  padding: 4px 8px 4px;
   border-bottom: 1px solid var(--vscode-sideBarSectionHeader-background, #252526);
 }
 
@@ -151,13 +151,24 @@ input:focus, textarea:focus {
 }
 
 .git-repo-header__name {
-  font-size: 13px;
+  /* §需求：与左侧资源管理器的"资源管理器"标题保持完全一致——
+     .explorer-section__header 用的也是这套样式（11px / 大写 / 600）。 */
+  font-size: 11px;
   font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: #bbbbbb;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   flex: 1;
   min-width: 0;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: background 0.1s, color 0.1s;
+}
+.git-repo-header__row:hover .git-repo-header__name {
+  color: #ffffff;
 }
 
 /* ─── 关联远程仓库入口（仓库已 init 但无 remote 时显示） ─── */
@@ -479,6 +490,43 @@ input:focus, textarea:focus {
   min-height: 0;
 }
 
+/* §子模块分组：主仓库和每个子模块各自一个 group，标题显示 "仓库名 (分支)" */
+.git-repo-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.git-repo-group__header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px 2px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--vscode-descriptionForeground, #969696);
+  user-select: none;
+  border-top: 1px solid rgba(128, 128, 128, 0.1);
+}
+
+.git-repo-group__header:first-child {
+  border-top: none;
+}
+
+.git-repo-group__icon {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.git-repo-group__name {
+  color: var(--vscode-foreground, #cccccc);
+}
+
+.git-repo-group__branch {
+  color: var(--vscode-descriptionForeground, #969696);
+  font-weight: 400;
+  font-size: 10px;
+}
+
 .git-section__empty {
   display: flex;
   flex-direction: column;
@@ -500,29 +548,35 @@ input:focus, textarea:focus {
   grid-template-columns: 24px 1fr;
   align-items: center;
   gap: 6px;
-  padding: 3px 10px 3px 0;
+  padding: 3px 10px 3px 10px;
   font-size: 12px;
   cursor: pointer;
   border-left: 2px solid transparent;
-  /* 显式声明这些属性，避免父级样式继承导致 hover 时出现抖动/字体变化 */
+  /* §需求：降低文件行的视觉权重，与"变更"section 标题形成层次感——
+     hover 改为淡色高亮、active 改为左侧细色条而非全行高亮背景。
+     之前的 #094771 全行蓝底让文件行比"变更"section 还突出，违反视觉层次。 */
   transform: none;
   zoom: 1;
 }
 
 .git-item:hover {
-  background: var(--vscode-list-hoverBackground, #2a2d2e);
-  /* 锁定字体大小和变换，禁止任何形式的"变大"效果 */
+  /* §需求：仅用淡灰底色高亮，保留文字颜色不变，让"变更"section 仍是视觉中心 */
+  background: rgba(255, 255, 255, 0.04);
   font-size: 12px;
   transform: none;
   zoom: 1;
 }
 
 .git-item--active {
-  background: var(--vscode-list-activeSelectionBackground, #094771);
+  /* §需求：active 状态改为左侧细色条标识（与 explorer fileTree 风格一致），
+     不再使用全行高亮背景，避免覆盖/压过 section header */
+  background: transparent;
+  border-left-color: var(--accent-500, #3b82f6);
 }
 
 .git-item--active:hover {
-  background: var(--vscode-list-activeSelectionBackground, #094771);
+  background: rgba(255, 255, 255, 0.06);
+  border-left-color: var(--accent-500, #3b82f6);
 }
 
 .git-item__status {

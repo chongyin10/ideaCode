@@ -93,6 +93,12 @@ function aggregateIgnored(changes) {
   /** @type {Map<string, { count: number, sample: any }>} */
   const aggregatedMap = new Map();
   for (const c of changes) {
+    // §子模块指针变更条目不参与聚合：子模块路径可能恰好与忽略目录同名
+    // （如 vendor/dist），聚合会丢失子模块信息。
+    if (c.isSubmodule) {
+      result.push(c);
+      continue;
+    }
     const top = (c.path || '').split('/')[0];
     if (DEFAULT_IGNORE_DIRS.has(top)) {
       const entry = aggregatedMap.get(top);
@@ -206,6 +212,10 @@ function parseStatus(output) {
       const parts = line.split(' ');
       if (parts.length < 9) continue;
       const xy = parts[1];
+      // §parts[2] 是 sub 字段：>0 表示该条目是 submodule 指针变更（gitlink）。
+      // 用于在 UI 中区分普通文件与子模块条目，子模块条目不可作为文件打开。
+      const sub = parseInt(parts[2], 10) || 0;
+      const isSubmodule = sub > 0;
       const path = parts.slice(8).join(' ');
       // porcelain v2 中未修改的状态字符是 '.'，统一归一化为 ' ' 以保持后续判断
       const indexChar = xy[0] === '.' ? ' ' : xy[0];
@@ -230,6 +240,7 @@ function parseStatus(output) {
           originalPath: null,
           indexStatus: indexChar,
           workingStatus: workingChar,
+          isSubmodule,
         });
         continue;
       }
@@ -239,6 +250,7 @@ function parseStatus(output) {
         originalPath: null,
         indexStatus: indexChar,
         workingStatus: workingChar,
+        isSubmodule,
       };
 
       if (indexChar !== ' ' && indexChar !== '?') {
@@ -252,6 +264,8 @@ function parseStatus(output) {
       const parts = line.split(' ');
       if (parts.length < 10) continue;
       const xy = parts[1];
+      const sub = parseInt(parts[2], 10) || 0;
+      const isSubmodule = sub > 0;
       // porcelain v2 中未修改的状态字符是 '.'，统一归一化为 ' ' 以保持后续判断
       const indexChar = xy[0] === '.' ? ' ' : xy[0];
       const workingChar = xy[1] === '.' ? ' ' : xy[1];
@@ -267,6 +281,7 @@ function parseStatus(output) {
         originalPath,
         indexStatus: indexChar,
         workingStatus: workingChar,
+        isSubmodule,
       };
 
       if (indexChar !== ' ') {

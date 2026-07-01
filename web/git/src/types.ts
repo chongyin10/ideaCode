@@ -16,6 +16,14 @@ export interface GitChange {
   aggregated?: boolean;
   /** 聚合条目包含的文件个数（仅当 aggregated=true 时有效） */
   count?: number;
+  /** §所属仓库根路径（绝对路径），用于子模块分组与操作路由 */
+  repoPath?: string;
+  /** §所属仓库名称（目录名），用于 UI 分组标题显示 */
+  repoName?: string;
+  /** §所属仓库当前分支，用于 UI 分组标题显示 */
+  repoBranch?: string;
+  /** §是否为子模块指针变更条目（父仓库中的 submodule gitlink） */
+  isSubmodule?: boolean;
 }
 
 export interface GitStatus {

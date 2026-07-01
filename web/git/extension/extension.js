@@ -512,13 +512,13 @@ async function handleWebviewMessage(message) {
 
       case 'stage':
         if (!currentRepo) return reply({ success: false, error: '没有打开的仓库' });
-        await currentRepo.stage(message.paths || []);
+        await currentRepo.stage(message.paths || [], message.repoPath);
         reply({ success: true });
         break;
 
       case 'unstage':
         if (!currentRepo) return reply({ success: false, error: '没有打开的仓库' });
-        await currentRepo.unstage(message.paths || []);
+        await currentRepo.unstage(message.paths || [], message.repoPath);
         reply({ success: true });
         break;
 
@@ -548,11 +548,19 @@ async function handleWebviewMessage(message) {
       case 'discard': {
         if (!currentRepo) return reply({ success: false, error: '没有打开的仓库' });
         const discardPaths = message.paths || [];
-        await currentRepo.discard(discardPaths);
+        const repoPath = message.repoPath;
+        await currentRepo.discard(discardPaths, repoPath);
         // 通知前端文件被外部修改（discard 恢复了磁盘内容/恢复了被删文件），
         // 触发资源管理器刷新受影响目录 + 重载已打开编辑器内容
+        // §子模块内的文件路径是相对于子模块根的，需转换为相对于主仓库根的路径，
+        // 这样资源管理器才能正确找到并刷新受影响的目录。
         if (discardPaths.length > 0) {
-          send('git.filesChanged', { paths: discardPaths });
+          let notifyPaths = discardPaths;
+          if (repoPath && repoPath !== currentRepo.rootPath) {
+            const subRel = path.relative(currentRepo.rootPath, repoPath);
+            notifyPaths = discardPaths.map((p) => path.join(subRel, p));
+          }
+          send('git.filesChanged', { paths: notifyPaths });
         }
         reply({ success: true });
         break;
@@ -560,10 +568,25 @@ async function handleWebviewMessage(message) {
 
       case 'discardAll': {
         if (!currentRepo) return reply({ success: false, error: '没有打开的仓库' });
-        const paths = currentRepo.state.changes.map((c) => c.path);
-        await currentRepo.discard(paths);
-        if (paths.length > 0) {
-          send('git.filesChanged', { paths });
+        // §按 repoPath 分组 discard：子模块内的文件需要在子模块目录下执行 git checkout
+        const pathsByRepo = new Map();
+        for (const c of currentRepo.state.changes) {
+          const rp = c.repoPath || currentRepo.rootPath;
+          if (!pathsByRepo.has(rp)) pathsByRepo.set(rp, []);
+          pathsByRepo.get(rp).push(c.path);
+        }
+        const allNotifyPaths = [];
+        for (const [repoPath, paths] of pathsByRepo) {
+          await currentRepo.discard(paths, repoPath);
+          if (repoPath !== currentRepo.rootPath) {
+            const subRel = path.relative(currentRepo.rootPath, repoPath);
+            allNotifyPaths.push(...paths.map((p) => path.join(subRel, p)));
+          } else {
+            allNotifyPaths.push(...paths);
+          }
+        }
+        if (allNotifyPaths.length > 0) {
+          send('git.filesChanged', { paths: allNotifyPaths });
         }
         reply({ success: true });
         break;
@@ -571,7 +594,7 @@ async function handleWebviewMessage(message) {
 
       case 'deleteUntracked':
         if (!currentRepo) return reply({ success: false, error: '没有打开的仓库' });
-        await currentRepo.deleteUntracked(message.paths || []);
+        await currentRepo.deleteUntracked(message.paths || [], message.repoPath);
         reply({ success: true });
         break;
 
@@ -643,25 +666,28 @@ async function handleWebviewMessage(message) {
 
       case 'getDiff':
         if (!currentRepo) return reply({ success: true, diff: '' });
-        const diff = await currentRepo.getDiff(message.path, !!message.staged);
+        const diff = await currentRepo.getDiff(message.path, !!message.staged, message.repoPath);
         reply({ success: true, diff });
         break;
 
       case 'getOriginalContent':
         if (!currentRepo) return reply({ success: true, content: '' });
-        const content = await currentRepo.getOriginalContent(message.path);
+        const content = await currentRepo.getOriginalContent(message.path, message.repoPath);
         reply({ success: true, content });
         break;
 
       case 'openFile': {
         // 打开工作区中的文件
         if (!message.path) return reply({ success: false, error: '缺少 path' });
+        // §repoPath 用于子模块文件：子模块内文件的 HEAD 版本和工作区版本
+        // 都需要在子模块目录下读取（git show HEAD:path 和 cat path 都相对于子模块根）。
+        const repoPath = message.repoPath;
         try {
           // 获取 HEAD 版本（原始）和工作树版本（修改后），供渲染进程展示 Diff
           let originalContent = '';
           if (currentRepo) {
             try {
-              originalContent = (await currentRepo.getOriginalContent(message.path)) || '';
+              originalContent = (await currentRepo.getOriginalContent(message.path, repoPath)) || '';
             } catch (e) {
               // 文件在 HEAD 中不存在（如新增/未跟踪文件），original 留空即可
             }
@@ -671,7 +697,7 @@ async function handleWebviewMessage(message) {
           try {
             // §优先使用 Repository.readFile（支持远程 SSH 仓库通过 cat 读取）
             if (currentRepo) {
-              const result = await currentRepo.readFile(message.path);
+              const result = await currentRepo.readFile(message.path, repoPath);
               modifiedContent = result.content;
               isBinary = result.isBinary;
             } else {

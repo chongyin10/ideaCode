@@ -160,8 +160,10 @@ class Repository {
     if (this._remoteExecutor) {
       // §ssh.internal.execute 默认非 PTY 模式，不会触发分页器。
       // 保留 --no-pager 和 GIT_PAGER=cat 作为双重保险。
+      // §options.cwd 用于子模块操作：子模块的 git 命令需要在子模块目录下执行。
+      const cwd = options.cwd || this.rootPath;
       const cmd = ['git', '--no-pager', ...args.map(shellEscapeArg)].join(' ');
-      const result = await this._remoteExecutor(`GIT_PAGER=cat ${cmd}`, this.rootPath);
+      const result = await this._remoteExecutor(`GIT_PAGER=cat ${cmd}`, cwd);
       return result;
     }
     return execGit(args, { cwd: this.rootPath, ...options });
@@ -201,9 +203,112 @@ class Repository {
       }
       this.state = parseStatus(output.stdout);
       this._lastError = null;
+
+      // §为主仓库的所有变更打上仓库标记，UI 据此分组渲染。
+      const mainRepoName = path.basename(this.rootPath);
+      const mainBranch = this.state.branch;
+      const tagMain = (c) => {
+        if (!c.repoPath) {
+          c.repoPath = this.rootPath;
+          c.repoName = mainRepoName;
+          c.repoBranch = mainBranch;
+        }
+      };
+      this.state.staged.forEach(tagMain);
+      this.state.changes.forEach(tagMain);
+      this.state.merge.forEach(tagMain);
+      this.state.untracked.forEach(tagMain);
+
+      // §获取子模块内部文件变更并合并到 state 中。
+      // 父仓库的 git status 只能看到子模块指针变更（sub > 0），
+      // 子模块内部的文件增删改需要 cd 进子模块目录单独执行 git status。
+      await this._refreshSubmodules();
+
       this._fire();
     } catch (err) {
       this._lastError = err.message;
+    }
+  }
+
+  /**
+   * §获取子模块列表。
+   * 解析 `git submodule status` 输出，返回 { path, name } 数组。
+   * 跳过未初始化的子模块（状态字符为 '-'），因为其目录无 .git 无法执行 git status。
+   * @returns {Promise<Array<{path: string, name: string}>>}
+   */
+  async _getSubmodules() {
+    const { code, stdout } = await this._execGit(['submodule', 'status'], {});
+    if (code !== 0 || !stdout) return [];
+    const subs = [];
+    for (const line of stdout.split('\n')) {
+      if (!line.trim()) continue;
+      // 格式：<statusChar><40-char-sha> <path> (<describe>)
+      // statusChar: space=clean, +=different commit, -=not initialized, U=merge conflicts
+      const statusChar = line[0];
+      if (statusChar === '-') continue; // 未初始化，跳过
+      const rest = line.slice(1).trim();
+      const spaceIdx = rest.indexOf(' ');
+      if (spaceIdx === -1) continue;
+      const remaining = rest.slice(spaceIdx + 1);
+      // 去掉末尾的 (describe) 部分
+      const subPath = remaining.split(' (')[0].trim();
+      if (subPath) {
+        subs.push({ path: subPath, name: subPath.split('/').pop() });
+      }
+    }
+    return subs;
+  }
+
+  /**
+   * §获取所有子模块的内部文件变更，合并到 this.state 中。
+   *
+   * 对每个子模块：
+   *   1. 在子模块目录下执行 git status --porcelain=v2 --branch
+   *   2. 解析子模块状态
+   *   3. 为每条变更打上 { repoPath, repoName, repoBranch } 标记
+   *   4. 合并到主仓库的 staged/changes/merge/untracked 数组中
+   *
+   * 子模块内部的路径是相对于子模块根的，UI 分组后用户能正确理解文件归属。
+   * 后续 stage/unstage/discard 等操作通过 repoPath（cwd）在正确的仓库下执行。
+   */
+  async _refreshSubmodules() {
+    let submodules;
+    try {
+      submodules = await this._getSubmodules();
+    } catch {
+      return; // 获取子模块失败（如非 git 仓库），静默跳过
+    }
+    if (submodules.length === 0) return;
+
+    for (const sub of submodules) {
+      try {
+        const subCwd = path.join(this.rootPath, sub.path);
+        const output = await this._execGit(
+          ['status', '--porcelain=v2', '--branch', '--untracked-files=normal', '--ignored=no'],
+          { cwd: subCwd, timeout: 10000 }
+        );
+        if (output.code !== 0) continue;
+        const subStatus = parseStatus(output.stdout);
+
+        // 为子模块的所有变更打上子模块仓库标记
+        const tagSub = (c) => {
+          c.repoPath = subCwd;
+          c.repoName = sub.name;
+          c.repoBranch = subStatus.branch || '';
+        };
+        subStatus.staged.forEach(tagSub);
+        subStatus.changes.forEach(tagSub);
+        subStatus.merge.forEach(tagSub);
+        subStatus.untracked.forEach(tagSub);
+
+        // 合并到主仓库 state
+        this.state.staged.push(...subStatus.staged);
+        this.state.changes.push(...subStatus.changes);
+        this.state.merge.push(...subStatus.merge);
+        this.state.untracked.push(...subStatus.untracked);
+      } catch {
+        // 单个子模块状态获取失败，静默跳过不影响主仓库
+      }
     }
   }
 
@@ -269,20 +374,20 @@ class Repository {
 
   /* ─── Git 操作 ─── */
 
-  async stage(paths) {
+  async stage(paths, cwd) {
     if (!paths || paths.length === 0) return { success: true };
     const args = ['add', '--', ...paths];
-    const { code, stderr } = await this._execGitMutating(args);
+    const { code, stderr } = await this._execGitMutating(args, cwd ? { cwd } : {});
     if (code !== 0) throw new GitError(`stage failed: ${stderr}`);
     await this.refresh();
     this._fastPoll();
     return { success: true };
   }
 
-  async unstage(paths) {
+  async unstage(paths, cwd) {
     if (!paths || paths.length === 0) return { success: true };
     const args = ['reset', 'HEAD', '--', ...paths];
-    const { code, stderr } = await this._execGitMutating(args);
+    const { code, stderr } = await this._execGitMutating(args, cwd ? { cwd } : {});
     if (code !== 0) throw new GitError(`unstage failed: ${stderr}`);
     await this.refresh();
     this._fastPoll();
@@ -299,6 +404,16 @@ class Repository {
     const args = ['add', '-A', '--', '.', ...excludeArgs];
     const { code, stderr } = await this._execGitMutating(args);
     if (code !== 0) throw new GitError(`stageAll failed: ${stderr}`);
+    // §对每个子模块也执行 stageAll，确保子模块内的文件变更也被暂存
+    try {
+      const submodules = await this._getSubmodules();
+      for (const sub of submodules) {
+        try {
+          const subCwd = path.join(this.rootPath, sub.path);
+          await this._execGitMutating(args, { cwd: subCwd });
+        } catch { /* 忽略单个子模块失败 */ }
+      }
+    } catch { /* 忽略子模块枚举失败 */ }
     await this.refresh();
     this._fastPoll();
     return { success: true };
@@ -307,6 +422,16 @@ class Repository {
   async unstageAll() {
     const { code, stderr } = await this._execGitMutating(['reset', 'HEAD']);
     if (code !== 0) throw new GitError(`unstageAll failed: ${stderr}`);
+    // §对每个子模块也执行 unstageAll
+    try {
+      const submodules = await this._getSubmodules();
+      for (const sub of submodules) {
+        try {
+          const subCwd = path.join(this.rootPath, sub.path);
+          await this._execGitMutating(['reset', 'HEAD'], { cwd: subCwd });
+        } catch { /* 忽略单个子模块失败 */ }
+      }
+    } catch { /* 忽略子模块枚举失败 */ }
     await this.refresh();
     this._fastPoll();
     return { success: true };
@@ -324,23 +449,24 @@ class Repository {
     return { success: true, message: stdout };
   }
 
-  async discard(paths) {
+  async discard(paths, cwd) {
     if (!paths || paths.length === 0) return { success: true };
     const args = ['checkout', '--', ...paths];
-    const { code, stderr } = await this._execGitMutating(args);
+    const { code, stderr } = await this._execGitMutating(args, cwd ? { cwd } : {});
     if (code !== 0) throw new GitError(`discard failed: ${stderr}`);
     await this.refresh();
     this._fastPoll();
     return { success: true };
   }
 
-  async deleteUntracked(paths) {
+  async deleteUntracked(paths, cwd) {
     if (!paths || paths.length === 0) return { success: true };
+    const baseCwd = cwd || this.rootPath;
     if (this._isRemote) {
       // §远程：通过 SSH 执行 rm -rf 删除未跟踪文件
       for (const p of paths) {
         try {
-          await this._remoteExecutor(`rm -rf -- ${shellEscapeArg(p)}`, this.rootPath);
+          await this._remoteExecutor(`rm -rf -- ${shellEscapeArg(p)}`, baseCwd);
         } catch { /* 忽略单个失败 */ }
       }
       await this.refresh();
@@ -349,7 +475,7 @@ class Repository {
     }
     // 本地：使用 rm -f 逐个删除（比 git clean 更安全，避免误删）
     for (const p of paths) {
-      const full = path.join(this.rootPath, p);
+      const full = path.join(baseCwd, p);
       try {
         const stat = await fsp.lstat(full);
         if (stat.isDirectory()) {
@@ -370,19 +496,21 @@ class Repository {
    * §读取工作区文件内容（用于 diff 视图的 modified 端）。
    * 本地：fs.readFileSync；远程：通过 SSH cat 读取。
    * @param {string} relPath 相对仓库根的路径
+   * @param {string} [cwd] 子模块的绝对路径（操作子模块内文件时传入）
    * @returns {Promise<{ content: string; isBinary: boolean }>}
    */
-  async readFile(relPath) {
+  async readFile(relPath, cwd) {
+    const baseCwd = cwd || this.rootPath;
     if (this._isRemote) {
       // §ssh.internal.execute 默认非 PTY 模式，stdout 干净可靠。
       // 命令失败时 stdout 为空，等价于返回空内容。
       const { stdout } = await this._remoteExecutor(
-        `cat -- ${shellEscapeArg(relPath)}`, this.rootPath
+        `cat -- ${shellEscapeArg(relPath)}`, baseCwd
       );
       const isBinary = stdout.includes('\0');
       return { content: isBinary ? '' : stdout, isBinary };
     }
-    const full = path.join(this.rootPath, relPath);
+    const full = path.join(baseCwd, relPath);
     const buf = fs.readFileSync(full);
     const isBinary = buf.includes(0);
     return { content: isBinary ? '' : buf.toString('utf8'), isBinary };
@@ -569,21 +697,22 @@ class Repository {
     return this.listRemotes();
   }
 
-  async getOriginalContent(path) {
+  async getOriginalContent(filePath, cwd) {
     // §ssh.internal.execute 默认非 PTY 模式，stdout 干净可靠。
     // 命令失败时（如路径不在 HEAD 中）stdout 为空，等价于返回空内容。
+    // §cwd 用于子模块：子模块内文件的 HEAD 版本需要在子模块目录下执行 git show。
     const { stdout } = await this._execGit(
-      ['show', `HEAD:${path}`],
-      { timeout: 10000 }
+      ['show', `HEAD:${filePath}`],
+      { cwd, timeout: 10000 }
     );
     return stdout;
   }
 
-  async getDiff(path, staged = false) {
+  async getDiff(filePath, staged = false, cwd) {
     const args = ['diff', '--no-color'];
     if (staged) args.push('--cached');
-    if (path) args.push('--', path);
-    const { code, stdout } = await this._execGit(args, { timeout: 15000 });
+    if (filePath) args.push('--', filePath);
+    const { code, stdout } = await this._execGit(args, { cwd, timeout: 15000 });
     if (code !== 0 && code !== 1) return '';
     // code=1 表示有差异（diff 正常返回 1）
     return stdout;
