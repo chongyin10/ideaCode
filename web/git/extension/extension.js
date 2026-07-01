@@ -112,12 +112,11 @@ async function findRemoteRepoRoot(sshUri) {
   const connId = match[1];
   const remotePath = match[2] || '/';
   try {
-    // §通过 host 的 commands.execute 通道路由到 ideacode-ssh.executeRemote
-    // host 端会调 SSH 扩展的 executeRemote(connectionId, command, cwd)
-    // connId 与 SSH 扩展的 connectionId 一致（直接来自 ssh:// URI 的 authority 段）
+    // §通过跨扩展命令路由调用 SSH 扩展的 ssh.executeRemote
+    // ssh.executeRemote 接收 { connectionId, command, cwd }，自动解析 connectionId → session
     const result = await vscode.commands.executeCommand(
-      'ssh.internal.execute',
-      { id: connId, command: 'git rev-parse --show-toplevel', cwd: remotePath }
+      'ssh.executeRemote',
+      { connectionId: connId, command: 'git rev-parse --show-toplevel', cwd: remotePath }
     );
     if (!result || !result.success) return null;
     const stdout = (result.stdout || '').trim();
@@ -322,7 +321,20 @@ async function openRepository(rootPath) {
     if (remoteRepoRoot) {
       // 找到 Git 仓库根目录
       currentRootPath = rootPath;
-      currentRepo = new Repository(remoteRepoRoot);
+      // §创建远程执行器：所有 git 命令通过 SSH 在远程主机执行
+      const sshMatch = rootPath.match(/^ssh:\/\/([^/]+)/);
+      const connId = sshMatch ? sshMatch[1] : null;
+      const remoteExecutor = connId ? async (command, cwd) => {
+        const result = await vscode.commands.executeCommand('ssh.executeRemote', {
+          connectionId: connId, command, cwd,
+        });
+        return {
+          stdout: result?.stdout || '',
+          stderr: result?.stderr || '',
+          code: result?.code ?? -1,
+        };
+      } : null;
+      currentRepo = new Repository(remoteRepoRoot, { remoteExecutor });
       currentRepo.onDidChange(() => {
         pushState();
         pushBranches();
@@ -330,14 +342,14 @@ async function openRepository(rootPath) {
       });
       // 先 push 一次 isRepo: true（即使后续 refresh 失败，UI 仍正确显示"是仓库"）
       pushState();
-      // 尝试刷新（本地 git 命令在远程路径上跑会失败），失败时静默
+      // 刷新远程仓库状态（通过 SSH 执行 git status）
       try {
         await currentRepo.refresh();
         pushState();
         pushBranches();
         pushStashes();
       } catch (refreshErr) {
-        console.warn('[Git Extension] 远程仓库 refresh 失败（仅状态加载受限，UI 已显示为仓库）:', refreshErr.message);
+        console.warn('[Git Extension] 远程仓库 refresh 失败:', refreshErr.message);
       }
     } else {
       // 远程目录不是 Git 仓库，或检测失败但路径仍是 ssh://
@@ -657,13 +669,19 @@ async function handleWebviewMessage(message) {
           let modifiedContent = '';
           let isBinary = false;
           try {
-            const repoRoot = currentRepo ? currentRepo.rootPath : currentRootPath;
-            const fullPath = path.join(repoRoot || '', message.path);
-            const buf = fs.readFileSync(fullPath);
-            // 简易二进制检测：含 NUL 字节视为二进制
-            isBinary = buf.includes(0);
-            if (!isBinary) {
-              modifiedContent = buf.toString('utf8');
+            // §优先使用 Repository.readFile（支持远程 SSH 仓库通过 cat 读取）
+            if (currentRepo) {
+              const result = await currentRepo.readFile(message.path);
+              modifiedContent = result.content;
+              isBinary = result.isBinary;
+            } else {
+              const repoRoot = currentRootPath;
+              const fullPath = path.join(repoRoot || '', message.path);
+              const buf = fs.readFileSync(fullPath);
+              isBinary = buf.includes(0);
+              if (!isBinary) {
+                modifiedContent = buf.toString('utf8');
+              }
             }
           } catch (e) {
             // 文件在工作区不存在（如删除），modified 留空

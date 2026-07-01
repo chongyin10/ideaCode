@@ -20634,6 +20634,10 @@ function registerSshCommands() {
       });
     });
   });
+  vscode.commands.registerCommand("ssh.executeRemote", async (params) => {
+    const { connectionId, command, cwd } = params;
+    return executeRemote(connectionId, command, cwd);
+  });
 }
 function buildRemoteTree(lines, explicitRootPath) {
   const entries = [];

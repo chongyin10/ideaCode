@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Search, ChevronsDownUp } from 'lucide-react';
 import { useAppDispatch } from '../../store/hooks';
 import { setFileContent, openFile, loadDirectory, clearWorkspaceFolders, setSshConnection } from '../../store/slices/workspaceSlice';
@@ -6,6 +6,7 @@ import { terminalSDK } from '../../services/terminalSDK';
 import { getExtensionBridge } from '../../plugin/extensionBridge';
 import ContextMenu, { type MenuItem } from '../ContextMenu';
 import type { FileTreeNode } from './types';
+import { buildIdfIndex, rankEntries } from './searchRank';
 import './SshFileTreePanel.css';
 
 const FolderIcon = ({ expanded }: { expanded: boolean }) => (
@@ -136,14 +137,11 @@ function TreeNodeItem({
   );
 }
 
-// 收集树中所有目录节点（用于搜索下拉）
-function collectDirectories(node: FileTreeNode): FileTreeNode[] {
-  const result: FileTreeNode[] = [];
-  if (node.type === 'directory') {
-    result.push(node);
-  }
+// 收集树中所有节点（目录 + 文件，用于搜索下拉）
+function collectAllEntries(node: FileTreeNode): FileTreeNode[] {
+  const result: FileTreeNode[] = [node];
   node.children?.forEach((child) => {
-    result.push(...collectDirectories(child));
+    result.push(...collectAllEntries(child));
   });
   return result;
 }
@@ -574,14 +572,12 @@ export default function SshFileTreePanel({ content, fileId }: SshFileTreePanelPr
     ];
   }, [contextMenu, data?.connectionId, data?.connection?.host, data?.rootPath]);
 
-  const allDirectories = useMemo(() => (data?.tree ? collectDirectories(data.tree) : []), [data?.tree]);
-  const filteredDirectories = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) return [];
-    return allDirectories
-      .filter((d) => d.path.toLowerCase().includes(q))
-      .slice(0, 50);
-  }, [allDirectories, searchQuery]);
+  const allEntries = useMemo(() => (data?.tree ? collectAllEntries(data.tree) : []), [data?.tree]);
+  const idfIndex = useMemo(() => buildIdfIndex(allEntries), [allEntries]);
+  const filteredEntries = useMemo(
+    () => rankEntries(allEntries, searchQuery, idfIndex),
+    [allEntries, searchQuery, idfIndex]
+  );
 
   if (!data) {
     return (
@@ -592,6 +588,27 @@ export default function SshFileTreePanel({ content, fileId }: SshFileTreePanelPr
   }
 
   const { tree, rootPath, connection } = data;
+
+  const renderHighlightedPath = (path: string, ranges: [number, number][]) => {
+    if (ranges.length === 0) return path;
+    const nodes: ReactNode[] = [];
+    let last = 0;
+    ranges.forEach(([start, end], idx) => {
+      if (start > last) {
+        nodes.push(<span key={`${last}-${idx}-pre`}>{path.slice(last, start)}</span>);
+      }
+      nodes.push(
+        <span key={`${start}-${idx}`} className="ssh-file-tree__search-match">
+          {path.slice(start, end)}
+        </span>
+      );
+      last = end;
+    });
+    if (last < path.length) {
+      nodes.push(<span key="tail">{path.slice(last)}</span>);
+    }
+    return nodes;
+  };
 
   return (
     <div className="ssh-file-tree">
@@ -635,24 +652,27 @@ export default function SshFileTreePanel({ content, fileId }: SshFileTreePanelPr
                 }
               }}
             />
-            {searchOpen && filteredDirectories.length > 0 && (
+            {searchOpen && filteredEntries.length > 0 && (
               <div className="ssh-file-tree__search-dropdown">
-                {filteredDirectories.map((dir) => (
+                {filteredEntries.map(({ node, ranges }) => (
                   <button
-                    key={dir.path}
+                    key={node.path}
                     className="ssh-file-tree__search-item"
                     onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => handleSearchSelect(dir.path)}
-                    title={dir.path}
+                    onClick={() => handleSearchSelect(node.path)}
+                    title={node.path}
                   >
-                    {dir.path}
+                    <span className={`ssh-file-tree__search-type ${node.type === 'directory' ? 'ssh-file-tree__search-type--dir' : ''}`}>
+                      {node.type === 'directory' ? '📁' : '📄'}
+                    </span>
+                    {renderHighlightedPath(node.path, ranges)}
                   </button>
                 ))}
               </div>
             )}
-            {searchOpen && searchQuery.trim() && filteredDirectories.length === 0 && (
+            {searchOpen && searchQuery.trim() && filteredEntries.length === 0 && (
               <div className="ssh-file-tree__search-dropdown ssh-file-tree__search-dropdown--empty">
-                无匹配目录
+                无匹配结果
               </div>
             )}
           </div>

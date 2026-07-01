@@ -312,3 +312,22 @@
   background: var(--list-hover-bg, #2a2d2e);
   color: var(--editor-fg, #cccccc);
 }
+
+.ssh-file-tree__search-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ssh-file-tree__search-type {
+  flex-shrink: 0;
+  font-size: 11px;
+  opacity: 0.8;
+}
+
+.ssh-file-tree__search-match {
+  background: rgba(14, 99, 156, 0.55);
+  color: #ffffff;
+  border-radius: 2px;
+  padding: 0 1px;
+}

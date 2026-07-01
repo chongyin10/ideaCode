@@ -125,6 +125,9 @@ var require_api = __commonJS({
           if (global._gitCommandHandlers && global._gitCommandHandlers.has(command)) {
             return Promise.resolve(global._gitCommandHandlers.get(command)(...args));
           }
+          if (global._commandHandlers && global._commandHandlers.has(command)) {
+            return Promise.resolve(global._commandHandlers.get(command)(...args));
+          }
           return new Promise((resolve, reject) => {
             const id = Date.now() + Math.random();
             const handler = (msg) => {
@@ -541,6 +544,10 @@ var require_repository = __commonJS({
     var path2 = require("path");
     var { execGit, git, GitError: GitError2 } = require_gitCLI();
     var { parseStatus, DEFAULT_IGNORE_DIRS } = require_statusParser();
+    function shellEscapeArg(arg) {
+      if (/^[a-zA-Z0-9_\-./=,@:%+]+$/.test(arg)) return arg;
+      return "'" + String(arg).replace(/'/g, "'\\''") + "'";
+    }
     var STATUS_POLL_INTERVAL = 3e4;
     var FAST_POLL_INTERVAL = 500;
     var FAST_POLL_DURATION = 5e3;
@@ -549,9 +556,14 @@ var require_repository = __commonJS({
     var Repository2 = class {
       /**
        * @param {string} rootPath 仓库根目录的绝对路径
+       * @param {object} [options]
+       * @param {function} [options.remoteExecutor] 远程命令执行器 (command, cwd) => { stdout, stderr, code }
+       *   传入时所有 git 命令通过 SSH 在远程主机执行，跳过本地 fs.watch / lock 清理
        */
-      constructor(rootPath) {
+      constructor(rootPath, options = {}) {
         this.rootPath = rootPath;
+        this._remoteExecutor = options.remoteExecutor || null;
+        this._isRemote = !!this._remoteExecutor;
         this.state = {
           staged: [],
           changes: [],
@@ -572,7 +584,9 @@ var require_repository = __commonJS({
         this._fileWatcher = null;
         this._gitWatcher = null;
         this._watcherRefreshTimer = null;
-        this._setupWatcher();
+        if (!this._isRemote) {
+          this._setupWatcher();
+        }
         this._watchInterval = setInterval(() => {
           if (this._disposed) return;
           this._maybeRefresh("poll");
@@ -640,6 +654,20 @@ var require_repository = __commonJS({
         }
       }
       /* ─── 状态查询与刷新 ─── */
+      /**
+       * §统一的 git 命令执行入口。
+       * 本地仓库：spawn 本地 git 二进制；远程仓库：通过 remoteExecutor 在 SSH 主机上执行。
+       * @param {string[]} args git 子命令参数
+       * @param {object} [options] { cwd, timeout, input, env }
+       * @returns {Promise<{ stdout: string; stderr: string; code: number }>}
+       */
+      async _execGit(args, options = {}) {
+        if (this._remoteExecutor) {
+          const cmd = ["git", ...args.map(shellEscapeArg)].join(" ");
+          return this._remoteExecutor(cmd, this.rootPath);
+        }
+        return execGit(args, { cwd: this.rootPath, ...options });
+      }
       async refresh() {
         if (this._refreshInFlight) {
           this._pendingRefresh = true;
@@ -659,12 +687,12 @@ var require_repository = __commonJS({
       }
       async _doRefresh() {
         try {
-          const output = await execGit(
+          const output = await this._execGit(
             // --untracked-files=normal：未跟踪目录只报目录级（如 node_modules/），不递归展开其下每个文件。
             // 用 all 会让 node_modules 这类目录刷出几万个 ? 条目，git 子进程慢、状态数据巨大、UI 卡死。
             // 第三方依赖/构建产物目录的进一步过滤见 statusParser.DEFAULT_IGNORE_DIRS。
             ["status", "--porcelain=v2", "--branch", "--untracked-files=normal", "--ignored=no"],
-            { cwd: this.rootPath, timeout: 1e4 }
+            { timeout: 1e4 }
           );
           if (output.code !== 0) {
             this._lastError = output.stderr || `exit code ${output.code}`;
@@ -691,6 +719,7 @@ var require_repository = __commonJS({
        * 避免误删外部正在运行的合法 git 进程持有的锁。
        */
       async _cleanupStaleLock() {
+        if (this._isRemote) return;
         const lockPath = path2.join(this.rootPath, ".git", "index.lock");
         try {
           const stat = await fsp.stat(lockPath);
@@ -710,7 +739,7 @@ var require_repository = __commonJS({
        */
       async _execGitMutating(args, options = {}) {
         await this._cleanupStaleLock();
-        return execGit(args, { cwd: this.rootPath, ...options });
+        return this._execGit(args, options);
       }
       /** 操作完成后快速刷新一段时间 */
       _fastPoll() {
@@ -785,6 +814,17 @@ var require_repository = __commonJS({
       }
       async deleteUntracked(paths) {
         if (!paths || paths.length === 0) return { success: true };
+        if (this._isRemote) {
+          for (const p of paths) {
+            try {
+              await this._remoteExecutor(`rm -rf -- ${shellEscapeArg(p)}`, this.rootPath);
+            } catch {
+            }
+          }
+          await this.refresh();
+          this._fastPoll();
+          return { success: true };
+        }
         for (const p of paths) {
           const full = path2.join(this.rootPath, p);
           try {
@@ -800,6 +840,27 @@ var require_repository = __commonJS({
         await this.refresh();
         this._fastPoll();
         return { success: true };
+      }
+      /**
+       * §读取工作区文件内容（用于 diff 视图的 modified 端）。
+       * 本地：fs.readFileSync；远程：通过 SSH cat 读取。
+       * @param {string} relPath 相对仓库根的路径
+       * @returns {Promise<{ content: string; isBinary: boolean }>}
+       */
+      async readFile(relPath) {
+        if (this._isRemote) {
+          const { code, stdout } = await this._remoteExecutor(
+            `cat -- ${shellEscapeArg(relPath)}`,
+            this.rootPath
+          );
+          if (code !== 0) return { content: "", isBinary: false };
+          const isBinary2 = stdout.includes("\0");
+          return { content: isBinary2 ? "" : stdout, isBinary: isBinary2 };
+        }
+        const full = path2.join(this.rootPath, relPath);
+        const buf = fs2.readFileSync(full);
+        const isBinary = buf.includes(0);
+        return { content: isBinary ? "" : buf.toString("utf8"), isBinary };
       }
       async checkoutBranch(name) {
         const { code, stderr } = await this._execGitMutating(["checkout", name]);
@@ -825,9 +886,9 @@ var require_repository = __commonJS({
         return { success: true };
       }
       async listBranches() {
-        const { code, stdout, stderr } = await execGit(
+        const { code, stdout, stderr } = await this._execGit(
           ["for-each-ref", "--format=%(refname:short)%09%(HEAD)%09%(upstream:short)%09%(upstream:track)%09%(objectname)%09%(objectname:short)%09%(subject)%09%(authordate:unix)%09%(authorname)", "refs/heads"],
-          { cwd: this.rootPath }
+          {}
         );
         if (code !== 0) throw new GitError2(`listBranches failed: ${stderr}`);
         const branches = [];
@@ -857,9 +918,9 @@ var require_repository = __commonJS({
             } : void 0
           });
         }
-        const { code: rc, stdout: rOut } = await execGit(
+        const { code: rc, stdout: rOut } = await this._execGit(
           ["for-each-ref", "--format=%(refname:short)%09%(HEAD)%09%(upstream:short)%09%(upstream:track)%09%(objectname)%09%(objectname:short)%09%(subject)%09%(authordate:unix)%09%(authorname)", "refs/remotes"],
-          { cwd: this.rootPath }
+          {}
         );
         if (rc === 0) {
           for (const line of rOut.split("\n")) {
@@ -893,7 +954,7 @@ var require_repository = __commonJS({
         return branches;
       }
       async listRemotes() {
-        const { code, stdout } = await execGit(["remote", "-v"], { cwd: this.rootPath });
+        const { code, stdout } = await this._execGit(["remote", "-v"], {});
         if (code !== 0) return [];
         const map = /* @__PURE__ */ new Map();
         for (const line of stdout.split("\n")) {
@@ -909,9 +970,9 @@ var require_repository = __commonJS({
       }
       async getLog(count = 50) {
         const format = "%H%x09%h%x09%s%x09%an%x09%ae%x09%at";
-        const { code, stdout, stderr } = await execGit(
+        const { code, stdout, stderr } = await this._execGit(
           ["log", `--pretty=format:${format}`, "-n", String(count)],
-          { cwd: this.rootPath }
+          {}
         );
         if (code !== 0) {
           if (/does not have any commits/i.test(stderr)) return [];
@@ -926,9 +987,9 @@ var require_repository = __commonJS({
         return commits;
       }
       async listStashes() {
-        const { code, stdout } = await execGit(
+        const { code, stdout } = await this._execGit(
           ["stash", "list", "--pretty=format:%gd%x09%s%x09%ct"],
-          { cwd: this.rootPath }
+          {}
         );
         if (code !== 0) return [];
         const stashes = [];
@@ -970,9 +1031,9 @@ var require_repository = __commonJS({
         return this.listRemotes();
       }
       async getOriginalContent(path3) {
-        const { code, stdout } = await execGit(
+        const { code, stdout } = await this._execGit(
           ["show", `HEAD:${path3}`],
-          { cwd: this.rootPath, timeout: 1e4 }
+          { timeout: 1e4 }
         );
         if (code !== 0) return "";
         return stdout;
@@ -981,7 +1042,7 @@ var require_repository = __commonJS({
         const args = ["diff", "--no-color"];
         if (staged) args.push("--cached");
         if (path3) args.push("--", path3);
-        const { code, stdout } = await execGit(args, { cwd: this.rootPath, timeout: 15e3 });
+        const { code, stdout } = await this._execGit(args, { timeout: 15e3 });
         if (code !== 0 && code !== 1) return "";
         return stdout;
       }
@@ -1102,8 +1163,8 @@ async function findRemoteRepoRoot(sshUri) {
   const remotePath = match[2] || "/";
   try {
     const result = await vscode.commands.executeCommand(
-      "ssh.internal.execute",
-      { id: connId, command: "git rev-parse --show-toplevel", cwd: remotePath }
+      "ssh.executeRemote",
+      { connectionId: connId, command: "git rev-parse --show-toplevel", cwd: remotePath }
     );
     if (!result || !result.success) return null;
     const stdout = (result.stdout || "").trim();
@@ -1263,7 +1324,21 @@ async function openRepository(rootPath) {
     }
     if (remoteRepoRoot) {
       currentRootPath = rootPath;
-      currentRepo = new Repository(remoteRepoRoot);
+      const sshMatch = rootPath.match(/^ssh:\/\/([^/]+)/);
+      const connId = sshMatch ? sshMatch[1] : null;
+      const remoteExecutor = connId ? async (command, cwd) => {
+        const result = await vscode.commands.executeCommand("ssh.executeRemote", {
+          connectionId: connId,
+          command,
+          cwd
+        });
+        return {
+          stdout: result?.stdout || "",
+          stderr: result?.stderr || "",
+          code: result?.code ?? -1
+        };
+      } : null;
+      currentRepo = new Repository(remoteRepoRoot, { remoteExecutor });
       currentRepo.onDidChange(() => {
         pushState();
         pushBranches();
@@ -1276,7 +1351,7 @@ async function openRepository(rootPath) {
         pushBranches();
         pushStashes();
       } catch (refreshErr) {
-        console.warn("[Git Extension] \u8FDC\u7A0B\u4ED3\u5E93 refresh \u5931\u8D25\uFF08\u4EC5\u72B6\u6001\u52A0\u8F7D\u53D7\u9650\uFF0CUI \u5DF2\u663E\u793A\u4E3A\u4ED3\u5E93\uFF09:", refreshErr.message);
+        console.warn("[Git Extension] \u8FDC\u7A0B\u4ED3\u5E93 refresh \u5931\u8D25:", refreshErr.message);
       }
     } else {
       if (!currentRepo) {
@@ -1522,12 +1597,18 @@ async function handleWebviewMessage(message) {
           let modifiedContent = "";
           let isBinary = false;
           try {
-            const repoRoot = currentRepo ? currentRepo.rootPath : currentRootPath;
-            const fullPath = path.join(repoRoot || "", message.path);
-            const buf = fs.readFileSync(fullPath);
-            isBinary = buf.includes(0);
-            if (!isBinary) {
-              modifiedContent = buf.toString("utf8");
+            if (currentRepo) {
+              const result = await currentRepo.readFile(message.path);
+              modifiedContent = result.content;
+              isBinary = result.isBinary;
+            } else {
+              const repoRoot = currentRootPath;
+              const fullPath = path.join(repoRoot || "", message.path);
+              const buf = fs.readFileSync(fullPath);
+              isBinary = buf.includes(0);
+              if (!isBinary) {
+                modifiedContent = buf.toString("utf8");
+              }
             }
           } catch (e) {
           }

@@ -15,6 +15,15 @@ const path = require('path');
 const { execGit, git, GitError } = require('./gitCLI');
 const { parseStatus, DEFAULT_IGNORE_DIRS } = require('./statusParser');
 
+/**
+ * §远程 git 命令参数转义：将单个参数安全引号化，防止 SSH 执行时 shell 解析错误。
+ * 安全字符（字母、数字、常见符号）直接返回；含空格/特殊字符的用单引号包裹。
+ */
+function shellEscapeArg(arg) {
+  if (/^[a-zA-Z0-9_\-./=,@:%+]+$/.test(arg)) return arg;
+  return "'" + String(arg).replace(/'/g, "'\\''") + "'";
+}
+
 // 兜底轮询间隔：fs.watch 已覆盖 99% 实时场景，这里仅作 fs.watch 漏报兜底。
 // 从 2s 放宽到 30s，避免与 fs.watch 重复触发导致 git status 子进程执行 2~3 次/保存。
 const STATUS_POLL_INTERVAL = 30000;
@@ -26,9 +35,14 @@ const STALE_LOCK_THRESHOLD_MS = 30000;     // 超过此时间的 index.lock 视�
 class Repository {
   /**
    * @param {string} rootPath 仓库根目录的绝对路径
+   * @param {object} [options]
+   * @param {function} [options.remoteExecutor] 远程命令执行器 (command, cwd) => { stdout, stderr, code }
+   *   传入时所有 git 命令通过 SSH 在远程主机执行，跳过本地 fs.watch / lock 清理
    */
-  constructor(rootPath) {
+  constructor(rootPath, options = {}) {
     this.rootPath = rootPath;
+    this._remoteExecutor = options.remoteExecutor || null;
+    this._isRemote = !!this._remoteExecutor;
     /** @type {import('./statusParser').GitStatus} */
     this.state = {
       staged: [], changes: [], merge: [], untracked: [],
@@ -49,8 +63,10 @@ class Repository {
     /** @type {NodeJS.Timeout|null} */
     this._watcherRefreshTimer = null;
 
-    // 启动文件系统监听，文件变化时实时刷新
-    this._setupWatcher();
+    // 远程仓库不使用 fs.watch（路径在远程主机上），仅靠轮询
+    if (!this._isRemote) {
+      this._setupWatcher();
+    }
 
     // 轮询作为兜底（简单可靠）
     this._watchInterval = setInterval(() => {
@@ -133,6 +149,21 @@ class Repository {
 
   /* ─── 状态查询与刷新 ─── */
 
+  /**
+   * §统一的 git 命令执行入口。
+   * 本地仓库：spawn 本地 git 二进制；远程仓库：通过 remoteExecutor 在 SSH 主机上执行。
+   * @param {string[]} args git 子命令参数
+   * @param {object} [options] { cwd, timeout, input, env }
+   * @returns {Promise<{ stdout: string; stderr: string; code: number }>}
+   */
+  async _execGit(args, options = {}) {
+    if (this._remoteExecutor) {
+      const cmd = ['git', ...args.map(shellEscapeArg)].join(' ');
+      return this._remoteExecutor(cmd, this.rootPath);
+    }
+    return execGit(args, { cwd: this.rootPath, ...options });
+  }
+
   async refresh() {
     if (this._refreshInFlight) {
       this._pendingRefresh = true;
@@ -153,12 +184,12 @@ class Repository {
 
   async _doRefresh() {
     try {
-      const output = await execGit(
+      const output = await this._execGit(
         // --untracked-files=normal：未跟踪目录只报目录级（如 node_modules/），不递归展开其下每个文件。
         // 用 all 会让 node_modules 这类目录刷出几万个 ? 条目，git 子进程慢、状态数据巨大、UI 卡死。
         // 第三方依赖/构建产物目录的进一步过滤见 statusParser.DEFAULT_IGNORE_DIRS。
         ['status', '--porcelain=v2', '--branch', '--untracked-files=normal', '--ignored=no'],
-        { cwd: this.rootPath, timeout: 10000 }
+        { timeout: 10000 }
       );
       if (output.code !== 0) {
         // 可能在 repo 失效时（如 .git 被删除）
@@ -189,6 +220,8 @@ class Repository {
    * 避免误删外部正在运行的合法 git 进程持有的锁。
    */
   async _cleanupStaleLock() {
+    // 远程仓库跳过本地 lock 清理（文件在远程主机上）
+    if (this._isRemote) return;
     const lockPath = path.join(this.rootPath, '.git', 'index.lock');
     try {
       const stat = await fsp.stat(lockPath);
@@ -210,7 +243,7 @@ class Repository {
    */
   async _execGitMutating(args, options = {}) {
     await this._cleanupStaleLock();
-    return execGit(args, { cwd: this.rootPath, ...options });
+    return this._execGit(args, options);
   }
 
   /** 操作完成后快速刷新一段时间 */
@@ -300,7 +333,18 @@ class Repository {
 
   async deleteUntracked(paths) {
     if (!paths || paths.length === 0) return { success: true };
-    // 使用 rm -f 逐个删除（比 git clean 更安全，避免误删）
+    if (this._isRemote) {
+      // §远程：通过 SSH 执行 rm -rf 删除未跟踪文件
+      for (const p of paths) {
+        try {
+          await this._remoteExecutor(`rm -rf -- ${shellEscapeArg(p)}`, this.rootPath);
+        } catch { /* 忽略单个失败 */ }
+      }
+      await this.refresh();
+      this._fastPoll();
+      return { success: true };
+    }
+    // 本地：使用 rm -f 逐个删除（比 git clean 更安全，避免误删）
     for (const p of paths) {
       const full = path.join(this.rootPath, p);
       try {
@@ -317,6 +361,28 @@ class Repository {
     await this.refresh();
     this._fastPoll();
     return { success: true };
+  }
+
+  /**
+   * §读取工作区文件内容（用于 diff 视图的 modified 端）。
+   * 本地：fs.readFileSync；远程：通过 SSH cat 读取。
+   * @param {string} relPath 相对仓库根的路径
+   * @returns {Promise<{ content: string; isBinary: boolean }>}
+   */
+  async readFile(relPath) {
+    if (this._isRemote) {
+      const { code, stdout } = await this._remoteExecutor(
+        `cat -- ${shellEscapeArg(relPath)}`, this.rootPath
+      );
+      if (code !== 0) return { content: '', isBinary: false };
+      // 简易二进制检测：含 NUL 字节视为二进制
+      const isBinary = stdout.includes('\0');
+      return { content: isBinary ? '' : stdout, isBinary };
+    }
+    const full = path.join(this.rootPath, relPath);
+    const buf = fs.readFileSync(full);
+    const isBinary = buf.includes(0);
+    return { content: isBinary ? '' : buf.toString('utf8'), isBinary };
   }
 
   async checkoutBranch(name) {
@@ -346,9 +412,9 @@ class Repository {
   }
 
   async listBranches() {
-    const { code, stdout, stderr } = await execGit(
+    const { code, stdout, stderr } = await this._execGit(
       ['for-each-ref', "--format=%(refname:short)%09%(HEAD)%09%(upstream:short)%09%(upstream:track)%09%(objectname)%09%(objectname:short)%09%(subject)%09%(authordate:unix)%09%(authorname)", 'refs/heads'],
-      { cwd: this.rootPath }
+      {}
     );
     if (code !== 0) throw new GitError(`listBranches failed: ${stderr}`);
     const branches = [];
@@ -379,9 +445,9 @@ class Repository {
       });
     }
     // 远程分支
-    const { code: rc, stdout: rOut } = await execGit(
+    const { code: rc, stdout: rOut } = await this._execGit(
       ['for-each-ref', "--format=%(refname:short)%09%(HEAD)%09%(upstream:short)%09%(upstream:track)%09%(objectname)%09%(objectname:short)%09%(subject)%09%(authordate:unix)%09%(authorname)", 'refs/remotes'],
-      { cwd: this.rootPath }
+      {}
     );
     if (rc === 0) {
       for (const line of rOut.split('\n')) {
@@ -416,7 +482,7 @@ class Repository {
   }
 
   async listRemotes() {
-    const { code, stdout } = await execGit(['remote', '-v'], { cwd: this.rootPath });
+    const { code, stdout } = await this._execGit(['remote', '-v'], {});
     if (code !== 0) return [];
     const map = new Map();
     for (const line of stdout.split('\n')) {
@@ -433,9 +499,9 @@ class Repository {
 
   async getLog(count = 50) {
     const format = '%H%x09%h%x09%s%x09%an%x09%ae%x09%at';
-    const { code, stdout, stderr } = await execGit(
+    const { code, stdout, stderr } = await this._execGit(
       ['log', `--pretty=format:${format}`, '-n', String(count)],
-      { cwd: this.rootPath }
+      {}
     );
     if (code !== 0) {
       // 空仓库会失败，返回空数组
@@ -452,9 +518,9 @@ class Repository {
   }
 
   async listStashes() {
-    const { code, stdout } = await execGit(
+    const { code, stdout } = await this._execGit(
       ['stash', 'list', '--pretty=format:%gd%x09%s%x09%ct'],
-      { cwd: this.rootPath }
+      {}
     );
     if (code !== 0) return [];
     const stashes = [];
@@ -501,9 +567,9 @@ class Repository {
   }
 
   async getOriginalContent(path) {
-    const { code, stdout } = await execGit(
+    const { code, stdout } = await this._execGit(
       ['show', `HEAD:${path}`],
-      { cwd: this.rootPath, timeout: 10000 }
+      { timeout: 10000 }
     );
     if (code !== 0) return '';
     return stdout;
@@ -513,7 +579,7 @@ class Repository {
     const args = ['diff', '--no-color'];
     if (staged) args.push('--cached');
     if (path) args.push('--', path);
-    const { code, stdout } = await execGit(args, { cwd: this.rootPath, timeout: 15000 });
+    const { code, stdout } = await this._execGit(args, { timeout: 15000 });
     if (code !== 0 && code !== 1) return '';
     // code=1 表示有差异（diff 正常返回 1）
     return stdout;

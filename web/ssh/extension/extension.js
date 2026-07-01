@@ -249,6 +249,13 @@ function registerSshCommands() {
       });
     });
   });
+
+  // §供其他扩展（如 git 扩展）跨扩展调用：通过 connectionId 在远程主机执行命令
+  // 包装 executeRemote(connectionId, command, cwd)，自动解析 connectionId → session
+  vscode.commands.registerCommand('ssh.executeRemote', async (params) => {
+    const { connectionId, command, cwd } = params;
+    return executeRemote(connectionId, command, cwd);
+  });
 }
 
 /**

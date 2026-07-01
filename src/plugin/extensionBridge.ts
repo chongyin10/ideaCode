@@ -984,26 +984,27 @@ export class ExtensionBridge {
           return { success: true };
         }
 
-        // 原 HEAD 内容或当前工作区内容均为空（极少见，例如全新仓库没有任何提交），
-        // 直接打开文件而不是空 Diff，避免无意义的视图
-        if (!original && !modified) {
-          this.store.dispatch(
-            openFile({
-              name: fileName,
-              kind: 'file',
-              source: fullPath,
-            }) as any
-          );
-          return { success: true };
+        // §需求：远程 SSH 仓库的 git 扩展 readFile（cat）可能因路径/权限/编码问题
+        // 返回空 modified。此时主动通过 fileService 读取（支持 ssh:// via FileSystemProvider），
+        // 确保 diff 视图右侧有内容。本地仓库同理兜底。
+        let finalModified = modified;
+        if (!finalModified) {
+          try {
+            finalModified = await fsReadFile(fullPath);
+          } catch {
+            // 读取失败（如文件已删除），保持空字符串，diff 视图右侧为空
+          }
         }
 
         // 打开 Diff 视图：左侧 = HEAD（原始），右侧 = 工作树（修改后）
+        // 即使 original/finalModified 均为空（如全新仓库空文件），也走 diff 路径，
+        // 确保"点击更改文件"始终触发 diff 视图，而非静默打开普通文件。
         this.store.dispatch(
           openDiffView({
             filePath: fullPath,
             fileName,
             original,
-            modified,
+            modified: finalModified,
             language,
           }) as any
         );

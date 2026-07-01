@@ -116,9 +116,14 @@ const vscode = {
       return { dispose: () => global._gitCommandHandlers?.delete(command) };
     },
     executeCommand: (command, ...args) => {
-      // 本地命令
+      // 本地命令（git 扩展自身注册的）
       if (global._gitCommandHandlers && global._gitCommandHandlers.has(command)) {
         return Promise.resolve(global._gitCommandHandlers.get(command)(...args));
+      }
+      // §跨扩展：检查其他扩展（如 SSH）注册在 global._commandHandlers 中的命令。
+      // 所有扩展运行在同一 Extension Host 进程，直接查找全局注册表即可路由。
+      if (global._commandHandlers && global._commandHandlers.has(command)) {
+        return Promise.resolve(global._commandHandlers.get(command)(...args));
       }
       // 转发到主进程
       return new Promise((resolve, reject) => {

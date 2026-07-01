@@ -21,6 +21,9 @@ class CodeContextBuilder {
     this.rpc = rpc;
     this.maxTotalTokens = 8000;
     this.maxFileSize = 100 * 1024;
+    // §TCR：文件访问历史，用于计算时间衰减和共现频率
+    this.fileAccessLog = new Map();
+    this.recencyLambda = 0.001; // 每毫秒衰减系数（约 10 分钟半衰期）
   }
 
   /**
@@ -94,33 +97,31 @@ class CodeContextBuilder {
     } catch {
       // ignore
     }
-    const relatedFiles = [];
+
+    // §TCR：更新文件访问历史（用于时间衰减与共现统计）
+    const now = Date.now();
+    this._touchFile(activeFile.filePath, now);
+    if (openedFiles && Array.isArray(openedFiles)) {
+      for (const file of openedFiles) {
+        if (file?.document?.fileName) {
+          this._touchFile(file.document.fileName, now);
+        }
+      }
+    }
+
+    // §TCR：候选文件 = 可见文件（排除当前文件和二进制文件）
+    const candidates = [];
     if (openedFiles && Array.isArray(openedFiles)) {
       for (const file of openedFiles) {
         if (!file.document) continue;
         const fp = file.document.fileName;
         if (fp === activeFile.filePath) continue;
         if (this._isBinaryExtension(fp)) continue;
-        if (relatedFiles.length >= maxFiles) break;
-
-        const content = file.document.content || '';
-        if (content.length > this.maxFileSize) {
-          relatedFiles.push({
-            filePath: fp,
-            content: this._summarizeLargeFile(content, file.document.languageId),
-            language: file.document.languageId,
-            size: content.length,
-            summarized: true,
-          });
-        } else {
-          relatedFiles.push({
-            filePath: fp,
-            content,
-            language: file.document.languageId,
-            size: content.length,
-            summarized: false,
-          });
-        }
+        candidates.push({
+          filePath: fp,
+          content: file.document.content || '',
+          language: file.document.languageId,
+        });
       }
     }
 
@@ -142,6 +143,16 @@ class CodeContextBuilder {
     } catch {
       // LSP 可能尚未就绪
     }
+
+    // §TCR：数学化排序 + Token 预算选择
+    const ranked = this._rankCandidates(activeFile, candidates, workspaceRoot);
+    const relatedFiles = this._selectByTokenBudget(
+      activeFile,
+      ranked,
+      selection,
+      fileTree,
+      diagnostics
+    );
 
     return {
       activeFile,
@@ -195,6 +206,148 @@ class CodeContextBuilder {
     }
 
     return parts.join('\n');
+  }
+
+  // ─── TCR（Token-budgeted Context Ranker）相关方法 ───
+
+  _touchFile(filePath, timestamp) {
+    const entry = this.fileAccessLog.get(filePath) || { count: 0, lastTime: 0 };
+    entry.count += 1;
+    entry.lastTime = timestamp;
+    this.fileAccessLog.set(filePath, entry);
+  }
+
+  _tokenCount(text) {
+    return Math.ceil((text || '').length / 4);
+  }
+
+  _tokenize(text) {
+    const tokens = new Map();
+    const parts = (text || '').toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 2);
+    for (const t of parts) {
+      tokens.set(t, (tokens.get(t) || 0) + 1);
+    }
+    return tokens;
+  }
+
+  _cosineSimilarity(a, b) {
+    let dot = 0;
+    let normA = 0;
+    let normB = 0;
+    for (const [token, count] of a) {
+      normA += count * count;
+      const cb = b.get(token) || 0;
+      dot += count * cb;
+    }
+    for (const count of b.values()) {
+      normB += count * count;
+    }
+    if (normA === 0 || normB === 0) return 0;
+    return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+  }
+
+  _commonPrefixDepth(a, b) {
+    const pa = a.split(/[\\/]+/).filter(Boolean);
+    const pb = b.split(/[\\/]+/).filter(Boolean);
+    let depth = 0;
+    const min = Math.min(pa.length, pb.length);
+    while (depth < min && pa[depth] === pb[depth]) depth += 1;
+    return depth;
+  }
+
+  _rankCandidates(activeFile, candidates, workspaceRoot) {
+    const activeTokens = this._tokenize(activeFile.content);
+    const activePath = activeFile.filePath;
+    const now = Date.now();
+    const scored = [];
+
+    for (const cand of candidates) {
+      const candTokens = this._tokenize(cand.content);
+      const sim = this._cosineSimilarity(activeTokens, candTokens);
+
+      // 时间衰减 + 访问频次
+      const log = this.fileAccessLog.get(cand.filePath) || { count: 0, lastTime: 0 };
+      const recency = log.lastTime > 0 ? Math.exp(-this.recencyLambda * (now - log.lastTime)) : 0;
+      const frequency = Math.min(log.count / 10, 1); // 归一化到 0..1
+      const accessScore = 0.7 * recency + 0.3 * frequency;
+
+      // 目录邻近度
+      const relActive = this._getRelativePath(activePath, workspaceRoot);
+      const relCand = this._getRelativePath(cand.filePath, workspaceRoot);
+      const commonDepth = this._commonPrefixDepth(relActive, relCand);
+      const maxDepth = Math.max(relActive.split(/[\\/]+/).filter(Boolean).length, 1);
+      const proximity = commonDepth / maxDepth;
+
+      // 导入/引用信号：当前文件内容中是否出现候选文件名或相对路径
+      let importBoost = 0;
+      const candBase = require('path').basename(cand.filePath);
+      const candRelative = relCand.replace(/^\.\//, '').replace(/\.[^.]+$/, '');
+      const activeContent = activeFile.content || '';
+      if (activeContent.includes(candBase) || activeContent.includes(candRelative)) {
+        importBoost = 0.5;
+      }
+
+      // 加权组合（权重和为 1）
+      const score = 0.35 * sim + 0.30 * accessScore + 0.20 * proximity + 0.15 * importBoost;
+
+      scored.push({
+        ...cand,
+        score,
+        tokens: this._tokenCount(cand.content),
+      });
+    }
+
+    // 按单位 token 收益降序，兼顾相关性与经济性
+    scored.sort((a, b) => b.score / Math.max(1, b.tokens) - a.score / Math.max(1, a.tokens));
+    return scored;
+  }
+
+  _selectByTokenBudget(activeFile, ranked, selection, fileTree, diagnostics) {
+    const activeTokens = this._tokenCount(activeFile.content);
+    const selectionTokens = this._tokenCount(selection || '');
+    const treeTokens = this._tokenCount(fileTree || '');
+    const diagTokens = diagnostics.length * 15;
+    const overhead = 300; // 提示词模板、标题等固定开销
+    const reserved = activeTokens + selectionTokens + treeTokens + diagTokens + overhead;
+    let remaining = Math.max(0, this.maxTotalTokens - reserved);
+
+    const selected = [];
+    for (const cand of ranked) {
+      if (remaining <= 0) break;
+      let content = cand.content;
+      let summarized = false;
+      const needTokens = cand.tokens;
+
+      // 超大文件先摘要，避免单个文件吞掉全部预算
+      if (content.length > this.maxFileSize) {
+        content = this._summarizeLargeFile(content, cand.language);
+        summarized = true;
+      }
+
+      const actualTokens = this._tokenCount(content);
+      if (actualTokens > remaining) {
+        // 剩余预算不足完整文件时，尝试用摘要替代
+        if (!summarized) {
+          content = this._summarizeLargeFile(content, cand.language);
+          summarized = true;
+        }
+        const summaryTokens = this._tokenCount(content);
+        if (summaryTokens > remaining) break;
+        remaining -= summaryTokens;
+      } else {
+        remaining -= actualTokens;
+      }
+
+      selected.push({
+        filePath: cand.filePath,
+        content,
+        language: cand.language,
+        size: cand.content.length,
+        summarized,
+      });
+    }
+
+    return selected;
   }
 
   _getRelativePath(filePath, workspaceRoot) {
