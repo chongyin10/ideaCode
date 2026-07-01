@@ -1,3 +1,4 @@
+"use strict";
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __commonJS = (cb, mod) => function __require() {
   return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
@@ -6,6 +7,7 @@ var __commonJS = (cb, mod) => function __require() {
 // api.js
 var require_api = __commonJS({
   "api.js"(exports2, module2) {
+    "use strict";
     var EventEmitter = class {
       constructor() {
         this._listeners = /* @__PURE__ */ new Set();
@@ -213,6 +215,7 @@ var require_api = __commonJS({
 // gitCLI.js
 var require_gitCLI = __commonJS({
   "gitCLI.js"(exports2, module2) {
+    "use strict";
     var { spawn } = require("child_process");
     var DEFAULT_TIMEOUT = 3e4;
     var GitError2 = class extends Error {
@@ -314,6 +317,7 @@ var require_gitCLI = __commonJS({
 // statusParser.js
 var require_statusParser = __commonJS({
   "statusParser.js"(exports2, module2) {
+    "use strict";
     var INDEX_STATUS = {
       M: "modified",
       A: "added",
@@ -539,6 +543,7 @@ var require_statusParser = __commonJS({
 // repository.js
 var require_repository = __commonJS({
   "repository.js"(exports2, module2) {
+    "use strict";
     var fs2 = require("fs");
     var fsp = fs2.promises;
     var path2 = require("path");

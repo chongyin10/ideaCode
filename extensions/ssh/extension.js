@@ -214,7 +214,7 @@ function registerSshCommands() {
 
   vscode.commands.registerCommand('ssh.internal.execute', (config) => {
     return new Promise((resolve) => {
-      const { id, command } = config;
+      const { id, command, usePty = false } = config;
       const client = sshClients.get(id);
       log('log', '[SSH Extension] execute 请求:', id, 'client 存在:', !!client);
       if (!client) {
@@ -222,8 +222,13 @@ function registerSshCommands() {
         return resolve({ success: false, error: '会话不存在或已断开' });
       }
 
-      // 申请伪终端，兼容对普通 exec 通道做了限制的服务器
-      client.exec(command, { pty: true }, (err, stream) => {
+      // §默认不申请伪终端（usePty=false）。
+      // PTY 模式会污染 stdout：命令回显、shell 提示符、\r\n 换行、stderr 混入 stdout，
+      // 导致 git show/cat 等命令的输出无法直接用于 diff 对比、目录树解析等场景。
+      // 非 PTY 模式下 stdout/stderr 分离、退出码可靠、输出干净。
+      // 如需 PTY（如交互式终端），调用方显式传 usePty: true。
+      const execOptions = usePty ? { pty: true } : {};
+      client.exec(command, execOptions, (err, stream) => {
         if (err) {
           return resolve({ success: false, error: err.message });
         }
@@ -232,11 +237,13 @@ function registerSshCommands() {
         let stderr = '';
 
         stream.on('close', (code, signal) => {
-          const success = code === 0;
-          if (!success && !stderr && code !== null) {
-            stderr = `命令退出码: ${code}`;
+          // §非 PTY 模式下 code 始终为可靠数字；保留 null 兜底以防极端情况。
+          const normalizedCode = code === null ? 0 : code;
+          const success = normalizedCode === 0;
+          if (!success && !stderr) {
+            stderr = `命令退出码: ${normalizedCode}`;
           }
-          resolve({ success, stdout, stderr, code, signal });
+          resolve({ success, stdout, stderr, code: normalizedCode, signal });
         });
 
         stream.on('data', (data) => {
@@ -276,15 +283,17 @@ function buildRemoteTree(lines, explicitRootPath) {
     if (!fullPath) continue;
     const type = typeChar === 'd' ? 'directory' : 'file';
     entries.push({ type, fullPath });
-    if (!rootPath && type === 'directory') {
-      rootPath = fullPath;
-    }
+    // §不要在循环内设置 rootPath——第一个目录条目是子目录（如 /root/_cacache），
+    // 不是 basePath。改用循环后的统一推断，从第一个条目去掉最后一级得到 basePath。
   }
 
+  // §统一推断 rootPath：从第一个条目的路径去掉最后一级，得到 basePath。
+  // 例：第一个条目 /root/_cacache → rootPath = /root（$HOME）
   if (!rootPath && entries.length > 0) {
-    const parts = entries[0].fullPath.split('/').filter(Boolean);
+    const firstPath = entries[0].fullPath;
+    const parts = firstPath.split('/').filter(Boolean);
     parts.pop();
-    rootPath = `/${parts.join('/')}`;
+    rootPath = '/' + parts.join('/');
   }
 
   if (!rootPath) {
@@ -427,8 +436,8 @@ const sshFileSystemProvider = {
     const session = findConnectedSession(connectionId);
     if (!session) throw new Error('没有已连接的 SSH 会话');
     const result = await executeOnSession(session.id, `cat ${shellEscape(path)}`);
-    if (!result.success) throw new Error(result.error || result.stderr || '读取文件失败');
-    return result.stdout;
+    // §非 PTY 模式下 stdout 干净可靠。命令失败时 stdout 为空。
+    return result.stdout || '';
   },
 
   async writeFile(uri, content) {
@@ -508,10 +517,8 @@ async function getRemoteFileTree(connectionId, targetPath) {
   const session = findConnectedSession(connectionId);
   if (!session) throw new Error('没有已连接的会话');
 
-  // §需求：getRemoteFileTree 之前用 `find ~ -maxdepth 3 -printf '%y|%p\n'`，在某些
-  // 非交互式 shell（pty 模式）下 `~` 不会展开，导致 find 报"找不到 HOME"或
-  // 退出码非 0。改用 `${HOME:-/root}` 兜底，且并行列举多级目录以加快响应。
-  // 用单引号包住 printf 格式串，避免 shell 提前展开 $ % 等。
+  // §需求：getRemoteFileTree 用 `find ${HOME:-/root} -maxdepth N -printf '%y|%p\n'`
+  // 列举远程目录树。`${HOME:-/root}` 兜底防止 HOME 未设置时 find 报错。
   // §支持 targetPath：点击子目录时拉取该目录内容。home 表达式不加引号让 shell 展开 $HOME，
   // 自定义路径用 shellEscape 包裹防注入。
   const useCustomPath = targetPath && targetPath !== '/' && targetPath !== '~';

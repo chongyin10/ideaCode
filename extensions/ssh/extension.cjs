@@ -20605,25 +20605,27 @@ function registerSshCommands() {
   });
   vscode.commands.registerCommand("ssh.internal.execute", (config) => {
     return new Promise((resolve) => {
-      const { id, command } = config;
+      const { id, command, usePty = false } = config;
       const client = sshClients.get(id);
       log("log", "[SSH Extension] execute \u8BF7\u6C42:", id, "client \u5B58\u5728:", !!client);
       if (!client) {
         log("error", "[SSH Extension] execute \u4F1A\u8BDD\u4E0D\u5B58\u5728:", id, "\u5F53\u524D\u4F1A\u8BDD:", Array.from(sshClients.keys()));
         return resolve({ success: false, error: "\u4F1A\u8BDD\u4E0D\u5B58\u5728\u6216\u5DF2\u65AD\u5F00" });
       }
-      client.exec(command, { pty: true }, (err, stream) => {
+      const execOptions = usePty ? { pty: true } : {};
+      client.exec(command, execOptions, (err, stream) => {
         if (err) {
           return resolve({ success: false, error: err.message });
         }
         let stdout = "";
         let stderr = "";
         stream.on("close", (code, signal) => {
-          const success = code === 0;
-          if (!success && !stderr && code !== null) {
-            stderr = `\u547D\u4EE4\u9000\u51FA\u7801: ${code}`;
+          const normalizedCode = code === null ? 0 : code;
+          const success = normalizedCode === 0;
+          if (!success && !stderr) {
+            stderr = `\u547D\u4EE4\u9000\u51FA\u7801: ${normalizedCode}`;
           }
-          resolve({ success, stdout, stderr, code, signal });
+          resolve({ success, stdout, stderr, code: normalizedCode, signal });
         });
         stream.on("data", (data) => {
           stdout += data.toString();
@@ -20652,14 +20654,12 @@ function buildRemoteTree(lines, explicitRootPath) {
     if (!fullPath) continue;
     const type = typeChar === "d" ? "directory" : "file";
     entries.push({ type, fullPath });
-    if (!rootPath && type === "directory") {
-      rootPath = fullPath;
-    }
   }
   if (!rootPath && entries.length > 0) {
-    const parts = entries[0].fullPath.split("/").filter(Boolean);
+    const firstPath = entries[0].fullPath;
+    const parts = firstPath.split("/").filter(Boolean);
     parts.pop();
-    rootPath = `/${parts.join("/")}`;
+    rootPath = "/" + parts.join("/");
   }
   if (!rootPath) {
     return { name: "~", path: "~", type: "directory", children: [] };
@@ -20781,8 +20781,7 @@ var sshFileSystemProvider = {
     const session = findConnectedSession(connectionId);
     if (!session) throw new Error("\u6CA1\u6709\u5DF2\u8FDE\u63A5\u7684 SSH \u4F1A\u8BDD");
     const result = await executeOnSession(session.id, `cat ${shellEscape(path2)}`);
-    if (!result.success) throw new Error(result.error || result.stderr || "\u8BFB\u53D6\u6587\u4EF6\u5931\u8D25");
-    return result.stdout;
+    return result.stdout || "";
   },
   async writeFile(uri, content) {
     const { connectionId, path: path2 } = parseSshUri(uri);

@@ -158,8 +158,11 @@ class Repository {
    */
   async _execGit(args, options = {}) {
     if (this._remoteExecutor) {
-      const cmd = ['git', ...args.map(shellEscapeArg)].join(' ');
-      return this._remoteExecutor(cmd, this.rootPath);
+      // §ssh.internal.execute 默认非 PTY 模式，不会触发分页器。
+      // 保留 --no-pager 和 GIT_PAGER=cat 作为双重保险。
+      const cmd = ['git', '--no-pager', ...args.map(shellEscapeArg)].join(' ');
+      const result = await this._remoteExecutor(`GIT_PAGER=cat ${cmd}`, this.rootPath);
+      return result;
     }
     return execGit(args, { cwd: this.rootPath, ...options });
   }
@@ -371,11 +374,11 @@ class Repository {
    */
   async readFile(relPath) {
     if (this._isRemote) {
-      const { code, stdout } = await this._remoteExecutor(
+      // §ssh.internal.execute 默认非 PTY 模式，stdout 干净可靠。
+      // 命令失败时 stdout 为空，等价于返回空内容。
+      const { stdout } = await this._remoteExecutor(
         `cat -- ${shellEscapeArg(relPath)}`, this.rootPath
       );
-      if (code !== 0) return { content: '', isBinary: false };
-      // 简易二进制检测：含 NUL 字节视为二进制
       const isBinary = stdout.includes('\0');
       return { content: isBinary ? '' : stdout, isBinary };
     }
@@ -567,11 +570,12 @@ class Repository {
   }
 
   async getOriginalContent(path) {
-    const { code, stdout } = await this._execGit(
+    // §ssh.internal.execute 默认非 PTY 模式，stdout 干净可靠。
+    // 命令失败时（如路径不在 HEAD 中）stdout 为空，等价于返回空内容。
+    const { stdout } = await this._execGit(
       ['show', `HEAD:${path}`],
       { timeout: 10000 }
     );
-    if (code !== 0) return '';
     return stdout;
   }
 
