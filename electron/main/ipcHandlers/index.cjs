@@ -4,7 +4,7 @@ const { registerWindowHandlers } = require('./windowHandler.cjs');
 const { registerExtensionHandlers } = require('./extensionHandler.cjs');
 const { registerExtensionInstallHandlers } = require('./extensionInstallHandler.cjs');
 const { registerHistoryHandlers } = require('./historyHandler.cjs');
-// Git 功能由 web/git 扩展在 Extension Host 子进程中提供，不再注册内置 gitHandler
+const { registerGitHandlers } = require('./gitHandler.cjs');
 const { registerTsServerHandlers } = require('../lsp/tsserverManager.cjs');
 const { registerTerminalHandlers } = require('./terminalHandler.cjs');
 
@@ -18,6 +18,7 @@ function registerIpcHandlers(deps = {}) {
 
   registerDialogHandlers();
   registerFsHandlers();
+  registerGitHandlers();
   registerTsServerHandlers();
   registerTerminalHandlers();
 

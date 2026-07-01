@@ -45,6 +45,8 @@ const Channels = {
   MENU_OPEN_FILE: 'menu:open-file',
   MENU_NEW_WINDOW: 'menu:new-window',
   FS_CHANGE: 'fs:change',
+  GIT_CLONE: 'git:clone',
+  GIT_CLONE_PROGRESS: 'git:cloneProgress',
   EXTENSION_MESSAGE: 'extensionHost:message',
   HISTORY_GET_RECENT: 'history:getRecent',
   HISTORY_ADD_RECENT: 'history:addRecent',
@@ -173,7 +175,11 @@ const electronAPI = {
     onQuit: (callback) => onChannel(Channels.APP_QUIT, callback),
   },
 
-  // Git 功能由 web/git 扩展在 Extension Host 子进程中提供
+  /** Git 克隆（主进程直接 spawn git） */
+  git: {
+    clone: (url, targetPath) => ipcRenderer.invoke(Channels.GIT_CLONE, url, targetPath),
+    onCloneProgress: (callback) => onChannel(Channels.GIT_CLONE_PROGRESS, callback),
+  },
 
   /** tsserver LSP — TypeScript 语言服务 */
   tsserver: {

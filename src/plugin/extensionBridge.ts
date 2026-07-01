@@ -104,12 +104,44 @@ export class ExtensionBridge {
   /** 上一次通知 Git 扩展的 active file 相对路径 */
   private lastGitActivePath: string | null = null;
 
+  /** §AI 文件变更批量刷新：避免连续 create-vite / write_file 触发高频 Explorer 刷新导致 GPU/CPU 飙升 */
+  private pendingFileChanges = new Set<string>();
+  private pendingFileChangeTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly FILE_CHANGE_FLUSH_MS = 250;
+
   constructor(store: Store<RootState>) {
     this.store = store;
     this._setupRpcHandlers();
     this._setupIpcListeners();
     this._subscribeActiveFile();
     this._subscribeWorkspaceRoot();
+  }
+
+  /**
+   * 把 AI 修改/创建/删除的文件路径加入待刷新队列，批量 dispatch 给 Explorer。
+   * 使用相对路径，与 useElectronEvents 处理 lifeAiCode.fileChanged 的格式保持一致。
+   */
+  private _queueFileChange(resolvedPath: string, workspaceRoot: string) {
+    if (!resolvedPath || !workspaceRoot) return;
+    const normalizedRoot = normalizePathForCompare(workspaceRoot);
+    const normalizedPath = normalizePathForCompare(resolvedPath);
+    if (!normalizedPath.startsWith(normalizedRoot + '/')) return;
+    const relative = normalizedPath.substring(normalizedRoot.length + 1);
+    if (!relative) return;
+    this.pendingFileChanges.add(relative);
+    if (this.pendingFileChangeTimer) clearTimeout(this.pendingFileChangeTimer);
+    this.pendingFileChangeTimer = setTimeout(() => this._flushFileChanges(), this.FILE_CHANGE_FLUSH_MS);
+  }
+
+  private _flushFileChanges() {
+    if (this.pendingFileChangeTimer) {
+      clearTimeout(this.pendingFileChangeTimer);
+      this.pendingFileChangeTimer = null;
+    }
+    if (this.pendingFileChanges.size === 0) return;
+    const paths = Array.from(this.pendingFileChanges);
+    this.pendingFileChanges.clear();
+    this.store.dispatch(setExternalFileChange({ paths, timestamp: Date.now() }));
   }
 
   /**
@@ -808,6 +840,9 @@ export class ExtensionBridge {
         // 使用文件服务写入文件（用 resolve 后的绝对路径，避免 fsService 拒绝相对路径）
         await fsWriteFile(resolvedFilePath, newContent);
 
+        // §触发资源管理器刷新（批量防抖，避免连续写文件导致 GPU/CPU 飙升）
+        this._queueFileChange(resolvedFilePath, workspaceRoot);
+
         // 更新 Redux 状态：openedFile.source 存的是绝对路径，用 resolvedFilePath 匹配
         const state = this.store.getState().workspace;
         const openedFile = state.openedFiles.find((f) => {
@@ -871,6 +906,9 @@ export class ExtensionBridge {
 
       try {
         await fsDeleteFile(resolvedFilePath);
+
+        // §触发资源管理器刷新（批量防抖，避免连续删文件导致 GPU/CPU 飙升）
+        this._queueFileChange(resolvedFilePath, workspaceRoot);
 
         // 从编辑器关闭该文件标签（如已打开）
         const state = this.store.getState().workspace;

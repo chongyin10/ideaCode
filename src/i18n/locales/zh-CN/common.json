@@ -261,7 +261,15 @@
       "title": "欢迎使用 IDEACODE",
       "subtitle": "基于 Monaco Editor 的轻量级 IDE",
       "openFolder": "打开文件夹",
-      "openQuickOpen": "快速打开文件 (Ctrl+P)"
+      "openQuickOpen": "快速打开文件 (Ctrl+P)",
+      "newFile": "新建文件...",
+      "openFile": "打开文件...",
+      "cloneRepo": "克隆 Git 仓库...",
+      "connectTo": "连接到...",
+      "createWorkspace": "生成新工作区...",
+      "startTitle": "开始",
+      "recentTitle": "最近",
+      "noRecent": "无最近打开的项目"
     },
     "recentProjects": {
       "title": "最近打开的项目",

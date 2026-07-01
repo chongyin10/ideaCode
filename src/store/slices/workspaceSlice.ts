@@ -346,11 +346,24 @@ export const openFile = createAsyncThunk(
   'workspace/openFile',
   async (entry: FileEntry & { readOnly?: boolean }) => {
     if (entry.kind !== 'file') return null;
-    const content = await readFile(entry.source);
-    // 统一使用 utils/languageFromPath 推断 Monaco 语言，避免遗漏 .mts/.cts 等变体
     const { getLanguageFromPath } = await import('../../utils/languageFromPath');
     const sourceStr = typeof entry.source === 'string' ? entry.source : entry.name;
-    const language = getLanguageFromPath(sourceStr);
+    const language = getLanguageFromPath(entry.name);
+
+    // §未保存的临时文件（untitled://）不读取磁盘，直接以空内容打开
+    if (sourceStr.startsWith('untitled://')) {
+      return {
+        id: sourceStr,
+        name: entry.name,
+        source: entry.source,
+        content: '',
+        language,
+        isDirty: false,
+        readOnly: entry.readOnly ?? false,
+      };
+    }
+
+    const content = await readFile(entry.source);
     // 用完整路径作为唯一 id，避免不同目录下的同名文件（如 index.tsx）冲突
     const id = sourceStr;
     return { id, name: entry.name, source: entry.source, content, language, isDirty: false, readOnly: entry.readOnly ?? false };
@@ -400,11 +413,23 @@ export const saveFile = createAsyncThunk(
     const state = (getState() as { workspace: WorkspaceState }).workspace;
     const file = state.openedFiles.find((f) => f.id === id);
     if (!file) throw new Error('文件未找到');
+
+    let targetSource = file.source;
+    let targetName = file.name;
+
+    // §未保存的临时文件（untitled://）保存时弹出“另存为”对话框
+    if (typeof file.source === 'string' && file.source.startsWith('untitled://')) {
+      const savedPath = await window.electronAPI?.dialog?.saveFile({ defaultPath: file.name });
+      if (!savedPath) throw new Error('用户取消保存');
+      targetSource = savedPath;
+      targetName = savedPath.split(/[\\/]/).pop() || file.name;
+    }
+
     const mirrorKey = `${id}::${gIdx}`;
     const contentToSave = state.mirrorContent[mirrorKey] ?? file.content;
-    await writeFile(file.source, contentToSave);
+    await writeFile(targetSource, contentToSave);
     // Git 状态由 web/git 扩展自动监听 .git 目录变更并刷新
-    return { id, groupIndex: gIdx, content: contentToSave };
+    return { id, groupIndex: gIdx, content: contentToSave, source: targetSource, name: targetName };
   }
 );
 
@@ -1114,11 +1139,13 @@ const workspaceSlice = createSlice({
         state.recentProjects = state.recentProjects.filter((p) => p.path !== action.payload);
       })
       .addCase(saveFile.fulfilled, (state, action) => {
-        const { id, content } = action.payload;
+        const { id, content, source, name } = action.payload;
         const file = state.openedFiles.find((f) => f.id === id);
         if (file) {
           file.content = content;
           file.isDirty = false;
+          if (source) file.source = source;
+          if (name) file.name = name;
         }
         // 清理所有组镜像
         state.editorGroups.forEach((_, idx) => {

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { FolderOpen, Search, Clock, X, Folder } from 'lucide-react';
+import { FolderOpen, Search, Clock, X, Folder, FilePlus, GitBranch, Link2 } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '../store/hooks';
 import type { OpenedFile, EditorSnapshot } from '../store/slices/workspaceSlice';
 import {
@@ -25,15 +25,17 @@ import {
 } from '../store/slices/workspaceSlice';
 import { removeEditorTerminal } from '../store/slices/terminalSlice';
 
-import { openDirectory, warmupFileCache } from '../services/fileService';
+import { warmupFileCache, openFileDialog } from '../services/fileService';
 import { terminalSDK } from '../services/terminalSDK';
-import TabBar from '../components/TabBar';
+import TabBar, { type TabType } from '../components/TabBar';
 import MonacoEditor from '../components/MonacoEditor';
 import DiffEditorPanel from '../components/DiffEditorPanel';
 import ExtensionDetail from '../components/ExtensionDetail';
 import SshFileTreePanel from '../components/SshFileTreePanel';
 import TerminalEditorView from '../components/TerminalEditorView';
 import ConfirmDialog, { type ConfirmResult } from '../components/ConfirmDialog';
+import ConnectToModal from '../components/ConnectToModal';
+import CloneRepoModal from '../components/CloneRepoModal';
 import QuickOpen from '../components/QuickOpen';
 import SettingsPanel from '../components/SettingsPanel';
 import ContextMenu, { type MenuItem } from '../components/ContextMenu';
@@ -61,6 +63,23 @@ const formatTime = (timestamp: number, translate: (key: string, options?: Record
   }
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 };
+
+/** 根据 openedFile 判断 Tab 类型，用于控制标签页是否显示只读锁图标 */
+function getTabType(file: { language: string; name: string }): TabType {
+  const ext = file.name.split('.').pop()?.toLowerCase() || '';
+  const imageExts = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'svg']);
+  switch (file.language) {
+    case 'ssh-file-tree':
+      return 'structure';
+    case 'terminal':
+      return 'terminal';
+    case 'extension':
+      return 'extension';
+    default:
+      if (imageExts.has(ext)) return 'image';
+      return 'file';
+  }
+}
 
 /* ─── Hebbian 协同文件学习 ─── */
 
@@ -163,6 +182,9 @@ function Home() {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; fileId: string; groupIndex: number } | null>(null);
   const [referencesModal, setReferencesModal] = useState<{ fileId: string; results: FileSearchResult[] } | null>(null);
   const [loadingFiles, setLoadingFiles] = useState<Set<string>>(new Set());
+  // §需求："连接到..." Modal 的开关状态
+  const [connectToOpen, setConnectToOpen] = useState(false);
+  const [cloneRepoOpen, setCloneRepoOpen] = useState(false);
 
   const loadingTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
@@ -362,11 +384,6 @@ function Home() {
 
   /* ─── 事件处理 ─── */
 
-  const handleOpenFolder = async () => {
-    const dir = await openDirectory();
-    if (dir) dispatch(loadDirectory({ source: dir.source, name: dir.name }));
-  };
-
   const handleOpenRecent = useCallback(
     (projectPath: string, name: string) => dispatch(loadDirectory({ source: projectPath, name })),
     [dispatch]
@@ -381,6 +398,33 @@ function Home() {
   );
 
   const handleOpenQuickOpen = useCallback(() => setQuickOpenVisible(true), []);
+
+  // §打开本地文件（只能选择文件类型）
+  const handleOpenFile = useCallback(async () => {
+    const file = await openFileDialog();
+    if (!file) return;
+    dispatch(openFile({ name: file.name, source: file.source, kind: 'file' }));
+  }, [dispatch]);
+
+  // §新建无标题文本文件，默认名 unknown-1.txt，依此类推
+  const handleNewFile = useCallback(() => {
+    let n = 1;
+    const base = 'unknown';
+    while (openedFiles.some((f) => f.name === `${base}-${n}.txt`)) {
+      n += 1;
+    }
+    const name = `${base}-${n}.txt`;
+    dispatch(openFile({
+      name,
+      source: `untitled://${Date.now()}-${n}`,
+      kind: 'file',
+    }));
+  }, [dispatch, openedFiles]);
+
+  // §克隆 Git 仓库
+  const handleOpenClone = useCallback(() => {
+    setCloneRepoOpen(true);
+  }, []);
 
   /* ─── 面板内容获取 ─── */
 
@@ -730,6 +774,7 @@ function Home() {
                 isPreview: f.isPreview,
                 readOnly: f.readOnly,
                 gitStatus: gitCode,
+                type: getTabType(f),
               };
             })}
             activeId={group.activeFileId}
@@ -828,6 +873,10 @@ function Home() {
         />
       )}
 
+      {/* §需求："连接到..." Modal —— SSH 远程连接 + 目录浏览 + 加载到资源管理器 */}
+      {connectToOpen && <ConnectToModal onClose={() => setConnectToOpen(false)} />}
+      {cloneRepoOpen && <CloneRepoModal onClose={() => setCloneRepoOpen(false)} />}
+
       {settingsVisible ? (
         <SettingsPanel />
       ) : allFileIds.length === 0 ? (
@@ -835,11 +884,19 @@ function Home() {
           <h2>{t('home.welcome.title')}</h2>
           <p>{t('home.welcome.subtitle')}</p>
           <div className="welcome-actions">
-            <button className="open-folder-btn" onClick={handleOpenFolder}>
-              <FolderOpen size={16} strokeWidth={1.5} /> {t('home.welcome.openFolder')}
+            {/* 按图 2 中列出的"启动"操作：新建 / 打开 / 克隆 / 连接到 */}
+            <button className="open-folder-btn secondary" onClick={handleNewFile}>
+              <FilePlus size={16} strokeWidth={1.5} /> {t('home.welcome.newFile')}
             </button>
-            <button className="open-folder-btn secondary" onClick={handleOpenQuickOpen}>
-              <Search size={16} strokeWidth={1.5} /> {t('home.welcome.openQuickOpen')}
+            <button className="open-folder-btn secondary" onClick={handleOpenFile}>
+              <FolderOpen size={16} strokeWidth={1.5} /> {t('home.welcome.openFile')}
+            </button>
+            <button className="open-folder-btn secondary" onClick={handleOpenClone}>
+              <GitBranch size={16} strokeWidth={1.5} /> {t('home.welcome.cloneRepo')}
+            </button>
+            {/* §需求：SSH "连接到..." Modal 入口——点击后弹 ConnectToModal */}
+            <button className="open-folder-btn secondary" onClick={() => setConnectToOpen(true)}>
+              <Link2 size={16} strokeWidth={1.5} /> {t('home.welcome.connectTo')}
             </button>
           </div>
           {recentProjects.length > 0 && (

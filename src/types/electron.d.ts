@@ -189,7 +189,11 @@ export interface ElectronAPI {
     getFilePath: () => Promise<string>;
   };
 
-  // Git 功能由 web/git 扩展在 Extension Host 子进程中提供，不暴露 IPC API
+  /** Git 克隆（主进程 spawn git） */
+  git: {
+    clone: (url: string, targetPath: string) => Promise<{ success: boolean; error?: string }>;
+    onCloneProgress: (callback: (data: { message: string }) => void) => () => void;
+  };
 
   /** tsserver LSP */
   tsserver: {

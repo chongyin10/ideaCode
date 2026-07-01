@@ -21,13 +21,7 @@ const ConfirmDialog = ({ title, message, onResult }: ConfirmDialogProps) => {
             className="confirm-dialog__btn confirm-dialog__btn--secondary"
             onClick={() => onResult('discard')}
           >
-            {t('confirmDialog.discard')}
-          </button>
-          <button
-            className="confirm-dialog__btn confirm-dialog__btn--secondary"
-            onClick={() => onResult('cancel')}
-          >
-            {t('confirmDialog.cancel')}
+            取消
           </button>
           <button
             className="confirm-dialog__btn confirm-dialog__btn--primary"

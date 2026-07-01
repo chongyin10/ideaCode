@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Search, ChevronsDownUp } from 'lucide-react';
 import { useAppDispatch } from '../../store/hooks';
 import { setFileContent, openFile, loadDirectory, clearWorkspaceFolders, setSshConnection } from '../../store/slices/workspaceSlice';
 import { terminalSDK } from '../../services/terminalSDK';
@@ -75,27 +76,40 @@ interface SshFileTreePanelProps {
   fileId: string;
 }
 
+interface TreeNodeItemProps {
+  node: FileTreeNode;
+  depth?: number;
+  expandedPaths: Set<string>;
+  highlightedPath: string | null;
+  onToggleExpanded: (path: string) => void;
+  onContextMenu: (e: React.MouseEvent, node: FileTreeNode) => void;
+  registerRowRef: (path: string, el: HTMLDivElement | null) => void;
+}
+
 function TreeNodeItem({
   node,
   depth = 0,
+  expandedPaths,
+  highlightedPath,
+  onToggleExpanded,
   onContextMenu,
-}: {
-  node: FileTreeNode;
-  depth?: number;
-  onContextMenu: (e: React.MouseEvent, node: FileTreeNode) => void;
-}) {
-  const [expanded, setExpanded] = useState(depth < 1);
+  registerRowRef,
+}: TreeNodeItemProps) {
   const isDir = node.type === 'directory';
   const hasChildren = isDir && (node.children?.length ?? 0) > 0;
+  const expanded = expandedPaths.has(node.path);
+  const isHighlighted = highlightedPath === node.path;
 
   return (
     <div className="ssh-file-tree__node">
       <div
-        className="ssh-file-tree__row"
+        ref={(el) => registerRowRef(node.path, el)}
+        className={`ssh-file-tree__row ${isHighlighted ? 'ssh-file-tree__row--highlight' : ''}`}
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
-        onClick={() => hasChildren && setExpanded((prev) => !prev)}
+        onClick={() => hasChildren && onToggleExpanded(node.path)}
         onContextMenu={(e) => onContextMenu(e, node)}
         title={node.path}
+        data-path={node.path}
       >
         {hasChildren && <ChevronIcon expanded={expanded} />}
         {!hasChildren && <span className="ssh-file-tree__chevron-placeholder" />}
@@ -105,12 +119,33 @@ function TreeNodeItem({
       {isDir && expanded && node.children && (
         <div className="ssh-file-tree__children">
           {node.children.map((child) => (
-            <TreeNodeItem key={child.path} node={child} depth={depth + 1} onContextMenu={onContextMenu} />
+            <TreeNodeItem
+              key={child.path}
+              node={child}
+              depth={depth + 1}
+              expandedPaths={expandedPaths}
+              highlightedPath={highlightedPath}
+              onToggleExpanded={onToggleExpanded}
+              onContextMenu={onContextMenu}
+              registerRowRef={registerRowRef}
+            />
           ))}
         </div>
       )}
     </div>
   );
+}
+
+// 收集树中所有目录节点（用于搜索下拉）
+function collectDirectories(node: FileTreeNode): FileTreeNode[] {
+  const result: FileTreeNode[] = [];
+  if (node.type === 'directory') {
+    result.push(node);
+  }
+  node.children?.forEach((child) => {
+    result.push(...collectDirectories(child));
+  });
+  return result;
 }
 
 function findNode(root: FileTreeNode, path: string): FileTreeNode | undefined {
@@ -145,6 +180,13 @@ export default function SshFileTreePanel({ content, fileId }: SshFileTreePanelPr
     node: FileTreeNode;
     value: string;
   } | null>(null);
+  // 已展开目录路径集合（受控树）
+  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
+  // 目录搜索
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [highlightedPath, setHighlightedPath] = useState<string | null>(null);
+  const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   const data = useMemo<TreeData | null>(() => {
     try {
@@ -180,10 +222,75 @@ export default function SshFileTreePanel({ content, fileId }: SshFileTreePanelPr
     }
   }, [content]);
 
+  // 当树数据变化时，默认展开一级目录，并保留已有的展开状态
+  useEffect(() => {
+    if (!data?.tree) return;
+    setExpandedPaths((prev) => {
+      const next = new Set(prev);
+      const expandRootLevel = (node: FileTreeNode) => {
+        node.children?.forEach((child) => {
+          if (child.type === 'directory') next.add(child.path);
+        });
+      };
+      expandRootLevel(data.tree);
+      return next;
+    });
+  }, [data?.tree?.path]);
+
   const showNotice = (text: string) => {
     setNotice(text);
     setTimeout(() => setNotice(null), 2500);
   };
+
+  const registerRowRef = (path: string, el: HTMLDivElement | null) => {
+    if (el) rowRefs.current.set(path, el);
+    else rowRefs.current.delete(path);
+  };
+
+  const toggleExpanded = (path: string) => {
+    setExpandedPaths((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
+
+  const collapseAll = () => {
+    setExpandedPaths(new Set());
+  };
+
+  const expandToPath = (targetPath: string) => {
+    if (!data) return;
+    setExpandedPaths((prev) => {
+      const next = new Set(prev);
+      let p = targetPath;
+      while (p && p !== data.rootPath && p !== '/') {
+        const node = findNode(data.tree, p);
+        if (node && node.type === 'directory') next.add(p);
+        p = parentDir(p);
+      }
+      return next;
+    });
+  };
+
+  const handleSearchSelect = (path: string) => {
+    expandToPath(path);
+    setHighlightedPath(path);
+    setSearchQuery('');
+    setSearchOpen(false);
+    setTimeout(() => {
+      rowRefs.current.get(path)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }, 50);
+  };
+
+  // 搜索高亮后，点击任意位置取消高亮
+  useEffect(() => {
+    if (!highlightedPath) return;
+    const clear = () => setHighlightedPath(null);
+    document.addEventListener('mousedown', clear);
+    return () => document.removeEventListener('mousedown', clear);
+  }, [highlightedPath]);
 
   const handleContextMenu = (e: React.MouseEvent, node: FileTreeNode) => {
     e.preventDefault();
@@ -389,7 +496,11 @@ export default function SshFileTreePanel({ content, fileId }: SshFileTreePanelPr
   };
 
   const handleViewFileContent = (node: FileTreeNode) => {
-    if (!data || node.type !== 'file') return;
+    if (!data) return;
+    if (node.type !== 'file') {
+      showNotice('只有文件可以查看内容');
+      return;
+    }
     const uri = `ssh://${data.connectionId}${node.path}`;
     dispatch(
       openFile({
@@ -399,7 +510,6 @@ export default function SshFileTreePanel({ content, fileId }: SshFileTreePanelPr
         readOnly: true,
       })
     );
-    showNotice('已以只读模式打开文件，点击标签锁图标可编辑');
   };
 
   const menuItems: MenuItem[] = useMemo(() => {
@@ -451,7 +561,7 @@ export default function SshFileTreePanel({ content, fileId }: SshFileTreePanelPr
         id: 'viewFileContent',
         label: '查看文件内容',
         group: 'view',
-        disabled: !canOperate || node.type !== 'file',
+        disabled: !canOperate,
         onClick: () => handleViewFileContent(node),
       },
       {
@@ -463,6 +573,15 @@ export default function SshFileTreePanel({ content, fileId }: SshFileTreePanelPr
       },
     ];
   }, [contextMenu, data?.connectionId, data?.connection?.host, data?.rootPath]);
+
+  const allDirectories = useMemo(() => (data?.tree ? collectDirectories(data.tree) : []), [data?.tree]);
+  const filteredDirectories = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return [];
+    return allDirectories
+      .filter((d) => d.path.toLowerCase().includes(q))
+      .slice(0, 50);
+  }, [allDirectories, searchQuery]);
 
   if (!data) {
     return (
@@ -477,18 +596,82 @@ export default function SshFileTreePanel({ content, fileId }: SshFileTreePanelPr
   return (
     <div className="ssh-file-tree">
       <div className="ssh-file-tree__header">
-        <FolderIcon expanded />
-        <div className="ssh-file-tree__heading">
-          <span className="ssh-file-tree__title" title={tree.name}>{tree.name}</span>
-          <span className="ssh-file-tree__path" title={rootPath}>
-            {connection?.host ? `${connection.username}@${connection.host}:${connection.port}` : rootPath}
-          </span>
+        <div className="ssh-file-tree__header-left">
+          {/* 全部折叠 */}
+          <button
+            className="ssh-file-tree__action-btn"
+            title="全部折叠"
+            onClick={collapseAll}
+          >
+            <ChevronsDownUp size={14} />
+          </button>
+          <FolderIcon expanded />
+          <div className="ssh-file-tree__heading">
+            <span className="ssh-file-tree__title" title={tree.name}>{tree.name}</span>
+            <span className="ssh-file-tree__path" title={rootPath}>
+              {connection?.host ? `${connection.username}@${connection.host}:${connection.port}` : rootPath}
+            </span>
+          </div>
+        </div>
+        <div className="ssh-file-tree__header-actions">
+          {/* 目录搜索 */}
+          <div className="ssh-file-tree__search-wrap">
+            <Search size={14} className="ssh-file-tree__search-icon" />
+            <input
+              className="ssh-file-tree__search-input"
+              type="text"
+              placeholder="搜索目录..."
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setSearchOpen(true);
+              }}
+              onFocus={() => setSearchOpen(true)}
+              onBlur={() => setTimeout(() => setSearchOpen(false), 150)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  setSearchQuery('');
+                  setSearchOpen(false);
+                }
+              }}
+            />
+            {searchOpen && filteredDirectories.length > 0 && (
+              <div className="ssh-file-tree__search-dropdown">
+                {filteredDirectories.map((dir) => (
+                  <button
+                    key={dir.path}
+                    className="ssh-file-tree__search-item"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => handleSearchSelect(dir.path)}
+                    title={dir.path}
+                  >
+                    {dir.path}
+                  </button>
+                ))}
+              </div>
+            )}
+            {searchOpen && searchQuery.trim() && filteredDirectories.length === 0 && (
+              <div className="ssh-file-tree__search-dropdown ssh-file-tree__search-dropdown--empty">
+                无匹配目录
+              </div>
+            )}
+          </div>
+
         </div>
       </div>
       {notice && <div className="ssh-file-tree__notice">{notice}</div>}
       <div className="ssh-file-tree__body" onContextMenu={(e) => handleContextMenu(e, tree)}>
         {tree.children?.map((child) => (
-          <TreeNodeItem key={child.path} node={child} depth={0} onContextMenu={handleContextMenu} />
+          <TreeNodeItem
+            key={child.path}
+            node={child}
+            depth={0}
+            expandedPaths={expandedPaths}
+            highlightedPath={highlightedPath}
+            onToggleExpanded={toggleExpanded}
+            onContextMenu={handleContextMenu}
+            registerRowRef={registerRowRef}
+          />
         ))}
       </div>
       {contextMenu && (

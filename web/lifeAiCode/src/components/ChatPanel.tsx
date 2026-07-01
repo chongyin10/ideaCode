@@ -10,6 +10,7 @@ import type { PlanStep } from './agent/PlanChecklist';
 import { TodoDropdown } from './agent/TodoDropdown';
 import { AgentStatusSummary } from './agent/AgentStatusSummary';
 import { PlanTaskPanel } from './agent/PlanTaskPanel';
+import { TaskSummary } from './agent/TaskSummary';
 import { TodoListBlock } from './agent/TodoListBlock';
 import { InputPlanBar } from './agent/InputPlanBar';
 import { ShieldCheck, Brain, Pencil, ArrowDown, User, Sparkles, Paperclip, Send, MessageSquare, Loader2, Check, Square, ChevronDown, X, GripVertical, Code2, MessageCircleQuestion, FileText, Terminal, RefreshCw, Network, Lightbulb, GitCompare, Trash2, Archive, MapPin, Undo2, Info, Copy } from 'lucide-react';
@@ -893,6 +894,16 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
           if (pendingAgentEditsRef.current.some((e) => e.editId === msg.editId)) {
             setPendingAgentEdits((prev) => prev.filter((e) => e.editId !== msg.editId));
           }
+          // §Agent 自动模式：对应工具调用的 pending 标记清除，ReadFileGroup 显示为已完成
+          if (msg.status === 'applied') {
+            setToolCalls((prev) => prev.map((t) => {
+              if (t.status !== 'success' || !t.result || typeof t.result !== 'object') return t;
+              if (t.result.editId === msg.editId) {
+                return { ...t, result: { ...t.result, pending: false } };
+              }
+              return t;
+            }));
+          }
           break;
         }
         case 'historyCompacted': {
@@ -1637,6 +1648,16 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
                       workspaceRoot={context?.workspaceRoot}
                     />
                   )}
+
+                  {/* §任务末尾总结：Agent 完成后展示计划/读/写/改/删/命令等统计 */}
+                  {msg.role === 'assistant' && agentStatus?.status === 'done' && index === messages.length - 1 && (
+                    <TaskSummary
+                      toolCalls={toolCalls}
+                      planSteps={planSteps}
+                      changes={allChanges}
+                      duration={lastResponseDuration}
+                    />
+                  )}
                 </div>
               </div>
             </div>
@@ -2126,7 +2147,7 @@ function PreparingPlaceholder({
             {changes.map((change, idx) => {
               const stats = computeChangeStats(change);
               const fileName = change.filePath.split(/[\\/]/).pop() || change.filePath;
-              const tag = resolveChangeStatus(change, { isProcessing: true });
+              const tag = resolveChangeStatus(change, { isProcessing: agentStatus?.status === 'running' });
               return (
                 <button
                   key={idx}

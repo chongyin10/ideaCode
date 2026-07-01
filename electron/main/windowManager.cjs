@@ -1,8 +1,20 @@
-const { BrowserWindow } = require('electron');
+const { BrowserWindow, nativeImage } = require('electron');
 const path = require('path');
 const { Channels } = require('../shared/channels.cjs');
 
 const isDev = process.env.VITE_DEV_SERVER_URL !== undefined;
+
+/**
+ * 获取构建资源目录下的图标路径
+ * - 开发环境：相对于 electron/main/windowManager.cjs -> ../../build
+ * - 生产环境：electron-builder 将 buildResources 复制到 process.resourcesPath
+ */
+function getBuildResourcePath(...segments) {
+  if (isDev) {
+    return path.join(__dirname, '..', '..', 'build', ...segments);
+  }
+  return path.join(process.resourcesPath, ...segments);
+}
 
 /**
  * 窗口管理器 - 多窗口生命周期管理
@@ -30,6 +42,11 @@ class WindowManager {
     const windowId = ++this.windowIdCounter;
     const { title = 'IDEACODE', route = '/' } = options;
 
+    // 应用窗口图标：Windows/Linux 显示在标题栏/任务栏；macOS 使用 .app 图标
+    // Windows 优先使用多尺寸 .ico，Linux 使用 .png
+    const appIconName = process.platform === 'win32' ? 'icon.ico' : 'icon.png';
+    const appIcon = nativeImage.createFromPath(getBuildResourcePath(appIconName));
+
     const win = new BrowserWindow({
       width: 1400,
       height: 900,
@@ -37,6 +54,7 @@ class WindowManager {
       minHeight: 600,
       title,
       show: false,
+      icon: appIcon,
       // 自定义标题栏：macOS 隐藏标题栏背景保留交通灯；Win/Linux 完全无边框
       titleBarStyle: process.platform === 'darwin' ? 'hidden' : 'default',
       frame: process.platform !== 'darwin',

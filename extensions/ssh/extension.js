@@ -255,9 +255,9 @@ function registerSshCommands() {
  * 将 find 输出解析为目录树
  * 输入格式：每行 "type|path"，type 为 d 表示目录，其他表示文件
  */
-function buildRemoteTree(lines) {
+function buildRemoteTree(lines, explicitRootPath) {
   const entries = [];
-  let rootPath = '';
+  let rootPath = explicitRootPath || '';
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -284,7 +284,10 @@ function buildRemoteTree(lines) {
     return { name: '~', path: '~', type: 'directory', children: [] };
   }
 
-  const root = { name: '~', path: rootPath, type: 'directory', children: [] };
+  const rootName = explicitRootPath
+    ? (explicitRootPath.split('/').filter(Boolean).pop() || explicitRootPath)
+    : '~';
+  const root = { name: rootName, path: rootPath, type: 'directory', children: [] };
   const nodeMap = new Map();
   nodeMap.set(rootPath, root);
 
@@ -492,25 +495,43 @@ function findConnectedSession(connectionId) {
   );
 }
 
-async function getRemoteFileTree(connectionId) {
+async function getRemoteFileTree(connectionId, targetPath) {
   const conn = findConnection(connectionId);
   if (!conn) throw new Error('连接不存在');
   const session = findConnectedSession(connectionId);
   if (!session) throw new Error('没有已连接的会话');
 
+  // §需求：getRemoteFileTree 之前用 `find ~ -maxdepth 3 -printf '%y|%p\n'`，在某些
+  // 非交互式 shell（pty 模式）下 `~` 不会展开，导致 find 报"找不到 HOME"或
+  // 退出码非 0。改用 `${HOME:-/root}` 兜底，且并行列举多级目录以加快响应。
+  // 用单引号包住 printf 格式串，避免 shell 提前展开 $ % 等。
+  // §支持 targetPath：点击子目录时拉取该目录内容。home 表达式不加引号让 shell 展开 $HOME，
+  // 自定义路径用 shellEscape 包裹防注入。
+  const useCustomPath = targetPath && targetPath !== '/' && targetPath !== '~';
+  const basePath = useCustomPath ? shellEscape(targetPath) : '${HOME:-/root}';
+  const maxDepth = useCustomPath ? 2 : 3;
+  const findCmd = `find ${basePath} -maxdepth ${maxDepth} -mindepth 1 -printf '%y|%p\\n' 2>/dev/null || true`;
+
   const result = await vscode.commands.executeCommand('ssh.internal.execute', {
     id: session.id,
-    command: "find ~ -maxdepth 3 -printf '%y|%p\\n' 2>/dev/null",
+    command: findCmd,
   });
 
   if (!result.success) {
     throw new Error(result.error || '加载目录结构失败');
   }
-  if (result.code !== 0) {
-    throw new Error(result.stderr || '加载目录结构失败');
+  if (!result.stdout || !result.stdout.trim()) {
+    // 空输出（find 在受限 shell 下完全没回显）——返回空根，不当作失败
+    log('warn', '[SSH Extension] getRemoteFileTree 返回空输出，根目录不可读');
+    const emptyRoot = useCustomPath ? targetPath : '~';
+    const emptyName = useCustomPath
+      ? (targetPath.split('/').filter(Boolean).pop() || targetPath)
+      : '~';
+    return { rootPath: emptyRoot, tree: { name: emptyName, path: emptyRoot, type: 'directory', children: [] } };
   }
 
-  const tree = buildRemoteTree(result.stdout.split('\n'));
+  const explicitRoot = useCustomPath ? targetPath : undefined;
+  const tree = buildRemoteTree(result.stdout.split('\n'), explicitRoot);
   return { rootPath: tree.path, tree };
 }
 
@@ -548,6 +569,79 @@ async function executeRemote(connectionId, command, cwd) {
     stderr: typeof result.stderr === 'string' ? result.stderr : '',
     code: typeof result.code === 'number' ? result.code : -1,
   };
+}
+
+/**
+ * 建立指定连接的 SSH 会话（供主应用"连接到..."Modal 调用）
+ * 幂等：若已存在连接中/已连接的会话，直接返回现有会话。
+ */
+async function connectConnection(conn) {
+  const existing = Array.from(sessions.values()).find(
+    (s) => s.connectionId === conn.id && ['connecting', 'connected'].includes(s.status)
+  );
+  if (existing) {
+    log('log', '[SSH Extension] 已存在活动会话，跳过重复连接:', conn.host, conn.username);
+    return { sessionId: existing.id, status: existing.status };
+  }
+
+  log('log', '[SSH Extension] 收到连接请求:', conn.host, conn.username);
+  const sessionId = generateId();
+  const session = {
+    id: sessionId,
+    connectionId: conn.id,
+    name: conn.name,
+    username: conn.username,
+    host: conn.host,
+    cwd: '~',
+    status: 'connecting',
+    output: [`[${new Date().toLocaleTimeString()}] 正在连接 ${conn.host}:${conn.port || 22}...`],
+  };
+  sessions.set(sessionId, session);
+  if (globalBroadcast) {
+    globalBroadcast({ type: 'sessions', sessions: Array.from(sessions.values()) });
+  }
+
+  try {
+    const result = await vscode.commands.executeCommand('ssh.internal.connect', {
+      id: sessionId,
+      host: conn.host,
+      port: conn.port,
+      username: conn.username,
+      password: conn.password,
+      privateKey: conn.privateKey,
+    });
+
+    if (result.success) {
+      session.status = 'connected';
+      session.output.push(`[${new Date().toLocaleTimeString()}] 连接成功`);
+      session.output.push(getPrompt(session));
+      log('log', '[SSH Extension] 连接成功，sessionId:', sessionId, '当前 client 数:', sshClients.size);
+    } else {
+      session.status = 'failed';
+      session.output.push(`[${new Date().toLocaleTimeString()}] 连接失败: ${result.error}`);
+      log('error', `[SSH Extension] 连接失败 [${conn.name}]: ${result.error}`);
+    }
+  } catch (err) {
+    session.status = 'failed';
+    session.output.push(`[${new Date().toLocaleTimeString()}] 连接错误: ${err.message}`);
+    log('error', `[SSH Extension] 连接异常 [${conn.name}]: ${err.message}`);
+  }
+
+  if (globalBroadcast) {
+    globalBroadcast({ type: 'sessions', sessions: Array.from(sessions.values()) });
+  }
+
+  return {
+    sessionId,
+    status: session.status,
+    error: session.status === 'failed' ? session.output[session.output.length - 1] : undefined,
+  };
+}
+
+async function openConnection(connectionId) {
+  const conn = findConnection(connectionId);
+  if (!conn) throw new Error('连接不存在');
+  return connectConnection(conn);
 }
 
 async function handleFileOperation(payload) {
@@ -681,58 +775,7 @@ async function activate(context) {
       case 'connect': {
         const conn = connections.find((c) => c.id === message.connectionId);
         if (!conn) return;
-
-        // 防止同一连接重复创建活动会话
-        const existing = Array.from(sessions.values()).find(
-          (s) => s.connectionId === conn.id && ['connecting', 'connected'].includes(s.status)
-        );
-        if (existing) {
-          log('log', '[SSH Extension] 已存在活动会话，跳过重复连接:', conn.host, conn.username);
-          return;
-        }
-
-        log('log', '[SSH Extension] 收到连接请求:', conn.host, conn.username);
-        const sessionId = generateId();
-        const session = {
-          id: sessionId,
-          connectionId: conn.id,
-          name: conn.name,
-          username: conn.username,
-          host: conn.host,
-          cwd: '~',
-          status: 'connecting',
-          output: [`[${new Date().toLocaleTimeString()}] 正在连接 ${conn.host}:${conn.port || 22}...`],
-        };
-        sessions.set(sessionId, session);
-        broadcast({ type: 'sessions', sessions: Array.from(sessions.values()) });
-
-        try {
-          const result = await vscode.commands.executeCommand('ssh.internal.connect', {
-            id: sessionId,
-            host: conn.host,
-            port: conn.port,
-            username: conn.username,
-            password: conn.password,
-            privateKey: conn.privateKey,
-          });
-
-          if (result.success) {
-            log('log', '[SSH Extension] 连接成功，sessionId:', sessionId, '当前 client 数:', sshClients.size);
-            session.status = 'connected';
-            session.output.push(`[${new Date().toLocaleTimeString()}] 连接成功`);
-            session.output.push(getPrompt(session));
-          } else {
-            session.status = 'failed';
-            session.output.push(`[${new Date().toLocaleTimeString()}] 连接失败: ${result.error}`);
-            log('error', `[SSH Extension] 连接失败 [${conn.name}]: ${result.error}`);
-          }
-        } catch (err) {
-          session.status = 'failed';
-          session.output.push(`[${new Date().toLocaleTimeString()}] 连接错误: ${err.message}`);
-          log('error', `[SSH Extension] 连接异常 [${conn.name}]: ${err.message}`);
-        }
-
-        broadcast({ type: 'sessions', sessions: Array.from(sessions.values()) });
+        await connectConnection(conn);
         break;
       }
 
@@ -987,4 +1030,32 @@ function deactivate() {
   sessions.clear();
 }
 
-module.exports = { activate, deactivate, getRemoteFileTree, handleFileOperation, callFileSystemProvider, executeRemote };
+/**
+ * §需求：让主应用（"连接到..." Modal）能列出已配置的 SSH 连接。
+ * 用户通常已经在 SSH 面板配置好连接；Modal 输入 user@host 时按此列表匹配。
+ * 返回值只暴露脱敏信息（不含 password/privateKey），只用于 UI 选择/匹配。
+ */
+function listConnections() {
+  return connections.map((c) => {
+    // 以实际保存的凭证为准推断认证方式，避免用户选了密码但未填密码、或选了密钥等情况显示错误
+    let effectiveAuthType = c.authType;
+    if (c.privateKey) {
+      effectiveAuthType = 'key';
+    } else if (c.password) {
+      effectiveAuthType = 'password';
+    } else if (!effectiveAuthType) {
+      // 未配置任何凭证时，默认会尝试 ssh-agent / 本地默认私钥
+      effectiveAuthType = 'key';
+    }
+    return {
+      id: c.id,
+      name: c.name,
+      host: c.host,
+      port: c.port,
+      username: c.username,
+      authType: effectiveAuthType,
+    };
+  });
+}
+
+module.exports = { activate, deactivate, getRemoteFileTree, handleFileOperation, callFileSystemProvider, executeRemote, listConnections, openConnection };

@@ -46,19 +46,37 @@
 .ssh-file-tree__header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 8px 2px;
   border-bottom: 1px solid var(--border-color, #333333);
   background: var(--panel-header-bg, #252526);
   flex-shrink: 0;
 }
 
+.ssh-file-tree__header-left {
+  display: flex;
+  align-items: center;
+  gap: 0px;
+  min-width: 0;
+  flex: 1;
+}
+
+.ssh-file-tree__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
 .ssh-file-tree__heading {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: center;
   flex: 1;
   min-width: 0;
-  gap: 1px;
+  gap: 4px;
+  margin-left: 4px;
 }
 
 .ssh-file-tree__title {
@@ -106,6 +124,15 @@
 
 .ssh-file-tree__row:hover {
   background: var(--list-hover-bg, #2a2d2e);
+}
+
+.ssh-file-tree__row--highlight {
+  background: rgba(14, 99, 156, 0.45);
+  transition: background 0.2s ease;
+}
+
+.ssh-file-tree__row--highlight:hover {
+  background: rgba(14, 99, 156, 0.55);
 }
 
 .ssh-file-tree__chevron,
@@ -192,4 +219,96 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.ssh-file-tree__search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.ssh-file-tree__search-icon {
+  position: absolute;
+  left: 6px;
+  color: var(--text-secondary, #888888);
+  pointer-events: none;
+}
+
+.ssh-file-tree__search-input {
+  min-width: 300px;
+  max-width: 380px;
+  padding: 6px 6px 6px 24px;
+  background: var(--input-bg, #3c3c3c);
+  border: 1px solid var(--border-color, #3c3c3c);
+  border-radius: 4px;
+  color: var(--editor-fg, #cccccc);
+  font-size: 12px;
+  outline: none;
+  transition: width 0.2s ease, border-color 0.2s ease;
+  margin-right: 8px;
+}
+
+.ssh-file-tree__search-input:focus {
+  width: 180px;
+  border-color: var(--focus-border, #007acc);
+}
+
+.ssh-file-tree__search-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 220px;
+  max-width: 320px;
+  max-height: 240px;
+  overflow: auto;
+  z-index: 60;
+  background: var(--dropdown-bg, #252526);
+  border: 1px solid var(--border-color, #3c3c3c);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.ssh-file-tree__search-dropdown--empty {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--text-secondary, #888888);
+}
+
+.ssh-file-tree__search-item {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  color: var(--editor-fg, #cccccc);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ssh-file-tree__search-item:hover {
+  background: var(--list-hover-bg, #2a2d2e);
+}
+
+.ssh-file-tree__action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text-secondary, #888888);
+  cursor: pointer;
+  margin-right: 2px;
+}
+
+.ssh-file-tree__action-btn:hover {
+  background: var(--list-hover-bg, #2a2d2e);
+  color: var(--editor-fg, #cccccc);
 }

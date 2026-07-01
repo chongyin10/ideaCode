@@ -19,6 +19,28 @@ export const DEFAULT_SIDEBAR_WIDTH = 260;
 export const MIN_SIDEBAR_WIDTH = 150;
 export const MAX_SIDEBAR_WIDTH = 600;
 
+/** §需求：用户首次打开 IDE 面板时左侧 ActivityBar 应该是收缩的。
+ *  用 localStorage 持久化：首次启动没有持久值时默认 false（收缩），用户手动切换后再记住。 */
+const LAYOUT_STORAGE_KEY = 'ideacode_layout_sidepanel';
+
+function loadSidePanelVisible(): boolean {
+  try {
+    const raw = localStorage.getItem(LAYOUT_STORAGE_KEY);
+    if (raw === null) return false; // 首次启动默认收缩
+    return raw === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function persistSidePanelVisible(visible: boolean) {
+  try {
+    localStorage.setItem(LAYOUT_STORAGE_KEY, visible ? 'true' : 'false');
+  } catch {
+    /* 忽略写入错误 */
+  }
+}
+
 /** ActivityBar 面板默认顺序 */
 export const DEFAULT_PANEL_ORDER: PanelId[] = ['explorer', 'search', 'debug', 'extensions'];
 
@@ -61,7 +83,8 @@ interface LayoutState {
 }
 
 const initialState: LayoutState = {
-  sidePanelVisible: true,
+  // §需求：首次启动时默认收缩左侧 ActivityBar（更聚焦编辑区），用户手动切换后再记住
+  sidePanelVisible: loadSidePanelVisible(),
   sidePanelWidth: DEFAULT_SIDEBAR_WIDTH,
   activePanel: 'explorer',
   panelOrder: [...DEFAULT_PANEL_ORDER],
@@ -83,6 +106,8 @@ const layoutSlice = createSlice({
       if (state.sidePanelVisible && state.sidePanelWidth < MIN_SIDEBAR_WIDTH) {
         state.sidePanelWidth = DEFAULT_SIDEBAR_WIDTH;
       }
+      // §持久化用户对左侧 ActivityBar 的切换
+      persistSidePanelVisible(state.sidePanelVisible);
     },
     switchPanel: (state, action) => {
       const panel = action.payload as PanelId;
@@ -92,6 +117,7 @@ const layoutSlice = createSlice({
       }
       if (state.activePanel === panel && state.sidePanelVisible) {
         state.sidePanelVisible = false;
+        persistSidePanelVisible(state.sidePanelVisible);
       } else {
         state.activePanel = panel;
         state.sidePanelVisible = true;
@@ -102,6 +128,7 @@ const layoutSlice = createSlice({
         if (!state.panelOrder.includes(panel)) {
           state.panelOrder.push(panel);
         }
+        persistSidePanelVisible(state.sidePanelVisible);
       }
     },
     setSidePanelWidth: (state, action) => {

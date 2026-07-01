@@ -2,6 +2,20 @@ const { Tray, Menu, nativeImage } = require('electron');
 const path = require('path');
 const { Channels } = require('../shared/channels.cjs');
 
+const isDev = process.env.VITE_DEV_SERVER_URL !== undefined;
+
+/**
+ * 获取构建资源目录下的图标路径
+ * - 开发环境：相对于 electron/main/tray.cjs -> ../../build
+ * - 生产环境：electron-builder 将 buildResources 复制到 process.resourcesPath
+ */
+function getBuildResourcePath(...segments) {
+  if (isDev) {
+    return path.join(__dirname, '..', '..', 'build', ...segments);
+  }
+  return path.join(process.resourcesPath, ...segments);
+}
+
 /**
  * 系统托盘管理器
  * 
@@ -23,8 +37,14 @@ class TrayManager {
   }
 
   createTray() {
-    // 使用简单的 16x16 图标（生产环境可替换为应用图标）
-    const icon = nativeImage.createFromNamedImage('NSMenuOnStateTemplate', [16, 16]);
+    // 使用应用图标作为托盘图标
+    // macOS 菜单栏图标使用 22x22（@2x 44x44）尺寸；Windows/Linux 使用 16x16/32x32
+    const trayIconName = process.platform === 'darwin' ? 'trayIcon_22.png' : 'trayIcon_16.png';
+    const iconPath = getBuildResourcePath(trayIconName);
+    const icon = nativeImage.createFromPath(iconPath);
+    // 启用模板模式可使图标跟随系统深色/浅色菜单栏自动反色；
+    // 当前应用图标是彩色 logo，暂不使用模板模式以保持品牌色。
+    // icon.setTemplateImage(true);
     this.tray = new Tray(icon);
 
     const contextMenu = Menu.buildFromTemplate([

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { ToolCallInfo } from '../../types';
 import {
   FileText, ChevronDown, Check, Loader2, X, Search, List, Layers,
-  FilePlus, Edit3, Trash2, Clock,
+  FilePlus, Edit3, Trash2, Clock, Hourglass,
 } from 'lucide-react';
 
 interface ReadFileGroupProps {
@@ -73,11 +73,17 @@ function getToolDetail(call: ToolCallInfo): string {
   }
 }
 
+function isToolCallPending(call: ToolCallInfo) {
+  return call.status === 'success' &&
+    call.result && typeof call.result === 'object' &&
+    'pending' in call.result && call.result.pending === true;
+}
+
 /**
  * 文件操作状态图标：
  * - running → Loader2 旋转
  * - error → X
- * - success + pending（等待用户确认） → Clock
+ * - success + pending（等待用户确认） → Hourglass
  * - success（已确认/已完成） → Check
  */
 function getStatusIcon(call: ToolCallInfo) {
@@ -87,10 +93,8 @@ function getStatusIcon(call: ToolCallInfo) {
   if (call.status === 'error') {
     return <X size={11} strokeWidth={2.5} />;
   }
-  // success 状态下区分 pending 和已确认
-  const isPending = call.result && typeof call.result === 'object' && 'pending' in call.result && call.result.pending === true;
-  if (isPending) {
-    return <Clock size={11} strokeWidth={2} />;
+  if (isToolCallPending(call)) {
+    return <Hourglass size={11} strokeWidth={2} />;
   }
   return <Check size={11} strokeWidth={2.5} />;
 }
@@ -98,8 +102,7 @@ function getStatusIcon(call: ToolCallInfo) {
 function getStatusClass(call: ToolCallInfo): string {
   if (call.status === 'running') return 'read-file-group__status-icon--running';
   if (call.status === 'error') return 'read-file-group__status-icon--error';
-  const isPending = call.result && typeof call.result === 'object' && 'pending' in call.result && call.result.pending === true;
-  if (isPending) return 'read-file-group__status-icon--pending';
+  if (isToolCallPending(call)) return 'read-file-group__status-icon--pending';
   return 'read-file-group__status-icon--success';
 }
 
@@ -120,8 +123,9 @@ export function ReadFileGroup({ calls }: ReadFileGroupProps) {
   const currentName = getFileName(currentCall);
   const hasMore = calls.length > 1;
 
-  let statusIcon = <Check size={12} strokeWidth={2.5} />;
-  let statusClass = 'read-file-group__status--success';
+  const allPending = pendingCount > 0 && runningCount === 0 && errorCount === 0;
+  let statusIcon = allPending ? <Hourglass size={12} strokeWidth={2} /> : <Check size={12} strokeWidth={2.5} />;
+  let statusClass = allPending ? 'read-file-group__status--pending' : 'read-file-group__status--success';
   if (runningCount > 0) {
     statusIcon = <Loader2 size={12} strokeWidth={2.5} className="read-file-group__spinner" />;
     statusClass = 'read-file-group__status--running';
@@ -129,11 +133,6 @@ export function ReadFileGroup({ calls }: ReadFileGroupProps) {
     statusIcon = <X size={12} strokeWidth={2.5} />;
     statusClass = 'read-file-group__status--error';
   }
-
-  let statusText = '完成';
-  if (runningCount > 0) statusText = '执行中';
-  else if (errorCount > 0) statusText = '部分失败';
-  else if (pendingCount > 0) statusText = '待确认';
 
   return (
     <div className="tool-call-card read-file-group">
@@ -155,12 +154,15 @@ export function ReadFileGroup({ calls }: ReadFileGroupProps) {
             {hasMore && ` 等 ${calls.length} 项`}
           </span>
         )}
-        <span className={`read-file-group__status ${statusClass}`}>
-          {statusIcon}
-          {statusText}
-        </span>
         <span className={`read-file-group__chevron ${expanded ? 'read-file-group__chevron--open' : ''}`}>
           <ChevronDown size={14} strokeWidth={2} />
+        </span>
+        <span className={`read-file-group__status ${statusClass}`} title={
+          runningCount > 0 ? '执行中' :
+          errorCount > 0 ? '部分失败' :
+          allPending ? '等待确认' : '完成'
+        }>
+          {statusIcon}
         </span>
       </button>
 

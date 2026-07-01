@@ -715,21 +715,6 @@ function App() {
                           <pre key={idx} className="terminal-line">{line}</pre>
                         ))}
                       </div>
-                      {session.status === 'connected' && (
-                        <div className="command-bar">
-                          <input
-                            type="text"
-                            className="command-input"
-                            placeholder="输入命令..."
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                handleExecute(session.id, e.currentTarget.value);
-                                e.currentTarget.value = '';
-                              }
-                            }}
-                          />
-                        </div>
-                      )}
                     </div>
                   )}
                 </div>

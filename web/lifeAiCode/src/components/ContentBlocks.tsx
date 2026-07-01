@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import type { ContentBlock as ContentBlockType, FileStatus, StepType, StepStatus } from '../types';
 import { MarkdownContent } from './MarkdownContent';
+import { StepSummary } from './agent/StepSummary';
 import { parseProviderTags, type ProviderId, type ExtractedTag, type CanonicalTagName } from '../llmTags';
 
 /* ─────────────────────────────────────────────────────────────────── */
@@ -280,6 +281,10 @@ export function ContentBlocks({
 
   // AI 回复：渲染完整消息卡片
   const isStreaming = !completed;
+  // §任务列表归纳：把 <step> 标签从普通 block 流中抽出，统一渲染为顶部汇总面板
+  const stepBlocks = blocks.filter((b): b is Extract<ContentBlockType, { type: 'step' }> => b.type === 'step');
+  const otherBlocks = blocks.filter((b) => b.type !== 'step');
+
   return (
     <MessageCard
       title={title}
@@ -292,8 +297,11 @@ export function ContentBlocks({
       showActions={false}
       agentStatus={agentStatus}
     >
-      {blocks.map((block, idx) => {
-        const isLastBlock = idx === blocks.length - 1;
+      {stepBlocks.length > 0 && (
+        <StepSummary steps={stepBlocks} completed={completed} />
+      )}
+      {otherBlocks.map((block, idx) => {
+        const isLastBlock = idx === otherBlocks.length - 1;
         return (
           <BlockRenderer
             key={idx}

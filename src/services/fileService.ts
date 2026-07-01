@@ -92,6 +92,21 @@ export async function openDirectory(): Promise<{ source: FileSource; name: strin
   }
 }
 
+export async function openFileDialog(): Promise<{ source: FileSource; name: string } | null> {
+  if (isElectron()) {
+    const filePath = await window.electronAPI!.dialog.openFile();
+    if (!filePath) return null;
+    const name = filePath.split(/[\\/]/).pop() || filePath;
+    return { source: filePath, name };
+  }
+  try {
+    const [fileHandle] = await window.showOpenFilePicker();
+    return { source: fileHandle, name: fileHandle.name };
+  } catch {
+    return null;
+  }
+}
+
 export async function readDirectory(parentSource: FileSource): Promise<FileEntry[]> {
   if (isRemoteUri(parentSource)) {
     const provider = getFileSystemProvider(parentSource);

@@ -21,8 +21,22 @@ if (process.platform === 'darwin' && !process.env.OS_ACTIVITY_MODE) {
   process.env.OS_ACTIVITY_MODE = 'disable';
 }
 
-const { app } = require('electron');
+const { app, nativeImage } = require('electron');
 const { fixPath } = require('./main/utils/env.cjs');
+
+const isDev = process.env.VITE_DEV_SERVER_URL !== undefined;
+
+/**
+ * 获取构建资源目录下的图标路径
+ * - 开发环境：相对于 electron/main.cjs -> ../build
+ * - 生产环境：electron-builder 将 buildResources 复制到 process.resourcesPath
+ */
+function getBuildResourcePath(...segments) {
+  if (isDev) {
+    return path.join(__dirname, '..', 'build', ...segments);
+  }
+  return path.join(process.resourcesPath, ...segments);
+}
 
 // 先补全 PATH，确保后续子进程能找到用户安装的 git 等命令（macOS GUI 启动时尤为重要）
 fixPath();
@@ -163,6 +177,15 @@ const canStart = lifecycleManager.init();
 if (!canStart) return;
 
 app.whenReady().then(() => {
+  // 设置 macOS Dock 图标（开发/生产统一从构建资源加载）
+  if (process.platform === 'darwin' && app.dock) {
+    try {
+      app.dock.setIcon(nativeImage.createFromPath(getBuildResourcePath('icon.png')));
+    } catch (e) {
+      console.warn('[Main] 设置 Dock 图标失败:', e.message);
+    }
+  }
+
   // 创建应用菜单
   createAppMenu();
 

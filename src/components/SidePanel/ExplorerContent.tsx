@@ -62,6 +62,7 @@ import FileTree, { type PendingCreate, type PendingRename, type LastOperation, g
 import ContextMenu, { type MenuItem } from '../ContextMenu';
 import InlineInput from '../InlineInput';
 import { DeleteConfirmDialog } from '../DeleteConfirmDialog';
+import CloneRepoModal from '../CloneRepoModal';
 import { getMenuManager, contributionToMenuItem } from '../../plugin/menuManager';
 
 /* ─── Hebbian 菜单频率学习 ─── */
@@ -169,6 +170,7 @@ const ExplorerContent = () => {
   // §打开的编辑器：没有已打开文件时默认收起，避免空列表占用空间
   const [openEditorsExpanded, setOpenEditorsExpanded] = useState(() => visibleOpenedFiles.length > 0);
   const [projectExpanded, setProjectExpanded] = useState(true);
+  const [cloneRepoOpen, setCloneRepoOpen] = useState(false);
   const [timelineExpanded, setTimelineExpanded] = useState(false);
 
   // §打开的编辑器：当从空状态首次打开文件时自动展开，方便查看
@@ -910,7 +912,10 @@ const ExplorerContent = () => {
                 <FolderOpenIcon size={14} strokeWidth={1.5} />
                 {t('explorer.empty.openFolder')}
               </button>
-              <button className="explorer-empty__btn" onClick={() => dispatch(switchPanel('workbench.scm'))}>
+            </div>
+            <p className="explorer-empty__label">本地克隆仓库</p>
+            <div className="explorer-empty__btns">
+              <button className="explorer-empty__btn" onClick={() => setCloneRepoOpen(true)}>
                 <Download size={14} strokeWidth={1.5} />
                 {t('explorer.empty.cloneRepo')}
               </button>
@@ -918,6 +923,8 @@ const ExplorerContent = () => {
           </div>
         </div>
       )}
+
+      {cloneRepoOpen && <CloneRepoModal onClose={() => setCloneRepoOpen(false)} />}
 
       {(rootSource || remoteRoots.length > 0) && (
         <>

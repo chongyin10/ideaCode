@@ -33,25 +33,35 @@
   font-size: 24px;
 }
 
+/* §需求：欢迎页"启动"操作列表上下布局（参考图2的 layout） */
 .welcome-actions {
   display: flex;
-  gap: 12px;
-  margin-top: 28px;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 24px;
+  min-width: 280px;
+  align-items: flex-start;
 }
 
+/* §需求：欢迎页按钮采用行内紧凑布局（图片 2 风格），列在 actions 容器内 */
 .open-folder-btn {
-  padding: 10px 20px;
-  background: #0e639c;
-  color: #fff;
+  padding: 6px 12px;
+  background: transparent;
+  color: var(--text-secondary, #4fc1ff);
   border: none;
-  border-radius: 6px;
+  border-radius: 4px;
   cursor: pointer;
-  font-size: 14px;
-  font-weight: 500;
-  transition: all 0.2s ease;
-  display: flex;
+  font-size: 13px;
+  font-weight: 400;
+  transition: all 0.15s ease;
+  display: inline-flex;
   align-items: center;
   gap: 8px;
+  text-align: left;
+}
+.open-folder-btn:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary, #fff);
 }
 
 .open-folder-btn:hover {
@@ -65,11 +75,9 @@
 }
 
 .open-folder-btn.secondary {
-  background: #0e639c;
-  color: #cccccc;
+  background: transparent;
+  color: var(--text-secondary, #4fc1ff);
 }
-
-.open-folder-btn.secondary:hover {
   background: #0e639c;
   color: #fff;
 }
