@@ -16,14 +16,13 @@
 const EXT_LANG_MAP: Record<string, string> = {
   // TypeScript 系列（含 ESM/CJS 变体）
   ts: 'typescript',
-  tsx: 'typescript',  // §保持 typescript：有 Monarch tokenizer 提供同步基础高亮兜底。
-  // 远程 tsx 文件在 MonacoEditor onMount 中覆盖为 typescriptreact（依赖 TS worker 提供 JSX tokenization）。
+  tsx: 'typescript',  // §统一 typescript：Monarch tokenizer 提供同步基础高亮，JSX 由 buildJsxDecorations 补色
   mts: 'typescript',
   cts: 'typescript',
 
   // JavaScript 系列
   js: 'javascript',
-  jsx: 'javascript',  // §同上：保持 javascript 有 Monarch tokenizer，远程文件在 onMount 中覆盖
+  jsx: 'javascript',  // §同上：Monarch tokenizer + buildJsxDecorations
   mjs: 'javascript',
   cjs: 'javascript',
 

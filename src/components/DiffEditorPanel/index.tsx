@@ -28,6 +28,7 @@ import {
   SEMANTIC_LANGUAGES,
 } from '../../services/monacoSemanticTokens';
 import { tsService, type TsSemanticTokens } from '../../services/tsLanguageService';
+import { isRemoteUri } from '../../services/fileService';
 import './DiffEditorPanel.css';
 
 /* ─── 辅助：为 diff 左侧（git HEAD）构造独立虚拟路径 ─── */
@@ -79,18 +80,22 @@ const DiffEditorPanel = ({ diffData, groupId }: DiffEditorPanelProps) => {
   const [currentDiffIndex, setCurrentDiffIndex] = useState(-1);
   const [lineChanges, setLineChanges] = useState<Monaco.editor.ILineChange[]>([]);
 
-  // 高亮准备状态：TS/JS 文件需要等 tsserver 加载并预取 semantic tokens 完成后再渲染 DiffEditor，
+  // 高亮准备状态：本地 TS/JS 文件需要等 tsserver 预取 semantic tokens 完成后再渲染 DiffEditor，
   // 否则 DiffEditor 首次渲染时 provider 返回空 → Monaco 标记 model 为"无 semantic tokens" → 高亮永不出现。
+  // SSH 远程文件无 tsserver，预取会失败并导致 5 秒轮询延迟，直接渲染（Monarch 基础高亮兜底）。
   // 非 TS/JS 文件不需要等待，直接渲染。
   const isTsJs = !!(diffData.language && SEMANTIC_LANGUAGES.has(diffData.language));
-  const [tokensReady, setTokensReady] = useState(!isTsJs);
+  const hasTsserver = typeof window !== 'undefined' && !!window.electronAPI?.tsserver;
+  const isRemote = diffData.filePath ? isRemoteUri(diffData.filePath) : false;
+  const shouldPrefetch = isTsJs && hasTsserver && !isRemote;
+  const [tokensReady, setTokensReady] = useState(!shouldPrefetch);
 
   // 预取 semantic tokens：在渲染 DiffEditor 之前，把文件推送给 tsserver 并等待 tokens 返回。
   // 这样 DiffEditor 首次渲染时 provider 就能用预取的 tokens，高亮立即生效。
   // 左右两个面板独立预取：modified 用真实 filePath，original 用虚拟路径（保留扩展名让 tsserver 识别语言），
   // 互不干扰。tsserver 一个 filePath 只持有一份内容，若 original 复用 filePath 会覆盖 modified。
   useEffect(() => {
-    if (!isTsJs || !diffData.filePath) {
+    if (!shouldPrefetch || !diffData.filePath) {
       setTokensReady(true);
       return;
     }
@@ -152,7 +157,7 @@ const DiffEditorPanel = ({ diffData, groupId }: DiffEditorPanelProps) => {
       // 清理虚拟文件
       try { tsService.close(originalPath); } catch { /* 忽略 */ }
     };
-  }, [diffData.filePath, diffData.modified, diffData.original, isTsJs]);
+  }, [diffData.filePath, diffData.modified, diffData.original, shouldPrefetch]);
 
   // 使用 groupId 生成唯一的 model path，避免分屏时 model 冲突
   const modelPathPrefix = groupId ? `${groupId}-` : '';
@@ -208,8 +213,9 @@ const DiffEditorPanel = ({ diffData, groupId }: DiffEditorPanelProps) => {
         } catch { /* editor 可能已销毁 */ }
       };
 
-      if (hasTsserver && isTsJs && filePath) {
+      if (hasTsserver && isTsJs && filePath && !isRemoteUri(filePath)) {
         // open 是幂等的：如果主编辑器已 open 该文件，再次 open 会更新内容（无害）
+        // SSH 远程文件跳过：tsserver 无法处理 ssh:// URI
         tsService.open(filePath, diffData.modified).catch(() => {});
 
         // 事件驱动重试：tsserver 首次 handshake 期间 semanticTokens 可能返回 null，

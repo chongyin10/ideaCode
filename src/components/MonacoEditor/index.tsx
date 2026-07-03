@@ -895,25 +895,17 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
           };
         }
 
-        // 确保 model 语言与 prop 一致，并强制刷新 tokenization；
-        // 解决首次打开 tsx/jsx 时 Monaco worker 尚未就绪导致无高亮的问题。
+        // §统一高亮链条：本地与远程文件均使用 typescript/javascript 语言 ID。
+        // 该语言有 Monarch tokenizer 提供同步基础高亮（关键字、字符串、注释等），
+        // 配合 buildJsxDecorations 状态机补充 JSX 标签名/尖括号着色。
+        // 本地文件额外由 tsserver 提供 semantic tokens 增强；远程文件仅基础高亮。
+        // 不使用 typescriptreact：它没有 Monarch tokenizer，在 TS worker 异步
+        // tokenization 不可用时会完全无高亮（SSH 远程文件即此问题）。
         const model = editor.getModel();
         if (model) {
-          // §远程 tsx/jsx 文件覆盖为 typescriptreact/javascriptreact 语言 ID，
-          // 让 TS worker 提供更完整的 JSX tokenization（含 JSX 属性、表达式等）。
-          // 本地文件保持 typescript/javascript，有 Monarch tokenizer 提供基础高亮兜底，
-          // 避免 typescriptreact 无 Monarch tokenizer 导致本地文件一片灰色。
-          let modelLanguage = language;
-          if (isBrowser) {
-            if (language === 'typescript') modelLanguage = 'typescriptreact';
-            else if (language === 'javascript') modelLanguage = 'javascriptreact';
+          if (model.getLanguageId() !== language) {
+            monaco.editor.setModelLanguage(model, language);
           }
-          if (model.getLanguageId() !== modelLanguage) {
-            monaco.editor.setModelLanguage(model, modelLanguage);
-          }
-          // 仅重置一次 tokenization：触发 Monaco 重新从 worker 请求基础语法高亮。
-          // 注意：语义高亮（semantic tokens）由 Monaco 内部自动调度，provider 注册后
-          // 会在后台异步请求，无需手动 resetTokenization，否则会导致高亮闪动。
           try {
             (model as unknown as { tokenization: { resetTokenization(): void } }).tokenization.resetTokenization();
           } catch { /* 忽略 */ }
