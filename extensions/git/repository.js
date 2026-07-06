@@ -65,6 +65,8 @@ class Repository {
     this._gitWatcher = null;
     /** @type {NodeJS.Timeout|null} */
     this._watcherRefreshTimer = null;
+    /** @type {boolean} 标记 .git/index 是否已用 watchFile 监听，dispose 时 unwatchFile */
+    this._indexWatched = false;
 
     // 远程仓库不使用 fs.watch（路径在远程主机上），仅靠轮询
     if (!this._isRemote) {
@@ -120,6 +122,23 @@ class Repository {
             this._scheduleWatcherRefresh();
           }
         });
+
+        // §macOS 兼容：fs.watch 对 .git/index 的 rename 操作监听不可靠。
+        // git add/commit 等命令会写入 index.lock 再 rename 为 index，FSEvents 可能漏报，
+        // 导致终端执行 git 命令后 SCM 面板不刷新。
+        // 用 fs.watchFile（基于 stat 轮询）补充监听 index 文件的 mtime 变化，可靠兜底。
+        // 只对单个文件使用，开销可控（默认 ~5s 轮询间隔）。
+        const indexPath = path.join(gitDir, 'index');
+        if (fs.existsSync(indexPath)) {
+          this._indexWatched = true;
+          fs.watchFile(indexPath, { persistent: false, interval: 2000 }, (curr, prev) => {
+            if (this._disposed) return;
+            if (curr.mtimeMs !== prev.mtimeMs) {
+              console.log(`[Repository] §诊断 index mtime 变化: ${prev.mtimeMs} → ${curr.mtimeMs}, 触发 refresh`);
+              this._scheduleWatcherRefresh();
+            }
+          });
+        }
       }
     } catch (err) {
       console.error('[Repository] 启动文件监听器失败:', err.message);
@@ -201,9 +220,11 @@ class Repository {
         ['status', '--porcelain=v2', '--branch', '--untracked-files=normal', '--ignored=no'],
         { timeout: 10000 }
       );
+      console.log(`[Repository] §诊断 git status exit=${output.code} stdoutLen=${output.stdout.length} stderr=${(output.stderr || '').slice(0, 200)}`);
       if (output.code !== 0) {
         // 可能在 repo 失效时（如 .git 被删除）
         this._lastError = output.stderr || `exit code ${output.code}`;
+        console.log(`[Repository] §诊断 git status 失败，保留旧 state，不 fire`);
         return;
       }
       this.state = parseStatus(output.stdout);
@@ -229,9 +250,11 @@ class Repository {
       // 子模块内部的文件增删改需要 cd 进子模块目录单独执行 git status。
       await this._refreshSubmodules();
 
+      console.log(`[Repository] §诊断 refresh 完成 staged=${this.state.staged.length} changes=${this.state.changes.length} merge=${this.state.merge.length} untracked=${this.state.untracked.length} listeners=${this._changeListeners.size}`);
       this._fire();
     } catch (err) {
       this._lastError = err.message;
+      console.log(`[Repository] §诊断 _doRefresh 异常: ${err.message}`);
     }
   }
 
@@ -743,6 +766,11 @@ class Repository {
     if (this._gitWatcher) {
       try { this._gitWatcher.close(); } catch { /* ignore */ }
       this._gitWatcher = null;
+    }
+    // 清理 .git/index 的 watchFile 监听
+    if (this._indexWatched) {
+      try { fs.unwatchFile(path.join(this.rootPath, '.git', 'index')); } catch { /* ignore */ }
+      this._indexWatched = false;
     }
     this._changeListeners.clear();
   }

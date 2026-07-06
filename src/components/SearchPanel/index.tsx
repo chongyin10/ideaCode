@@ -58,7 +58,7 @@ const SearchPanel = forwardRef<SearchPanelRef>((_props, ref) => {
     handleSearchInternal,
     totalMatches,
     toggleExpanded,
-  } = useSearch(entries, pendingSearchQuery, () => dispatch(setPendingSearchQuery(null)));
+  } = useSearch(entries, rootSource, pendingSearchQuery, () => dispatch(setPendingSearchQuery(null)));
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 

@@ -1,0 +1,3388 @@
+================================================================================
+                    IDEACODE 电子集成开发环境 - 技术文档（面试版）
+================================================================================
+
+文档版本：v1.0
+生成日期：2026-07-03
+适用场景：技术面试自述 / 项目深度复盘
+项目定位：基于 Electron + React + Monaco Editor 的跨平台 IDE，支持本地与 SSH
+         远程开发、Git 版本控制、AI 辅助编程、扩展插件生态。
+
+
+================================================================================
+                          目录
+================================================================================
+
+第一篇  项目总览与架构思想
+  1.1 项目定位与技术栈
+  1.2 三层进程隔离架构
+  1.3 微内核架构演进（v1 单体 → v2 微内核）
+  1.4 双轨策略与降级容错
+
+第二篇  主进程核心（Main Process）
+  2.1 主进程入口装配（main.cjs）
+  2.2 v8-compile-cache 加速二次启动
+  2.3 窗口管理器（WindowManager）
+  2.4 生命周期管理（LifecycleManager）
+  2.5 系统资源监控（SystemMonitor）
+
+第三篇  进程与线程的创建、分配、销毁全流程【核心】
+  3.1 ProcessManager 通用进程管理器（内核层）
+  3.2 扩展宿主进程 fork 全流程
+  3.3 tsserver 子进程 spawn 全流程（LSP）
+  3.4 node-pty 终端子进程创建全流程
+  3.5 Worker 线程的创建与销毁
+  3.6 进程间消息发送与事件回调
+  3.7 崩溃自动重启机制（容错核心）
+  3.8 进程销毁的两段式终止（SIGTERM→SIGKILL）
+
+第四篇  通信机制与消息总线
+  4.1 ServiceBus 四种通信模式
+  4.2 JSON-RPC 2.0 协议实现
+  4.3 IPC 桥接（ElectronMainIpcBridge）
+  4.4 三方通信链路（渲染↔主↔扩展宿主）
+  4.5 智能路由分流（_needsRendererData）
+
+第五篇  扩展系统
+  5.1 扩展宿主进程入口
+  5.2 扩展加载、激活、卸载机制
+  5.3 VSCode API Bridge 模拟
+  5.4 扩展热重启机制（文件监听 + 防抖 + 优雅退出）
+  5.5 跨扩展协作（Git ↔ SSH）
+
+第六篇  编辑器与语言服务
+  6.1 Monaco 编辑器集成
+  6.2 多语言按需加载
+  6.3 JSX 状态机 decoration
+  6.4 TS Language Service 自建 Worker 方案
+  6.5 tsserver LSP 协议工程
+  6.6 语义高亮 token 转换与位置重映射
+  6.7 SSH 远程文件降级策略
+
+第七篇  终端管理
+  7.1 node-pty 终端子进程创建
+  7.2 多 shell fallback 与 zsh compinit 清理
+  7.3 PID 流控 + 水位线背压机制
+  7.4 xterm.js 前端集成与双重 rAF 防黑屏
+  7.5 快照迁移与 StrictMode 双调陷阱
+  7.6 SSH 终端 EOL 与 Backspace 适配
+
+第八篇  文件系统与搜索
+  8.1 文件系统 IPC 处理器
+  8.2 同步 vs 异步 I/O 取舍原则
+  8.3 文件监听（主进程直监 + Worker 预留）
+  8.4 FileSystemProvider 远程抽象
+  8.5 双缓存策略（LRU + W-TinyLFU）
+  8.6 搜索 Worker 与流式返回
+
+第九篇  Git 集成
+  9.1 Git 命令序列化（Promise 队列）
+  9.2 index.lock 残留清理
+  9.3 Repository 状态刷新机制
+  9.4 远程仓库的特殊处理
+
+第十篇  前端架构与状态管理
+  10.1 应用入口与 Monaco Worker 工厂
+  10.2 Redux Toolkit 状态管理
+  10.3 Fine-grained Selectors 性能优化
+  10.4 Preload 安全桥接
+  10.5 插件系统架构（内置 + 扩展桥接）
+  10.6 文件树优化（递归 memo + 享元）
+  10.7 Electron 事件 Hooks
+
+第十一篇  算法库（亮点）
+  11.1 缓存算法（LRU / ARC / W-TinyLFU）
+  11.2 搜索算法（Boyer-Moore / FM-Index / 倒排索引 / SimHash）
+  11.3 模糊匹配（Levenshtein / Jaro-Winkler / 模糊 DP）
+  11.4 智能算法（文件预测 / Node2Vec / 卡尔曼 / PID / Lyapunov）
+  11.5 神经科学启发（BCM / STDP / Oja）
+  11.6 强化学习（Thompson Sampling / UCB1）
+
+第十二篇  性能优化与工程约定
+  12.1 主进程性能优化清单
+  12.2 渲染进程性能优化清单
+  12.3 打包与构建优化
+
+第十三篇  面试问答要点
+  13.1 架构设计类问题
+  13.2 进程与线程类问题
+  13.3 性能优化类问题
+  13.4 算法与数据结构类问题
+  13.5 工程实践类问题
+
+
+================================================================================
+                  第一篇  项目总览与架构思想
+================================================================================
+
+----------------------------------------
+1.1 项目定位与技术栈
+----------------------------------------
+
+项目名称：IDEACODE
+项目类型：跨平台集成开发环境（IDE）
+技术栈：
+  - 框架：Electron 30 + React 18 + TypeScript 5.5
+  - 状态管理：Redux Toolkit 2.12 + React-Redux 9.3
+  - 编辑器：Monaco Editor 0.55（VSCode 同款）
+  - 终端：node-pty 1.1 + xterm.js 6.0（WebGL/搜索/序列化 addon）
+  - 语言服务：TypeScript Language Server 4.4（LSP 协议）
+  - 通信：JSON-RPC 2.0 + Electron IPC
+  - 构建：Vite 5 + electron-builder 24
+  - 原生模块：systeminformation（系统监控）、node-pty（终端）
+
+核心能力：
+  1. 多窗口编辑器（每个窗口独立 Chromium 渲染进程）
+  2. 本地 + SSH 远程开发（统一文件系统抽象）
+  3. Git 版本控制（命令序列化、状态实时刷新）
+  4. AI 辅助编程（Agent 模式、代码补全、Diff 确认）
+  5. 扩展插件生态（独立进程隔离、VSCode API 兼容）
+  6. 智能搜索（多算法级联：SimHash + BM25 + Bandit）
+  7. 跨平台支持（macOS / Windows / Linux，universal/arm64/x64）
+
+
+----------------------------------------
+1.2 三层进程隔离架构
+----------------------------------------
+
+IDEACODE 采用三层进程隔离架构，这是整个项目最核心的设计思想：
+
+┌─────────────────────────────────────────────────────────────────┐
+│  渲染进程 (Renderer Process) — 每个编辑器窗口一个独立 Chromium   │
+│  ─────────────────────────────────────────────────────────────  │
+│  职责：页面渲染、用户交互、Monaco 编辑器、xterm 终端前端         │
+│  隔离：contextIsolation=true, nodeIntegration=false, sandbox=true│
+│  通信：只能通过 preload 暴露的受限 API 调用主进程                │
+└─────────────────────────────────────────────────────────────────┘
+                              ▲▼ ipcRenderer / ipcMain
+┌─────────────────────────────────────────────────────────────────┐
+│  主进程 (Main Process) — 全局管家，单一实例                      │
+│  ─────────────────────────────────────────────────────────────  │
+│  职责：窗口管理、菜单栏、系统托盘、IPC 路由、子进程生命周期      │
+│  特权：唯一能访问操作系统 API（fs、dialog、child_process）       │
+│  风险：阻塞会影响所有窗口，因此严禁同步 I/O                     │
+└─────────────────────────────────────────────────────────────────┘
+                              ▲▼ fork (IPC) / spawn (stdio)
+┌─────────────────────────────────────────────────────────────────┐
+│  扩展宿主进程 (Extension Host) — 独立 Node.js 子进程             │
+│  ─────────────────────────────────────────────────────────────  │
+│  职责：运行所有第三方插件，模拟 VSCode API                       │
+│  隔离：ELECTRON_RUN_AS_NODE=1，纯 Node 模式无 Chromium           │
+│  通信：JSON-RPC 2.0 over Node IPC（process.send / child.send）   │
+└─────────────────────────────────────────────────────────────────┘
+
+设计目标：
+  1. 进程隔离：扩展崩溃不会拖垮主界面
+  2. 安全隔离：扩展无法直接访问 DOM 或操作系统 API
+  3. 资源隔离：每个窗口独立内存空间，互不影响
+  4. 故障隔离：单个窗口卡死不影响其他窗口
+
+主进程入口 main.cjs 中的架构注释（行 57-87）明确记录了这一设计：
+
+  【主进程 (Main Process)】
+    全局"管家"，负责窗口管理、菜单栏、系统托盘等原生集成。
+    管理所有子进程（渲染进程、扩展宿主进程、Worker 线程）的生命周期。
+
+  【渲染进程 (Renderer Process)】
+    每个编辑器窗口对应一个独立的 Chromium 进程。
+    负责页面渲染和交互，某个页面卡死不会影响其他窗口。
+
+  【扩展宿主进程 (Extension Host Process)】
+    独立的 Node.js 子进程，所有第三方插件在此运行。
+    通过 JSON-RPC 协议与主进程通信，保证插件崩溃不会拖垮主界面。
+
+
+----------------------------------------
+1.3 微内核架构演进（v1 单体 → v2 微内核）
+----------------------------------------
+
+项目经历了从单体架构到微内核架构的演进，main.cjs 行 60-63 记录：
+
+  v1: 单体架构 — 所有 Manager 手动实例化，IPC Handler 分散注册
+  v2: 微内核架构 — 引入 ServiceBus + 服务化拆分 (当前)
+
+微内核核心三件套（位于 packages/kernel/）：
+
+  1. ServiceBus（消息总线）：统一消息总线，替代 channels.cjs 硬编码
+  2. ServiceRegistry（服务注册表）：服务注册发现、依赖拓扑排序
+  3. 服务适配器：每个 IPC Handler 变为独立服务
+
+微内核的解耦思想：内核零 Electron 依赖，通过两个注入点适配多平台
+  - IpcBridgeAdapter 接口：注入 IPC 通信能力
+  - ProcessManager.setSpawnFn()：注入进程创建函数
+
+Microkernel 类的精简实现（packages/kernel/src/Microkernel.ts）：
+
+  export class Microkernel {
+    readonly bus: ServiceBus;
+    readonly processManager: ProcessManager;
+    private _isRunning = false;
+
+    constructor() {
+      this.bus = new ServiceBus();
+      this.processManager = new ProcessManager();
+    }
+
+    async init(config?: KernelConfig): Promise<void> {
+      if (config?.services) {
+        for (const { manifest, factory } of config.services) {
+          const instance = factory ? factory() : {};
+          this.bus.registerService(manifest, instance);
+        }
+      }
+    }
+
+    setupIpcBridge(adapter: IpcBridgeAdapter): void {
+      // 注入"出口"：本地找不到处理器时，委托给平台适配器
+      this.bus.setRemoteInvoke((method, params) => adapter.invoke(method, params));
+      this.bus.setRemoteNotify((method, params) => adapter.notify(method, params));
+      // 注入"入口"：平台收到远程请求时，调用本地处理器
+      adapter.onRequest(async (method, params) => {
+        return this.bus.invokeLocal(method, params);
+      });
+    }
+
+    async start(): Promise<void> {
+      this.bus.subscribe('kernel.healthCheck', async () => {
+        const results = await this.bus.registry.healthCheck();
+        return { healthy: Array.from(results.values()).every(Boolean) };
+      });
+    }
+
+    async stop(): Promise<void> {
+      this.processManager.stopAll();   // 先停子进程
+      this._isRunning = false;
+    }
+  }
+
+
+----------------------------------------
+1.4 双轨策略与降级容错
+----------------------------------------
+
+主进程入口通过环境变量 IDEACODE_MICROKERNEL 在新旧架构间切换：
+
+  const useMicrokernel = process.env.IDEACODE_MICROKERNEL === '1';
+
+  if (useMicrokernel) {
+    try {
+      const { createElectronIpcBridge } = require('../packages/kernel/src/ipc/ElectronMainIpcBridge.cjs');
+      const bus = createInlineServiceBus();
+      createElectronIpcBridge(bus, { windowManager, extensionHostManager, historyManager });
+      global.__kernel__ = { bus };
+    } catch (err) {
+      console.warn('[Main] 微内核初始化失败，回退到传统模式:', err.message);
+      registerIpcHandlers({ windowManager, extensionHostManager, historyManager });
+    }
+  } else {
+    registerIpcHandlers({ windowManager, extensionHostManager, historyManager });
+  }
+
+设计要点：
+  1. Feature Flag 控制：默认传统模式（稳定），微内核可通过环境变量启用
+  2. try/catch 自动降级：微内核初始化失败自动回退到传统模式
+  3. createInlineServiceBus()：CJS 轻量版 ServiceBus，因 TypeScript 内核需编译，
+     在 transpiled 环境用内联对象兼容，体现渐进式迁移智慧
+
+
+================================================================================
+                  第二篇  主进程核心（Main Process）
+================================================================================
+
+----------------------------------------
+2.1 主进程入口装配（main.cjs）
+----------------------------------------
+
+主进程入口的启动时序（行 1-207）：
+
+  1. v8-compile-cache 预热（加速二次启动）—— 必须在所有 require 之前
+  2. macOS 抑制 NSLog 噪音（OS_ACTIVITY_MODE=disable）—— 必须在 require electron 前
+  3. fixPath() 补全 PATH —— macOS GUI 启动时 PATH 缺失会导致 git 等命令找不到
+  4. 创建 5 个核心 Manager：
+     - WindowManager（窗口管理）
+     - TrayManager（系统托盘）
+     - LifecycleManager（生命周期）
+     - ExtensionHostManager（扩展宿主）
+     - HistoryManager（历史记录）
+  5. 根据 IDEACODE_MICROKERNEL 二选一注册 IPC
+  6. lifecycleManager.init() 单实例锁检查，未拿到锁直接 return
+  7. app.whenReady()：
+     - 设置 Dock 图标（macOS）
+     - createAppMenu / createTray / createWindow
+     - SystemMonitor.start()（5s 间隔监控）
+     - setTimeout 2s 后启动 extensionHost（避免与启动竞争资源）
+
+
+----------------------------------------
+2.2 v8-compile-cache 加速二次启动
+----------------------------------------
+
+main.cjs 行 1-14 的实现：
+
+  const path = require('path');
+  const os = require('os');
+  const fs = require('fs');
+  const v8CacheDir = path.join(os.homedir(), '.ideacode', 'v8-cache');
+  try { fs.mkdirSync(v8CacheDir, { recursive: true }); } catch { /* ignore */ }
+  process.env.V8_COMPILE_CACHE_CACHE_DIR = v8CacheDir;
+  require('v8-compile-cache');
+
+技术要点：
+  1. 缓存目录为什么不用默认 os.tmpdir()？
+     macOS 上 /var/folders/.../T/ 会被系统周期性清理，导致二次启动缓存命中率低。
+     改为 ~/.ideacode/v8-cache 持久化缓存。
+  2. 跨架构/版本隔离：v8-compile-cache 内部用 arch/version 子目录隔离
+  3. 必须在所有其他 require 之前调用，确保后续 require 的模块都走缓存
+  4. fs/os/path 是 Node 内置模块，本身已编译，不受影响
+
+
+----------------------------------------
+2.3 窗口管理器（WindowManager）
+----------------------------------------
+
+文件：electron/main/windowManager.cjs
+
+每个编辑器窗口都是独立的 Chromium 渲染进程。WindowManager 维护
+Map<windowId, BrowserWindow> 管理所有窗口的生命周期。
+
+窗口创建（createWindow）的关键配置：
+
+  const win = new BrowserWindow({
+    width: 1400, height: 900,
+    minWidth: 800, minHeight: 600,
+    show: false,                    // 就绪后再显示，避免白屏闪烁
+    titleBarStyle: process.platform === 'darwin' ? 'hidden' : 'default',
+    frame: process.platform !== 'darwin',
+    trafficLightPosition: process.platform === 'darwin' ? { x: 13, y: 11 } : undefined,
+    webPreferences: {
+      preload: path.join(__dirname, '..', 'preload.cjs'),
+      contextIsolation: true,       // 安全沙箱：渲染进程无法访问 Node
+      nodeIntegration: false,
+      webSecurity: true,
+      enableRemoteModule: false,
+      sandbox: true,                // 进程沙箱（Electron 20+ 默认开启）
+    },
+  });
+
+安全三原则：
+  1. contextIsolation: true —— preload 与页面脚本隔离
+  2. nodeIntegration: false —— 渲染进程无 Node.js 能力
+  3. sandbox: true —— 进程级沙箱
+
+窗口事件监听与广播：
+
+  win.once('ready-to-show', () => { win.show(); if (isDev) win.webContents.openDevTools(); });
+  win.on('closed', () => {
+    this.windows.delete(windowId);                    // 关键：清理引用防内存泄漏
+    this.broadcastToOthers(windowId, Channels.WINDOW_STATE_CHANGED, { windowId, event: 'closed' });
+  });
+  win.on('focus', () => this.broadcast(Channels.WINDOW_FOCUS, { windowId, focused: true }));
+  win.on('blur', () => this.broadcast(Channels.WINDOW_BLUR, { windowId, focused: false }));
+  win.on('maximize', () => this.broadcast(Channels.WINDOW_STATE_CHANGED, { windowId, state: 'maximized' }));
+
+广播方法（向所有窗口发送消息）：
+
+  broadcast(channel, data) {
+    for (const win of this.windows.values()) {
+      if (!win.isDestroyed()) {           // 关键：检查窗口是否已销毁
+        win.webContents.send(channel, data);
+      }
+    }
+  }
+
+
+----------------------------------------
+2.4 生命周期管理（LifecycleManager）
+----------------------------------------
+
+文件：electron/main/lifecycle.cjs
+
+（1）单实例锁（Windows/Linux）
+
+  init() {
+    const gotTheLock = app.requestSingleInstanceLock();
+    if (!gotTheLock) {
+      console.log('[Lifecycle] 应用已在运行，退出新实例');
+      app.quit();
+      return false;                       // 调用方据此中止启动
+    }
+    app.on('second-instance', () => {
+      const wins = this.windowManager.getAllWindows();
+      if (wins.length > 0) {
+        const win = wins[0];
+        if (win.isMinimized()) win.restore();
+        win.focus();                      // 第二个实例启动时聚焦已有窗口
+      }
+    });
+    return true;
+  }
+
+main.cjs 行 176-177 据此短路：
+  const canStart = lifecycleManager.init();
+  if (!canStart) return;
+
+（2）平台差异化窗口行为
+
+  // macOS: dock 点击时恢复窗口
+  app.on('activate', () => {
+    if (this.windowManager.getWindowCount() === 0) {
+      this.windowManager.createWindow();
+    }
+  });
+
+  // 所有窗口关闭
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') {
+      this.quit();                        // Windows/Linux 直接退出
+    }
+    // macOS 不退出，保持应用在后台运行（dock 图标仍在）
+  });
+
+（3）退出阶段处理
+
+  app.on('before-quit', () => { this.isQuitting = true; });
+  app.on('will-quit', () => { this.trayManager?.destroy(); });
+
+isQuitting 标志用于区分"窗口关闭是真退出还是最小化到托盘"。
+
+
+----------------------------------------
+2.5 系统资源监控（SystemMonitor）
+----------------------------------------
+
+文件：electron/main/systemMonitor.cjs
+
+这是本项目的性能优化重点，文件头注释详细记录了一个真实的 macOS 性能坑：
+
+  问题背景：
+  1. systeminformation.graphics() 内部 spawn `system_profiler SPDisplaysDataType`，
+     该命令在 macOS 上同步阻塞 1~3 秒，且 system_profiler 自身吃满一个 CPU 核。
+     每 2 秒调用一次会让主进程持续阻塞 + 子进程持续 100% CPU。
+  2. macOS 上 system_profiler 也不返回 GPU 利用率（utilizationGpu 始终为 undefined），
+     历史代码反复调用纯属浪费。
+  3. currentLoad() 在 macOS 上 spawn `top -l 1`，也有数百毫秒开销。
+
+修复策略一：GPU 只采集一次
+
+  start() {
+    if (this.started) return;
+    this.started = true;
+    this.collectStaticGpu();          // 一次性采集 GPU
+    this.collectAndBroadcast();       // 立即采集一次
+    this.timer = setInterval(() => {
+      this.collectAndBroadcast();
+    }, this.intervalMs);              // 5000ms
+  }
+
+  async collectStaticGpu() {
+    try {
+      const graphics = await si.graphics();
+      const controllers = graphics?.controllers || [];
+      let memTotal = 0, memUsed = 0;
+      for (const c of controllers) {
+        if (c.memoryTotal && c.memoryUsed) {
+          memTotal += c.memoryTotal;
+          memUsed += c.memoryUsed;
+        }
+      }
+      const gpu = memTotal > 0 ? (memUsed / memTotal) * 100 : null;
+      this.staticGpu = { gpu: gpu === null ? null : Math.max(0, Math.min(100, gpu)) };
+    } catch (err) {
+      this.staticGpu = { gpu: null };
+    }
+  }
+
+修复策略二：周期采集只跑 CPU+内存，间隔 5 秒
+
+  async collect() {
+    const [load, mem] = await Promise.all([
+      si.currentLoad(),
+      si.mem(),
+    ]);
+    const cpu = typeof load.currentLoad === 'number' ? load.currentLoad : 0;
+    let memory = 0;
+    if (mem.total > 0) {
+      if (typeof mem.available === 'number' && mem.available > 0) {
+        memory = ((mem.total - mem.available) / mem.total) * 100;
+      } else if (typeof mem.active === 'number') {
+        memory = (mem.active / mem.total) * 100;
+      } else {
+        memory = (mem.used / mem.total) * 100;
+      }
+    }
+    return {
+      cpu: Math.max(0, Math.min(100, cpu)),
+      memory: Math.max(0, Math.min(100, memory)),
+      gpu: this.staticGpu?.gpu ?? null,    // 复用静态 GPU
+    };
+  }
+
+修复策略三：容错与广播
+
+  async collectAndBroadcast() {
+    try {
+      const stats = await this.collect();
+      this.broadcast(stats);
+    } catch (err) {
+      // 采集失败时不影响主进程运行，静默忽略
+      console.warn('[SystemMonitor] 采集系统资源失败:', err.message);
+    }
+  }
+
+技术要点总结：
+  1. GPU 型号/显存基本不变，无需周期采集
+  2. macOS 的 utilizationGpu 字段恒为 undefined，仅用显存占用比作静态参考
+  3. 间隔从 2s 放宽到 5s，减少 top -l 1 的 spawn 开销
+  4. 内存计算用"已用且不可回收"的 total-available，比 used 更贴近用户感知
+  5. Math.max(0, Math.min(100, x)) 钳制到 [0,100]，防止异常值
+  6. 单次采集失败不雪崩，不影响后续
+
+
+================================================================================
+          第三篇  进程与线程的创建、分配、销毁全流程【核心】
+================================================================================
+
+本篇是面试重点。IDEACODE 涉及 5 类子进程/线程的完整生命周期管理：
+  1. ProcessManager（内核层通用进程管理器）
+  2. 扩展宿主进程（fork + Node IPC）
+  3. tsserver LSP 子进程（spawn + stdio）
+  4. node-pty 终端子进程（spawn + PTY）
+  5. Worker 线程（worker_threads）
+
+----------------------------------------
+3.1 ProcessManager 通用进程管理器（内核层）
+----------------------------------------
+
+文件：packages/kernel/src/process/ProcessManager.ts
+
+ProcessManager 是内核层的通用进程管理器，通过注入式 spawn 函数屏蔽平台差异。
+
+（1）平台解耦：ChildProcess 抽象接口
+
+  export interface ChildProcess {
+    readonly pid: number;
+    readonly alive: boolean;
+    send(message: unknown): void;
+    onMessage(handler: (message: unknown) => void): () => void;
+    onExit(handler: (code: number | null, signal: string | null) => void): () => void;
+    onError(handler: (err: Error) => void): () => void;
+    kill(signal?: string): void;
+  }
+
+  setSpawnFn(fn: (config: ProcessConfig, onMessage: (msg: unknown) => void) => ChildProcess): void {
+    this.spawnFn = fn;
+  }
+
+这样 Electron 用 child_process.fork，Web 用 Worker，内核不感知具体实现。
+
+（2）进程创建全流程（start）
+
+start() 返回 Promise，完整流程：
+  幂等检查 → 状态置 starting → 调用 spawnFn → 写入 pid/startTime
+  → 注册 onExit/onError 回调 → 状态置 running
+
+  start(config: ProcessConfig): Promise<ProcessInfo> {
+    return new Promise((resolve, reject) => {
+      if (!this.spawnFn) { reject(new Error('未设置进程创建函数')); return; }
+
+      // 幂等：已运行直接返回
+      const existing = this.processes.get(config.id);
+      if (existing && existing.status === 'running') { resolve(existing); return; }
+
+      const info: ProcessInfo = {
+        id: config.id, pid: null, status: 'starting',
+        restartCount: existing?.restartCount || 0,   // 重启不丢失计数
+        startTime: null, config,
+      };
+      this.processes.set(config.id, info);
+
+      try {
+        const child = this.spawnFn(config, (msg) => { /* 桥接层处理 */ });
+        info.pid = child.pid;
+        info.status = 'running';
+        info.startTime = Date.now();
+        this.childProcesses.set(config.id, child);
+
+        child.onExit((code, signal) => {
+          info.status = 'stopped';
+          info.pid = null;
+          // 崩溃自动重启逻辑（见 3.7）
+        });
+        child.onError((err) => console.error(`[ProcessManager] 进程错误: ${config.id}`, err.message));
+        resolve(info);
+      } catch (err) {
+        info.status = 'stopped';
+        reject(err);
+      }
+    });
+  }
+
+（3）进程销毁（stop / stopAll）
+
+  stop(id: string, signal: string = 'SIGTERM'): void {
+    const child = this.childProcesses.get(id);
+    if (!child || !child.alive) return;
+    const info = this.processes.get(id);
+    if (info) info.status = 'stopping';
+    child.kill(signal);
+  }
+
+  stopAll(signal: string = 'SIGTERM'): void {
+    for (const id of this.childProcesses.keys()) this.stop(id, signal);
+  }
+
+（4）进程间消息发送
+
+  send(id: string, message: unknown): boolean {
+    const child = this.childProcesses.get(id);
+    if (!child || !child.alive) return false;
+    child.send(message);
+    return true;
+  }
+
+
+----------------------------------------
+3.2 扩展宿主进程 fork 全流程
+----------------------------------------
+
+文件：electron/main/extensionHost.cjs
+
+扩展宿主进程是所有第三方插件运行的独立 Node.js 子进程。
+
+（1）fork 创建
+
+  start() {
+    if (this.isRunning) return;
+    const hostPath = path.join(__dirname, '..', 'extension-host', 'index.cjs');
+    this.hostProcess = fork(hostPath, [], {
+      stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: '1',          // 关键 1：以纯 Node 模式运行
+        IDEACODE_APP_ROOT: resolveAppRoot(), // 关键 2：注入 app root
+      },
+    });
+    // 日志转发
+    this.hostProcess.stdout?.on('data', (d) => process.stdout.write(`[ExtensionHost] ${d}`));
+    this.hostProcess.stderr?.on('data', (d) => process.stderr.write(`[ExtensionHost] ${d}`));
+    this.hostProcess.on('message', (message) => this.handleHostMessage(message));
+    this.hostProcess.on('error', (err) => { ... this.scheduleRestart(1000, 'error'); });
+    this.hostProcess.on('exit', (code, signal) => { ... 自动重启逻辑 ... });
+    this.isRunning = true;
+    this.startFileWatchers();
+  }
+
+四个关键技术点：
+
+  ① 使用 fork 而非 spawn
+     fork 是 spawn 的特化版本，自动建立一条 IPC 通道（fd=3），
+     父子通过 process.send / child.send 通信，无需手写 stdio 协议。
+
+  ② stdio: ['pipe', 'pipe', 'pipe', 'ipc']
+     前三个 fd 为管道用于日志转发，第四个 'ipc' 是 fork 专用的 IPC 通道。
+
+  ③ ELECTRON_RUN_AS_NODE: '1'
+     这是关键技术。process.execPath 是 Electron 二进制，不加此环境变量会启动
+     一个完整的 Electron 应用实例（带 Chromium）。设为 '1' 后，Electron 二进制
+     以纯 Node.js 模式运行，无窗口、无 Cocoa 应用初始化。
+
+  ④ IDEACODE_APP_ROOT 注入
+     解决生产环境下 process.cwd() 为 /（macOS GUI 启动不继承 shell 工作目录）
+     导致路径解析失败的问题。resolveAppRoot() 按打包状态分支：
+     - 打包用 app.getAppPath() 拿 ASAR root
+     - 开发用 __dirname 向上推 2 级
+
+resolveAppRoot 实现：
+
+  function resolveAppRoot() {
+    try {
+      if (app.isPackaged) return app.getAppPath();
+    } catch { /* 非 Electron 环境，忽略 */ }
+    return path.resolve(__dirname, '..', '..');
+  }
+
+（2）子进程侧的 Dock 兜底
+
+文件：electron/extension-host/index.cjs:15-26
+
+即便设置了 ELECTRON_RUN_AS_NODE=1，某些 Electron 版本在 macOS 上仍会初始化
+Cocoa NSApplication，导致 Dock 出现多余图标。子进程入口主动兜底：
+
+  if (process.platform === 'darwin') {
+    try {
+      const electronApp = require('electron').app;
+      if (electronApp && typeof electronApp.dock?.hide === 'function') {
+        electronApp.dock.hide();
+      }
+    } catch { /* 非 Electron 环境，忽略 */ }
+  }
+
+（3）子进程侧的 v8 编译缓存
+
+  const v8CacheDir = path.join(os.homedir(), '.ideacode', 'v8-cache');
+  process.env.V8_COMPILE_CACHE_CACHE_DIR = v8CacheDir;
+  require('v8-compile-cache');
+
+缓存目录显式指定到 ~/.ideacode/v8-cache，避免默认 os.tmpdir() 被系统周期清理
+导致缓存命中率低。
+
+（4）子进程侧的优雅退出
+
+  let _shuttingDown = false;
+  async function gracefulShutdown(signal) {
+    if (_shuttingDown) return;            // 防重复
+    _shuttingDown = true;
+    const activeExts = Array.from(manager.extensions.values()).filter(e => e.active);
+    if (activeExts.length > 0) {
+      // 带超时的 deactivateAll，避免卡住
+      await Promise.race([
+        Promise.all(activeExts.map(ext => manager.deactivateExtension(ext.manifest.name).catch(...))),
+        new Promise(resolve => setTimeout(resolve, 800)),
+      ]);
+    }
+    process.exit(0);
+  }
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+
+注释说明：原先无信号处理器时，SIGTERM 走 Node 默认行为（立即终止），
+扩展 deactivate() 不执行，子进程（如 shell 命令）可能残留。
+
+
+----------------------------------------
+3.3 tsserver 子进程 spawn 全流程（LSP）
+----------------------------------------
+
+文件：electron/main/lsp/tsserverManager.cjs
+
+tsserver 不是用 fork，而是用 spawn，因为它需要的是 stdio 流（LSP 基于
+Content-Length 分帧的 stdio 协议），而不是 Node IPC。
+
+（1）spawn 创建
+
+  serverProcess = spawn(process.execPath, [cliPath, '--stdio'], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+  });
+
+技术要点：
+  ① 直接用 process.execPath 而非 'node'
+     避免走 shell 解析 shebang/symlink，把冷启动从 ~150ms 压缩到 ~60ms。
+  ② cliPath 解析（resolveTsServerCliPath）
+     定位 node_modules/typescript-language-server/lib/cli.mjs；
+     ASAR 内路径替换为 app.asar.unpacked（spawn 不能从 ASAR 内加载 .mjs 依赖）
+  ③ --stdio 参数：让 tsserver 走标准输入输出，符合 LSP 协议
+
+（2）LSP 协议分帧解析
+
+LSP 基于 Content-Length 分帧，需要处理 TCP 粘包/半包：
+
+  function parseMessages(chunk) {
+    buffer = Buffer.concat([buffer, chunk]);
+    while (true) {
+      const headerEnd = buffer.indexOf('\r\n\r\n');
+      if (headerEnd === -1) break;
+      const header = buffer.slice(0, headerEnd).toString('utf8');
+      const lenMatch = header.match(/Content-Length:\s*(\d+)/i);
+      if (!lenMatch) break;
+      const contentLen = parseInt(lenMatch[1], 10);
+      // 大消息保护：超过 64MB 丢弃
+      if (contentLen > MAX_LSP_BODY_BYTES || !Number.isFinite(contentLen) || contentLen < 0) {
+        buffer = Buffer.alloc(0); break;
+      }
+      const bodyStart = headerEnd + 4;
+      if (buffer.length < bodyStart + contentLen) break;   // 半包，等更多数据
+      const body = buffer.slice(bodyStart, bodyStart + contentLen).toString('utf8');
+      messages.push(JSON.parse(body));
+      buffer = buffer.slice(bodyStart + contentLen);        // 处理粘包
+    }
+    return messages;
+  }
+
+64MB 上限防御性丢弃异常大消息（semanticTokens/full 对超大文件可能很大），
+防止 toString + JSON.parse 触发 V8 Invalid string length。
+
+（3）LSP 初始化握手
+
+  serverProcess.stdout.on('data', (data) => {
+    for (const msg of parseMessages(data)) {
+      if (msg.id === initRequestId && msg.result) {
+        // 从 initialize 响应中提取 semanticTokens legend
+        if (msg.result.capabilities?.semanticTokensProvider?.legend) {
+          semanticTokensLegend = msg.result.capabilities.semanticTokensProvider.legend;
+        }
+        send({ jsonrpc: '2.0', method: 'initialized', params: {} });
+      }
+      if (msg.id && pendingRequests.has(msg.id)) {
+        pendingRequests.get(msg.id)(msg);
+        pendingRequests.delete(msg.id);
+      } else if (msg.method === 'textDocument/publishDiagnostics') {
+        // 诊断推送：转成 IDE 内部格式发给渲染进程
+      }
+    }
+  });
+
+（4）URI 百分号编码坑
+
+  function uriToFsPath(uri) {
+    // 不能直接 replace('file://','')
+    // file:///.../node_modules/%40types/react/index.d.ts
+    // 直接 replace 会保留 %40，导致 fs.readFile 报 ENOENT
+    return fileURLToPath(uri);   // 必须用 fileURLToPath 正确解码
+  }
+
+（5）ensureServer 惰性重启
+
+  function ensureServer(webContents) {
+    if (serverProcess && !serverProcess.killed) return true;
+    if (rootUri) {
+      startServer(rootUri, webContents);   // 用缓存的 rootUri 重启
+      return false;
+    }
+    return false;
+  }
+
+服务器意外退出后，下次请求自动用缓存的 rootUri 重启。
+
+（6）Uint32Array 优化 IPC 序列化
+
+  // semanticTokens 返回的 data 转为 Uint32Array
+  return new Uint32Array(msg.result.data);
+
+IPC 结构化克隆对 typed array 用 memcpy 整块拷贝，远快于普通数组逐元素序列化，
+大文件 token 数组可达数万元素。
+
+
+----------------------------------------
+3.4 node-pty 终端子进程创建全流程
+----------------------------------------
+
+文件：electron/main/ipcHandlers/terminalHandler.cjs
+
+（1）原生模块容错加载
+
+  let ptyModule = null;
+  try {
+    ptyModule = require('node-pty');
+  } catch (e) {
+    console.warn('[TerminalHandler] node-pty 加载失败，终端将以模拟模式运行:', e.message);
+  }
+
+node-pty 是 C++ 原生模块，需要 electron-rebuild 重新编译，缺失时不能让主进程崩溃。
+
+（2）多 shell fallback 链
+
+  const fallbackShells = ['/bin/zsh', '/bin/bash', '/bin/sh'];
+  const shellsToTry = hasExplicitExecutable
+    ? [shellPath]    // 显式指定（如 SSH 的 ssh 命令）只尝试该程序
+    : new Set([shellPath,
+        ...(process.env.SHELL && fs.existsSync(process.env.SHELL) ? [process.env.SHELL] : []),
+        ...fallbackShells]);
+
+关键设计：若调用方显式指定了 executable（如 SSH 的 ssh 命令），则只尝试该程序
+不再 fallback，避免把 ssh 错误地回退到本地 zsh。
+
+（3）spawn 调用
+
+  const ptyProcess = ptyModule.spawn(tryPath, tryArgs, {
+    name: 'xterm-256color',                          // 设置 TERM 环境变量
+    cols: cols || config.cols || 80,
+    rows: rows || config.rows || 24,
+    cwd: workDir,
+    env: env,
+  });
+
+name: 'xterm-256color' 保证 shell 输出 ANSI 颜色码。
+
+（4）zsh compinit 断链清理（工程经验点）
+
+Homebrew 更新后 /opt/homebrew/share/zsh/site-functions/ 下的补全文件
+（如 _brew_services）可能变成断裂符号链接，导致 zsh 启动报
+compinit:527: no such file or directory。
+
+处理方式分两层：
+  - 启动时异步清理一次（fire-and-forget），用 _brokenLinkCleanupDone Set 避免重复 I/O
+  - 每次创建终端设置 ZSH_DISABLE_COMPFIX=true 抑制残余警告
+
+体现了"启动期一次性重 I/O + 运行期轻量环境变量"的取舍。
+
+（5）TerminalProcess 数据结构
+
+  class TerminalProcess {
+    constructor(id, ptyProcess, shellLaunchConfig, ownerWindow, ownerWebContents) {
+      this.unackedChars = 0;      // 未确认字符数（流控核心）
+      this.exited = false;
+      this.isBroadcastReceiver = false;
+      this.inputBuffer = '';      // 用于识别 git 命令
+    }
+  }
+
+Map<id, TerminalProcess> 是全局终端表，nextTerminalId 单调递增。
+
+（6）git 命令嗅探
+
+  writeInput(data) {
+    this.pty.write(data);
+    this.inputBuffer += data;
+    const lines = this.inputBuffer.split(/\r?\n/);
+    this.inputBuffer = lines.pop() || '';  // 保留最后未结束的行
+    for (const line of lines) {
+      if (/^git\b/.test(line.trim())) {
+        this.ownerWebContents.send(Channels.GIT_STATUS_CHANGED, { cwd: this.config.cwd });
+      }
+    }
+  }
+
+这避免了在终端里敲 git commit 后还要手动刷新 git 面板的体验问题。lines.pop()
+保留最后一段未结束的行，保证跨数据包的命令能被正确拼接识别。
+
+（7）销毁、信号、resize
+
+  dispose() {                    // 第 443-453 行
+    pty.kill();
+    terminalMap.delete(id);
+    // 清理 PID 控制器
+  }
+  sendSignal(signal) {           // 第 471-479 行
+    pty.kill(signal);            // 转发 Ctrl+C 等
+  }
+  resize(cols, rows) {           // 第 484-492 行
+    pty.resize(cols, rows);      // 同步 PTY 尺寸
+  }
+
+
+----------------------------------------
+3.5 Worker 线程的创建与销毁
+----------------------------------------
+
+文件：electron/main/workers/taskManager.cjs + searchWorker.cjs + fileWatcher.cjs
+
+（1）Worker 线程创建（TaskManager）
+
+  startSearch(params, onMessage) {
+    const taskId = this._makeId('search');
+    const worker = new Worker(path.join(__dirname, 'searchWorker.cjs'), { workerData: params });
+    worker.on('message', onMessage);
+    worker.on('error', (err) => console.error(`[Worker ${taskId}] error:`, err));
+    worker.on('exit', () => this.workers.delete(taskId));
+    this.workers.set(taskId, worker);
+    return taskId;
+  }
+
+taskId 用 `${prefix}:${++counter}:${Date.now()}` 生成，保证全局唯一。
+
+（2）协作式取消（非强杀）
+
+  cancelSearch(taskId) {
+    const worker = this.workers.get(taskId);
+    if (worker) worker.postMessage({ type: 'cancel' });   // 发取消信号
+  }
+
+Worker 侧在每个循环入口检查 cancelled 标志，自己安全退出，而非 worker.terminate() 强杀：
+
+  async function searchDir(dir) {
+    if (cancelled) return;        // 入口检查
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (cancelled) return;      // 循环内检查
+      // ...
+    }
+  }
+  parentPort.on('message', (msg) => {
+    if (msg.type === 'cancel') { cancelled = true; }
+  });
+
+（3）文件监听 Worker（fileWatcher.cjs，32 行精简版）
+
+  const { parentPort, workerData } = require('worker_threads');
+  const { watchPath } = workerData;
+  const watcher = fs.watch(watchPath, { recursive: true }, (eventType, filename) => {
+    parentPort.postMessage({ type: 'change', eventType, filename, path: watchPath, timestamp: Date.now() });
+  });
+  parentPort.on('message', (msg) => {
+    if (msg.type === 'stop') {
+      watcher.close();
+      parentPort.postMessage({ type: 'stopped' });
+      process.exit(0);
+    }
+  });
+
+设计意图：不阻塞主进程事件循环、后台模式持续运行、崩溃隔离。
+
+（4）Worker 线程销毁
+
+  stopTask(taskId) {
+    const worker = this.workers.get(taskId);
+    if (worker) {
+      worker.postMessage({ type: 'stop' });
+      // 优雅停止：让 worker 自己关闭 watcher 后 process.exit
+    }
+  }
+
+注意：实际生产中文件监听走主进程直监（fsHandler.cjs），Worker 版是预留架构。
+生产用的全文搜索在扩展宿主进程里跑（rpc.on('fs.search')）。
+
+
+----------------------------------------
+3.6 进程间消息发送与事件回调
+----------------------------------------
+
+（1）扩展宿主 RPC 请求发送（带超时）
+
+  sendRpc(method, params) {
+    if (!this.hostProcess) return Promise.reject(new Error('Extension Host 未运行'));
+    const id = ++this.messageId;
+    return new Promise((resolve, reject) => {
+      this.pendingRequests.set(id, { resolve, reject });
+      setTimeout(() => {
+        if (this.pendingRequests.has(id)) {
+          this.pendingRequests.delete(id);
+          reject(new Error(`RPC 请求超时: ${method}`));
+        }
+      }, 30000);                       // 30 秒超时
+      this.hostProcess.send({
+        jsonrpc: '2.0',
+        id, method, params,
+      });
+    });
+  }
+
+（2）扩展宿主 → 渲染进程请求（带超时）
+
+  requestRenderer(method, params, timeout = 10000) {
+    return new Promise((resolve, reject) => {
+      const windows = this.windowManager.getAllWindows().filter((w) => !w.isDestroyed());
+      if (windows.length === 0) {
+        reject(new Error('没有可用的渲染进程窗口'));
+        return;
+      }
+      const focused = windows.find((w) => w.isFocused());
+      const target = focused || windows[0];       // 优先聚焦窗口
+      const reqId = ++this.rendererRequestId;
+      this.pendingRendererRequests.set(reqId, { resolve, reject });
+      const timer = setTimeout(() => {
+        if (this.pendingRendererRequests.has(reqId)) {
+          this.pendingRendererRequests.delete(reqId);
+          reject(new Error(`渲染进程请求超时: ${method}`));
+        }
+      }, timeout);
+      // 避免内存泄漏：清理计时器引用
+      const originalResolve = resolve;
+      resolve = (value) => { clearTimeout(timer); originalResolve(value); };
+      target.webContents.send(Channels.EXTENSION_HOST_REQUEST_RENDERER, { id: reqId, method, params });
+    });
+  }
+
+
+----------------------------------------
+3.7 崩溃自动重启机制（容错核心）
+----------------------------------------
+
+（1）ProcessManager 的通用重启
+
+  child.onExit((code, signal) => {
+    info.status = 'stopped';
+    info.pid = null;
+    if (config.autoRestart && (info.restartCount < (config.maxRestarts ?? 5))) {
+      const delay = config.restartDelayMs ?? 1000;
+      setTimeout(() => {
+        info.restartCount++;
+        this.start(config).catch(console.error);   // 递归调用 start
+      }, delay);
+    }
+  });
+
+三个关键设计：
+  ① autoRestart + maxRestarts(5) + restartDelayMs(1000) 三参数控制
+  ② restartCount 跨重启保留（existing?.restartCount || 0），防止无限重启风暴
+  ③ setTimeout 延迟避免崩溃循环打满 CPU
+
+（2）扩展宿主的双标志重启
+
+  this.hostProcess.on('exit', (code, signal) => {
+    const wasHotRestarting = this._hotRestarting;
+    this.isRunning = false;
+    this.hostProcess = null;
+    this._hotRestarting = false;
+    this.windowManager.broadcast(Channels.EXTENSION_HOST_MESSAGE, { type: 'hostStopped', code });
+    if (this.stopping) return;                    // 用户主动停止，不重启
+    if (wasHotRestarting) {
+      this.start();                               // 热重启：立即拉起
+    } else {
+      this.scheduleRestart(800, 'unexpected-exit'); // 异常退出：800ms 后重启
+    }
+  });
+
+两个标志的区分（关键设计，行 49-55 注释）：
+  - stopping：用户主动永久停止（stop()），exit 后不再自启
+  - _hotRestarting：为热重启而 kill，exit 后应立即 start()
+
+注释明确说明：原先复用 stopping 会导致 exit 处理器跳过重启，
+使热重启变成永久停止。
+
+
+----------------------------------------
+3.8 进程销毁的两段式终止（SIGTERM→SIGKILL）
+----------------------------------------
+
+扩展宿主的热重启终止（_killAndRestart）：
+
+  _killAndRestart() {
+    if (!this.hostProcess) { this.start(); return; }
+    this._hotRestarting = true;                          // 关键标志
+    const proc = this.hostProcess;
+    try { proc.kill('SIGTERM'); } catch {}               // 1. 优雅终止
+    setTimeout(() => {
+      try { if (!proc.killed) proc.kill('SIGKILL'); } catch {}  // 2. 2s 后强杀兜底
+    }, 2000);
+    // exit 事件会自动清理并触发 start()
+  }
+
+两段式终止的设计：
+  ① SIGTERM：让子进程有机会清理（执行 deactivate、关闭文件句柄、保存状态）
+  ② SIGKILL：2 秒后兜底强杀，防止子进程卡死不退出
+
+扩展宿主的主动停止（stop）：
+
+  stop() {
+    if (!this.hostProcess) return;
+    this.stopping = true;
+    this._hotRestarting = false;
+    if (this.restartTimer) { clearTimeout(this.restartTimer); this.restartTimer = null; }
+    if (this._stopAggregateWatcher) { this._stopAggregateWatcher(); this._stopAggregateWatcher = null; }
+    this.watchedDirs.clear();
+    this.sendRpc('host.shutdown', {});                   // 优雅关闭：发送退出信号
+    setTimeout(() => {
+      if (this.hostProcess && !this.hostProcess.killed) {
+        this.hostProcess.kill('SIGTERM');                // 5 秒后强制终止
+      }
+    }, 5000);
+  }
+
+
+================================================================================
+                  第四篇  通信机制与消息总线
+================================================================================
+
+----------------------------------------
+4.1 ServiceBus 四种通信模式
+----------------------------------------
+
+文件：packages/kernel/src/bus/ServiceBus.ts
+
+ServiceBus 是整个内核的通信中枢，设计原则：
+所有通信必须经过 ServiceBus，不允许直接模块依赖。
+
+四种通信模式：
+
+（1）request —— 请求-响应（RPC），本地优先
+
+  async request<T>(service: string, method: string, params?: unknown): Promise<T> {
+    const fullMethod = `${service}:${method}`;            // 命名空间:方法
+    const localHandler = this.localHandlers.get(fullMethod);
+    if (localHandler) {
+      return localHandler(params) as Promise<T>;          // 优先本地处理
+    }
+    if (this.remoteInvokeFn) {
+      return this.remoteInvokeFn(fullMethod, params) as Promise<T>;  // 远程调用
+    }
+    throw new Error(`[ServiceBus] 无法处理请求: ${fullMethod}`);
+  }
+
+本地优先策略：同进程调用零开销，只有本地没有处理器时才走 IPC，这是性能关键优化。
+
+（2）notify —— 单向通知（fire-and-forget）
+
+  notify(service: string, method: string, params?: unknown): void {
+    const fullMethod = `${service}:${method}`;
+    const localHandler = this.localHandlers.get(fullMethod);
+    if (localHandler) {
+      const result = localHandler(params);
+      if (result instanceof Promise) {
+        result.catch(console.error);   // 避免 unhandledRejection
+      }
+      return;
+    }
+    if (this.remoteNotifyFn) {
+      this.remoteNotifyFn(fullMethod, params);
+    }
+  }
+
+（3）publish / subscribe —— 发布-订阅
+
+  publish(topic: string, data: unknown): void {
+    const subscribers = this.topicSubscribers.get(topic);
+    if (subscribers) {
+      for (const handler of subscribers) {
+        try { handler(data); }
+        catch (err) { console.error(`[ServiceBus] 订阅处理失败: ${topic}`, err); }
+      }
+    }
+  }
+
+  subscribe(topic: string, handler: (data: unknown) => void): Disposable {
+    if (!this.topicSubscribers.has(topic)) {
+      this.topicSubscribers.set(topic, new Set());
+    }
+    this.topicSubscribers.get(topic)!.add(handler);
+    return {
+      dispose: () => {
+        const subscribers = this.topicSubscribers.get(topic);
+        if (subscribers) {
+          subscribers.delete(handler);
+          if (subscribers.size === 0) {
+            this.topicSubscribers.delete(topic);   // 空集合自动清理，防内存泄漏
+          }
+        }
+      },
+    };
+  }
+
+每个订阅 handler 在 try/catch 中执行，单个订阅者抛错不会阻断其他订阅者。
+
+（4）JSON-RPC 2.0 适配（兼容扩展宿主协议）
+
+  async handleJsonRpc(message): Promise<void> {
+    // ① 响应：匹配 pendingRequests 并 resolve/reject
+    if (message.id !== undefined && (message.result !== undefined || message.error)) {
+      const pending = this.pendingRequests.get(message.id);
+      if (pending) {
+        clearTimeout(pending.timer);
+        this.pendingRequests.delete(message.id);
+        message.error ? pending.reject(new Error(message.error.message))
+                      : pending.resolve(message.result);
+      }
+      return;
+    }
+    // ② 请求：调用本地 handler，通过 __rpc_response 回传结果
+    if (message.method && message.id !== undefined) {
+      try {
+        const result = await this.invokeLocal(message.method, message.params);
+        this.remoteNotifyFn?.('__rpc_response', { id: message.id, result });
+      } catch (err) {
+        this.remoteNotifyFn?.('__rpc_response', {
+          id: message.id,
+          error: { code: -32603, message: err instanceof Error ? err.message : String(err) },
+        });
+      }
+      return;
+    }
+    // ③ 通知：只调用，不回传
+    if (message.method) { await this.invokeLocal(message.method, message.params); }
+  }
+
+__rpc_request / __rpc_response 是两条约定好的内部通知通道，
+用 notify 通道实现 request 语义，避免了双向通道的复杂握手。
+
+
+----------------------------------------
+4.2 JSON-RPC 2.0 协议实现
+----------------------------------------
+
+文件：electron/extension-host/rpc.cjs
+
+JSON-RPC 2.0 规范的精简实现，三种消息形态：
+
+  | 消息形态 | 字段 | 用途 |
+  |---------|------|------|
+  | 请求 | {jsonrpc, id, method, params} | 期待响应 |
+  | 响应 | {jsonrpc, id, result} / {jsonrpc, id, error} | 回复请求 |
+  | 通知 | {jsonrpc, method, params}（无 id） | 单向推送，无需响应 |
+
+核心数据结构：
+
+  class JsonRpcServer {
+    constructor() {
+      this.handlers = new Map();           // method -> handler
+      this.pending = new Map();            // id -> {resolve, reject}
+      this.messageId = 0;
+      this.sendFn = null;                  // 发送函数（注入式）
+    }
+  }
+
+请求发送（自增 id + Promise 注册）：
+
+  request(method, params) {
+    const id = ++this.messageId;
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.sendFn({ jsonrpc: '2.0', id, method, params });
+    });
+  }
+
+消息分发（根据 message.method 是否存在区分请求/响应）：
+
+  handleMessage(message) {
+    if (message.method) {            // 有 method = 请求或通知
+      this.handleRequest(message);
+      return;
+    }
+    // 无 method = 响应：按 id 匹配 pending
+    if (message.id !== undefined && this.pending.has(message.id)) {
+      const { resolve, reject } = this.pending.get(message.id);
+      this.pending.delete(message.id);
+      message.error ? reject(new Error(message.error.message)) : resolve(message.result);
+    }
+  }
+
+双向通信的建立（子进程侧）：
+
+  const rpc = new JsonRpcServer();
+  rpc.setSendFunction((message) => {
+    if (process.send) process.send(message);
+  });
+  process.on('message', (message) => rpc.handleMessage(message));
+
+由于 JsonRpcServer 同时具备 request（发请求等响应）和 on（注册处理器响应请求）能力，
+父子双方都能主动发起请求，实现真正的双向 RPC。
+
+
+----------------------------------------
+4.3 IPC 桥接（ElectronMainIpcBridge）
+----------------------------------------
+
+文件：packages/kernel/src/ipc/ElectronMainIpcBridge.cjs
+
+建立了 ServiceBus 与 ipcMain 的双向映射。
+
+（1）方向 A：ServiceBus → Electron 能力
+
+向 bus 注册主进程端处理器，把 Electron 原生能力暴露为 service:method：
+
+  bus.handle('dialog.openDirectory', async () => {
+    const { dialog } = require('electron');
+    const focused = BrowserWindow.getFocusedWindow();
+    const result = await dialog.showOpenDialog(focused || BrowserWindow.getAllWindows()[0], {
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    return result.canceled ? null : result.filePaths[0];
+  });
+
+  bus.handle('extensionHost.rpc', async (params) => {
+    const { method, params: rpcParams } = params || {};
+    return extensionHostManager.sendRpc(method, rpcParams);
+  });
+
+（2）方向 B：渲染进程 ipcRenderer → ServiceBus
+
+  function bridgeChannel(channel, serviceMethod) {
+    ipcMain.handle(channel, async (_event, ...args) => {
+      try {
+        const params = args.length === 1 ? args[0] : args;
+        return await bus.request(
+          serviceMethod.split(':')[0],   // service
+          serviceMethod.split(':')[1],   // method
+          params
+        );
+      } catch (err) {
+        console.error(`[ElectronIpcBridge] ${channel} 错误:`, err.message);
+        throw err;
+      }
+    });
+  }
+
+（3）Pub/Sub 广播桥接（猴子补丁）
+
+最巧妙的设计：重写 bus.publish，让一次 publish 同时通知同进程订阅者和所有渲染窗口：
+
+  const originalPublish = bus.publish.bind(bus);
+  bus.publish = function (topic, data) {
+    originalPublish(topic, data);                    // 先通知同进程订阅者
+    if (windowManager && typeof windowManager.broadcast === 'function') {
+      windowManager.broadcast(topic, data);          // 再广播到所有渲染进程
+    }
+  };
+
+（4）通道映射表
+
+  const channelMap = {
+    [Channels.FS_READ_DIR]: 'fs:readDir',
+    [Channels.FS_READ_FILE]: 'fs:readFile',
+    [Channels.FS_WRITE_FILE]: 'fs:writeFile',
+    [Channels.DIALOG_OPEN_DIRECTORY]: 'dialog:openDirectory',
+    [Channels.EXTENSION_HOST_START]: 'extensionHost:start',
+    [Channels.EXTENSION_HOST_RPC]: 'extensionHost:rpc',
+    // ...
+  };
+  for (const [channel, method] of Object.entries(channelMap)) {
+    bridgeChannel(channel, method);
+  }
+
+
+----------------------------------------
+4.4 三方通信链路（渲染↔主↔扩展宿主）
+----------------------------------------
+
+完整通信链路图：
+
+  ┌─────────────┐  ipcMain.handle         ┌─────────────┐  hostProcess.send (IPC)  ┌──────────────┐
+  │  渲染进程    │  EXTENSION_HOST_RPC     │   主进程     │  JSON-RPC 2.0            │  扩展宿主    │
+  │ (Renderer)  │ ──────────────────────► │   (Main)    │ ──────────────────────► │ (Ext Host)   │
+  │             │                          │ ExtensionHost│                          │  rpc.cjs     │
+  │             │  EXTENSION_MESSAGE       │  Manager    │ ◄──────────────────────  │              │
+  │             │ ◄────────────────────── │             │  广播通知/请求            │              │
+  │             │  (broadcast)             │             │                          │              │
+  │             │                          │             │  hostProcess.send        │              │
+  │             │  EXTENSION_HOST_REQUEST_ │             │  (request,等响应)        │              │
+  │             │  RENDERER                │             │ ──────────────────────► │              │
+  │             │ ◄────────────────────── │             │ ◄────────────────────── │              │
+  │             │  EXTENSION_HOST_         │             │  response               │              │
+  │             │  RENDERER_RESPONSE       │             │                          │              │
+  └─────────────┘                          └─────────────┘                          └──────────────┘
+
+三条通信路径：
+
+  路径 A：渲染进程 → 扩展宿主（用户操作触发扩展）
+    渲染进程: electronAPI.extension.rpc(method, params)
+       → ipcRenderer.invoke(EXTENSION_HOST_RPC, method, params)
+       → 主进程: extensionHostManager.handleRendererRequest(method, params)
+       → ExtensionHostManager.sendRpc(method, params)
+       → 扩展宿主: rpc.handleMessage → handler 执行 → rpc.sendResponse
+       → 主进程: handleHostMessage 匹配 pendingRequests → resolve
+       → 渲染进程拿到结果
+
+  路径 B：扩展宿主 → 主进程 → 渲染进程（广播通知）
+    扩展调用 vscode.window.showInformationMessage 等时：
+       → process.send(JSON-RPC request)
+       → 主进程 handleHostMessage → handleHostRequest
+       → 不需要真实数据的方法: windowManager.broadcast(EXTENSION_MESSAGE, {method, params})
+       → 所有渲染进程收到
+
+  路径 C：扩展宿主 → 主进程 → 渲染进程（请求真实数据，需等待响应）
+    扩展需要工作区、编辑器、存储等真实数据时：
+       → 主进程 _needsRendererData(method) 为 true
+       → requestRenderer(method, params)
+       → webContents.send(EXTENSION_HOST_REQUEST_RENDERER, {id, method, params})
+       → 渲染进程处理并 ipcRenderer.send(EXTENSION_HOST_RENDERER_RESPONSE, {id, result})
+       → 主进程 handleRendererResponse → resolve
+       → 主进程把结果作为 JSON-RPC response 发回扩展宿主
+
+
+----------------------------------------
+4.5 智能路由分流（_needsRendererData）
+----------------------------------------
+
+  _needsRendererData(method) {
+    return (
+      method.startsWith('editor.') ||
+      method.startsWith('workspace.') ||
+      method.startsWith('configuration.') ||
+      method.startsWith('storage.') ||
+      method.startsWith('secrets.') ||
+      method.startsWith('env.') ||
+      method.startsWith('git.') ||
+      method.startsWith('__git_')
+    );
+  }
+
+这是路由分流的关键：需要真实数据的方法走「请求-响应」路径 C，
+纯 UI 操作走「广播」路径 B，避免对所有方法都走完整的请求-响应开销。
+
+
+================================================================================
+                  第五篇  扩展系统
+================================================================================
+
+----------------------------------------
+5.1 扩展宿主进程入口
+----------------------------------------
+
+文件：electron/extension-host/index.cjs
+
+ExtensionManager 类管理扩展的完整生命周期。
+核心数据结构：this.extensions = new Map()，存储 id -> {manifest, path, active, context}。
+
+
+----------------------------------------
+5.2 扩展加载、激活、卸载机制
+----------------------------------------
+
+（1）扫描扩展（scanExtensions）
+
+  1. 先清理已不存在的扩展（fsp.access 探测，支持热卸载）
+  2. 遍历 extensions/ 目录，读取每个子目录的 package.json
+  3. 校验 manifest.name && manifest.main，存入 Map
+
+（2）激活扩展（activateExtension）
+
+  async activateExtension(extId) {
+    const ext = this.extensions.get(extId);
+    if (!ext || ext.active) return false;
+    const prevExtId = global._currentExtensionId;     // 保存上下文
+    global._currentExtensionId = extId;               // 设置当前扩展 id
+    try {
+      const module = require(path.join(ext.path, ext.manifest.main));
+      if (module.activate) {
+        const context = this.createExtensionContext(ext);
+        await module.activate(context);                // 调用扩展的 activate
+        ext.context = context;
+        ext.active = true;
+        return true;
+      }
+    } catch (err) { ... return false; }
+    finally {
+      global._currentExtensionId = prevExtId;          // 恢复上下文
+    }
+  }
+
+关键技术点：global._currentExtensionId 栈式保存/恢复
+  因为 createExtensionContext 和 vscode API 内部需要知道"当前是哪个扩展在调用"
+  （例如 createWebviewPanel 要解析扩展路径），用全局变量传递，
+  并通过 try/finally 保证恢复。
+
+（3）卸载扩展（deactivateExtension）
+
+  1. 调用扩展导出的 module.deactivate()
+  2. 遍历 context.subscriptions 逐个 dispose()（VSCode 惯例）
+  3. 置 active = false、context = null
+
+（4）ExtensionContext 模拟
+
+createExtensionContext 模拟 VSCode 的 vscode.ExtensionContext，提供：
+  - subscriptions：disposable 数组
+  - extensionPath / extensionUri
+  - globalState / workspaceState：状态存储，通过 rpc.request('storage.get/set') 代理
+  - secrets：密钥存储，同样 RPC 代理
+
+
+----------------------------------------
+5.3 VSCode API Bridge 模拟
+----------------------------------------
+
+文件：electron/extension-host/vscode-api-bridge.cjs + index.cjs
+
+微内核 + 回退双模式：
+
+  let vscode;
+  try {
+    const { loadVscodeApi } = require('./vscode-api-bridge.cjs');
+    const shared = loadVscodeApi();
+    if (shared) {
+      vscode = shared;
+      global.__vscode_rpc = rpc;
+    } else { throw new Error('回退到内联 API'); }
+  } catch {
+    vscode = { /* 内联 ~300 行的 vscode 对象 */ };
+  }
+  global.vscode = vscode;
+
+模拟的 API 表面（所有需要系统资源的调用都通过 rpc.request / rpc.notify 代理）：
+
+  | 命名空间 | 模拟方式 |
+  |---------|---------|
+  | window.showInformationMessage 等 | rpc.request('window.showXxx')，UI 在渲染进程弹出 |
+  | window.createWebviewPanel | rpc.notify('webview.create') 通知渲染进程创建面板 |
+  | workspace.getConfiguration | 返回静态 stub（get 返回 defaultValue） |
+  | commands.registerCommand | 注册到 rpc.on('command.${command}') |
+  | commands.executeCommand | rpc.request('commands.execute') |
+  | languages.registerXxxProvider | 返回空 disposable（语言能力在渲染进程 Monaco 实现） |
+  | env.clipboard/openExternal | rpc.request 代理 |
+  | Uri / EventEmitter / Disposable | 纯本地实现 |
+
+WebView 代理对象是典型模式（返回"看起来像 VSCode WebviewPanel"的对象）：
+
+  createWebviewPanel: (viewType, title, showOptions, options) => {
+    const panelId = `webview-${Date.now()}-${Math.random().toString(36).slice(2,9)}`;
+    const currentExtId = global._currentExtensionId;
+    const currentExt = currentExtId ? manager.extensions.get(currentExtId) : null;
+    const extPath = currentExt?.path || ...;
+    rpc.notify('webview.create', { id: panelId, viewType, title, showOptions, options, extensionPath: extPath });
+    return {
+      webview: {
+        postMessage: (message) => rpc.notify('webview.postMessage', { id: panelId, message }),
+        onDidReceiveMessage: (cb) => { /* 注册到消息路由 */ return { dispose: ()=>{} }; },
+        asWebviewUri: (local) => `ideacode-webview-resource://${local.fsPath}`,
+        cspSource: "ideacode-webview-resource:",
+      },
+      reveal: (vc) => rpc.notify('webview.reveal', { id: panelId, viewColumn: vc }),
+      dispose: () => rpc.notify('webview.dispose', { id: panelId }),
+    };
+  }
+
+
+----------------------------------------
+5.4 扩展热重启机制
+----------------------------------------
+
+（1）文件监听
+
+  startFileWatchers() {
+    if (this.fileWatcher) return;
+    if (process.env.NODE_ENV === 'production' || process.env.LIFEAICODE_DISABLE_HOTRELOAD === '1') return;
+    if (process.env.LIFEAICODE_HOTRELOAD === '0') return;
+    const extensionsDir = path.resolve(__dirname, '..', '..', 'extensions');
+    this._addWatchDir(extensionsDir);
+    this._setupAggregateWatcher();
+  }
+
+跨平台兼容：
+  - macOS/Windows：fs.watch 支持 recursive: true
+  - Linux：Node 20+ 才支持 recursive，否则降级
+
+过滤规则：
+  - 只关心 .js / .cjs / .json
+  - 排除 node_modules / webview / webview-dist / 点开头目录
+  - 排除 .lifeAiCode-config.json（运行时数据文件）
+
+（2）防抖（Debounce）
+
+  scheduleRestart(delayMs, reason) {
+    if (this.stopping) return;
+    if (this._hotRestarting) return;     // 已在热重启中，忽略新请求
+    if (this.restartTimer) clearTimeout(this.restartTimer);
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = null;
+      if (this.isRunning) {
+        this._killAndRestart();
+      } else {
+        this.start();
+      }
+    }, delayMs);
+  }
+
+npm install 等操作会触发成百上千次文件事件，防抖把它们合并成一次重启。
+
+（3）热重启两段式终止
+
+  _killAndRestart() {
+    this._hotRestarting = true;
+    const proc = this.hostProcess;
+    try { proc.kill('SIGTERM'); } catch {}               // 1. 优雅终止
+    setTimeout(() => {
+      try { if (!proc.killed) proc.kill('SIGKILL'); } catch {}  // 2. 2s 后强杀兜底
+    }, 2000);
+  }
+
+
+----------------------------------------
+5.5 跨扩展协作（Git ↔ SSH）
+----------------------------------------
+
+commands.execute 处理器实现了跨扩展路由。Git 扩展遇到 ssh:// 路径时：
+
+  if (command && command.startsWith('ssh.')) {
+    await manager.activateExtension('ideacode-ssh');   // 按需激活 SSH 扩展
+    if (command.startsWith('ssh.fs.')) {
+      const method = command.slice('ssh.fs.'.length);
+      return manager.invokeExtension('ideacode-ssh', 'callFileSystemProvider', ['ssh', method, args]);
+    }
+    return manager.invokeExtension('ideacode-ssh', 'executeRemote', extractSshArgs(command, args));
+  }
+
+Git 扩展的 findRemoteRepoRoot 通过 vscode.commands.executeCommand('ssh.executeRemote', {...})
+在远程主机执行 git rev-parse --show-toplevel 检测远程仓库。
+
+扩展安装/卸载的安全设计：
+  - 安装：spawn('npm', ['install'], {cwd, shell:true})，注入 npm_config_registry
+  - 卸载：fs.rm(resolved, {recursive, force})，带安全检查——只能删 extensions/ 目录下
+    的文件夹（resolved.startsWith(EXTENSIONS_DIR + path.sep)），防止路径穿越攻击
+
+
+================================================================================
+                  第六篇  编辑器与语言服务
+================================================================================
+
+----------------------------------------
+6.1 Monaco 编辑器集成
+----------------------------------------
+
+文件：src/components/MonacoEditor/index.tsx（1253 行）
+
+beforeMount 中定义 ideacode-dark 主题（继承 vs-dark），用 Monaco 标准 token 规则
+统一 JSX/HTML/TS 着色，避免自定义正则与内置样式冲突。
+
+语义 token 规则覆盖 function/class/interface/enum/namespace/type/typeParameter/
+variable/enumMember/property/parameter，并支持 .declaration 修饰符斜体。
+
+错误噪音抑制：IIFE setupErrorSuppression 拦截 console.error、window.error、
+unhandledrejection，过滤 Could not find source file|ModelService: Cannot add model
+这类 TS worker 虚拟文件系统的噪音错误。
+
+
+----------------------------------------
+6.2 多语言按需加载
+----------------------------------------
+
+文件：src/services/languageLoader.ts
+
+为减少首屏体积，语言贡献（contribution）采用动态 import() 按需注入，
+并用 loadedLanguages Set 去重避免重复加载：
+
+  const loadedLanguages = new Set<string>([
+    'typescript','javascript','typescriptreact','javascriptreact',
+    'java','python','csharp','html','css','scss','less','markdown','json',
+  ]);
+
+  export async function ensureLanguage(lang: string): Promise<void> {
+    if (loadedLanguages.has(lang)) return;
+    const langMap: Record<string, () => Promise<void>> = {
+      'cpp': () => import('monaco-editor/esm/vs/basic-languages/cpp/cpp.contribution.js').then(()=>{}),
+      // ...
+    };
+    const loader = langMap[lang];
+    if (loader) { await loader(); loadedLanguages.add(lang); }
+  }
+
+预置语言在 main.tsx 同步导入，其余在 onMount 时通过 ensureLanguage(language) 异步注入。
+
+
+----------------------------------------
+6.3 JSX 状态机 decoration
+----------------------------------------
+
+Monaco 内置 TS worker 不会把 JSX 标签名/尖括号识别为独立 token，因此组件用
+手写状态机逐行扫描，生成 inlineClassName decoration 补色：
+
+  - 用栈 Array<'tag'|'expression'> 区分 <...> 标签上下文与 {...} 表达式上下文
+  - isJsxBracketContext 通过前导字符正则 [\s=({>;,?:)\]] 过滤掉
+    TypeScript 泛型（<T>）与比较表达式（a<b）
+  - getJsxTagClass 区分原生标签（小写开头 jsx-tag-name-native）
+    与自定义组件（大写开头 jsx-tag-name-component）
+  - 字符串字面量在任何上下文中都直接跳过，避免误判
+  - 用 deltaDecorations 同步应用，输入时通过 200ms debounce 降低频率
+
+
+----------------------------------------
+6.4 TS Language Service 自建 Worker 方案
+----------------------------------------
+
+文件：src/services/tsLanguageService.ts
+
+这是渲染进程的纯 IPC 封装层，连接渲染进程与主进程的 tsserver。
+
+幂等启动避免重复重启抖动（菜单/最近项目/Explorer 等多入口都可能触发）：
+
+  let startedRootPath: string | null = null;
+  let startInFlight: Promise<boolean> | null = null;
+
+  start(rootPath: string): Promise<boolean> {
+    if (startedRootPath === rootPath) return Promise.resolve(true); // 已启动
+    if (startInFlight) return startInFlight;                        // 去重并发
+    startInFlight = a.start(rootPath).then((ok) => {
+      startedRootPath = ok ? rootPath : startedRootPath;
+      return ok;
+    }).finally(() => { startInFlight = null; });
+    return startInFlight;
+  }
+
+tsserver 绑定 rootPath 启动（需扫描 tsconfig.json、索引 node_modules/@types），
+重复启动会触发 stopServer 导致 5s+ 冷启动延迟，因此幂等至关重要。
+
+诊断策略双模式：
+
+  const hasTsServer = !!window.electronAPI?.tsserver;
+  tsDefaults.setDiagnosticsOptions({
+    noSemanticValidation: true,        // 始终关闭内置语义诊断
+    noSyntaxValidation: hasTsServer,    // Electron: tsserver 接管；浏览器: 保留内置语法检查
+  });
+
+
+----------------------------------------
+6.5 tsserver LSP 协议工程
+----------------------------------------
+
+LSP Provider 注册（onMount 中），对 TS/JS 语言注册四个 provider：
+
+  1. CompletionProvider：tsService.completions(path, line, offset) → 映射 CompletionItemKind
+  2. HoverProvider：tsService.quickInfo → 类型签名以 {language, value} MarkedString 代码块渲染
+  3. DefinitionProvider：tsService.definition → 预创建目标 model 避免 "Model not found"
+  4. DocumentSemanticTokensProvider：见下节
+
+tsserver 文件引用计数：同一文件在多个分屏打开时，用 tsserverRefCounts Map 管理引用，
+仅当最后一个编辑器卸载才调用 tsService.close(path)，避免关闭一个分屏影响其他分屏的 LSP。
+
+
+----------------------------------------
+6.6 语义高亮 token 转换与位置重映射
+----------------------------------------
+
+（1）LSP delta-encoded 格式（TwentyBits/5-tuple）
+
+tsserver 返回的语义 token 采用 LSP 相对编码的 Uint32Array，每 5 个值一组：
+
+  [deltaLine, deltaStartChar, length, type, modifiers]
+
+  - deltaLine：相对上一个 token 的行增量（0-based）
+  - deltaStartChar：同行时相对上一个 token 的列增量；跨行时为绝对列
+  - length：token 长度
+  - type：token 类型索引（查 legend）
+  - modifiers：修饰符位掩码
+
+（2）解码
+
+  function decodeSemTokens(data: Uint32Array): DecodedToken[] {
+    const tokens: DecodedToken[] = [];
+    let prevLine = 0, prevChar = 0;
+    for (let i = 0; i + 4 < data.length; i += 5) {
+      const deltaLine = data[i];
+      const deltaStartChar = data[i + 1];
+      const line = prevLine + deltaLine;
+      const startChar = deltaLine === 0 ? prevChar + deltaStartChar : deltaStartChar;
+      tokens.push({ line, startChar, length: data[i+2], type: data[i+3], modifiers: data[i+4] });
+      prevLine = line; prevChar = startChar;
+    }
+    return tokens;
+  }
+
+（3）Legend 映射
+
+  export const SEMANTIC_TOKEN_TYPES = [
+    'class','enum','interface','namespace','typeParameter','type',
+    'parameter','variable','enumMember','property','function','member',
+  ];
+  export const SEMANTIC_TOKEN_MODIFIERS = [
+    'declaration','static','async','readonly','defaultLibrary','local',
+  ];
+
+（4）位置重映射消除高亮跳动（核心优化）
+
+编辑后旧 token 位置失效，但 LSP IPC 有延迟。组件在 onDidChangeContent 中
+同步对缓存的 decoded tokens 做位置平移，让 provider 在 Monaco 调用瞬间
+返回位置正确的 tokens：
+
+  function remapDecodedTokens(tokens, changes) {
+    for (let c = changes.length - 1; c >= 0; c--) {  // 从后向前保证一致性
+      const ch = changes[c];
+      const lineDelta = newLineCount - oldLineSpan;
+      for (const tk of tokens) {
+        if (tk.line < startLine) continue;              // 变更前：不受影响
+        if (tk.line > endLine) { tk.line += lineDelta; continue; } // 变更后：平移
+        if (oldLineSpan === 0 && tk.line === startLine) {
+          if (tk.startChar >= endCol) tk.startChar += charDelta;  // 单行：平移字符
+          else if (tk.startChar + tk.length > startCol) tk.invalid = true; // 重叠：失效
+        } else { tk.invalid = true; }  // 多行变更：全部失效等 LSP 刷新
+      }
+    }
+    return tokens.filter((t) => !t.invalid);
+  }
+
+（5）四级 provider 回退策略
+
+  provideDocumentSemanticTokens 按优先级返回：
+  1. onMount 预取结果（首次加载缓存）
+  2. onChange 预取结果（编辑后预取，消除 IPC 延迟）
+  3. 实时发起新请求
+  4. 位置重映射后的缓存 tokens（同步，零延迟兜底）
+
+（6）事件驱动重试替代盲等
+
+首次预取为空时（tsserver 还在 handshake），不盲目 setTimeout，
+而是监听 tsserver 推送的 diagnostics（标志 program 已构建），立即触发重试，
+同时保留 300ms 兜底超时（原 600ms）。
+
+
+----------------------------------------
+6.7 SSH 远程文件降级策略
+----------------------------------------
+
+远程 ssh:// URI 本地 tsserver 无法处理（主进程会盲目拼接 file:// 生成畸形 URI）：
+
+  const isBrowser = !window.electronAPI?.tsserver || isRemoteUri(path);
+
+将远程路径等同"无 tsserver"处理，跳过所有 LSP 调用，仅依赖 Monaco 内置 Monarch
+tokenizer 提供基础高亮。统一使用 typescript/javascript 语言 ID（而非 typescriptreact），
+因为后者没有 Monarch tokenizer，在 TS worker 异步 tokenization 不可用时会完全无高亮。
+
+自建 TS SDK Worker 方案（针对 SSH 项目）：
+  运行 ts.LanguageService 在 Web Worker 中，通过 fileService.readFile 异步加载文件，
+  统一本地与 SSH 文件加载。详见 memory 中的实现记录。
+
+
+================================================================================
+                  第七篇  终端管理
+================================================================================
+
+----------------------------------------
+7.1 node-pty 终端子进程创建
+----------------------------------------
+
+详见 3.4 节。核心是 ptyModule.spawn，name: 'xterm-256color' 保证 ANSI 颜色码。
+
+
+----------------------------------------
+7.2 多 shell fallback 与 zsh compinit 清理
+----------------------------------------
+
+多 shell fallback 链：用户指定 shell → $SHELL → /bin/zsh → /bin/bash → /bin/sh。
+显式指定 executable（如 SSH 的 ssh）只尝试该程序不再 fallback。
+
+zsh compinit 断链清理（Homebrew 更新后的坑）：
+  - 启动时异步清理一次（fire-and-forget）
+  - 每次创建终端设置 ZSH_DISABLE_COMPFIX=true 抑制残余警告
+
+
+----------------------------------------
+7.3 PID 流控 + 水位线背压机制
+----------------------------------------
+
+终端输出暴涨（如 cat 大文件、npm install 滚屏）会把渲染进程的 IPC 通道和 xterm
+写入打爆。项目用了一套两层流控：
+
+（1）第一层：PID 控制器（真正的 PID，不是进程 ID）
+
+  class PIDControl {
+    compute(measurement) {
+      const error = this.setpoint - measurement;
+      this.integral = Math.max(-50, Math.min(50, this.integral + error * dt / 1000));
+      const derivative = (error - this.prevError) / (dt / 1000);
+      let out = this.kp*error/setpoint + this.ki*this.integral/setpoint + this.kd*derivative/setpoint;
+      return Math.max(0, Math.min(1, out + 0.5));  // 归一化到 [0,1]
+    }
+  }
+
+参数 kp=0.5, ki=0.1, kd=0.05，setpoint 为 HIGH_WATERMARK * 0.6（60K 字符）。
+每次 PTY onData 计算一个 throttle 因子，<0.3 暂停 PTY，>0.7 恢复。
+
+（2）第二层：高/低水位线 + ACK
+
+  const HIGH_WATERMARK = 100000;  // 100K 未确认字符 → 暂停
+  const LOW_WATERMARK = 5000;     // 5K → 恢复
+  const ACK_BATCH_SIZE = 5000;    // 渲染进程每处理 5K 字符回一个 ACK
+
+ackChars 收到 ACK 后扣减 unackedChars，低于 LOW_WATERMARK 时调用 pty.resume()。
+这是一个典型的背压（backpressure）机制，与 TCP 滑窗思想一致。
+
+PID 控制器作为"数学优化"层在水位线基础上做更平滑的节流，避免阈值边界处的抖动。
+
+
+----------------------------------------
+7.4 xterm.js 前端集成与双重 rAF 防黑屏
+----------------------------------------
+
+文件：src/components/Terminal/TerminalInstance.tsx
+
+（1）插件加载策略（每个 addon 加载时机不同）
+
+  | Addon | 加载时机 | 原因 |
+  |---|---|---|
+  | FitAddon | 立即同步加载 | 首屏必须 fit |
+  | SerializeAddon | 立即同步加载 | 切换 tab 时序列化/恢复屏幕 |
+  | SearchAddon | 懒加载（用户按 Cmd+F 才 import()） | 分割主 bundle |
+  | WebglAddon | 条件懒加载（gpuAcceleration==='on' 时） | 隐藏/切换 tab 时 WebGL 上下文易丢失 |
+  | Unicode11Addon | 懒加载 | 增强 Unicode 渲染 |
+
+WebGL 默认关闭的注释很关键：
+  默认关闭 WebGL：隐藏/切换 tab 时 WebGL 上下文容易丢失导致黑屏，
+  只有用户在设置中显式开启 gpuAcceleration=on 时才加载。
+并且实现了 onContextLoss 自动重建：第一次 context loss 时 dispose 旧 addon 并加载新的，
+用 recovered 标志防止无限重建。
+
+（2）双重 rAF 防 Canvas 黑屏
+
+切换 tab 后直接 fit 会出现 Canvas 内容丢失（黑屏/输入消失），
+解法是双重 requestAnimationFrame：
+
+  useEffect(() => {
+    if (active) {
+      activatingRef.current = true;
+      terminal?.focus();
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          fitAndResize(true);  // forceRefresh=true → terminal.refresh(0, rows-1)
+          activatingRef.current = false;
+        });
+      });
+    }
+    terminal.options.disableStdin = !active;  // 非活跃 tab 禁用输入
+  }, [active]);
+
+第一帧等 CSS 类切换引起的布局生效，第二帧等浏览器完成绘制提交、Canvas 图层就绪，
+然后 fit + refresh 强制重绘全屏。activatingRef 期间抑制 ResizeObserver 的 fit，
+避免与 active effect 竞态。
+
+（3）面板拖拽期间的 fit 抑制
+
+拖拽中 resizingRef=true 让 ResizeObserver 回调直接 return，拖拽结束后用最终尺寸
+做一次 fitAndResize。避免高频 fit 导致 xterm cols 与 PTY cols 失步、shell readline
+对当前输入行重复换行（输入 1 行变 2 行）。
+
+
+----------------------------------------
+7.5 快照迁移与 StrictMode 双调陷阱
+----------------------------------------
+
+切换 Modal/编辑器 tab 时 xterm 实例会被销毁重建。cleanup 在 dispose 前用
+SerializeAddon.serialize() 把屏幕内容存入 setTerminalSnapshot；新建实例时
+getTerminalSnapshot 取出并 terminal.write(snapshot, callback) 恢复。
+
+StrictMode 双调陷阱（面试可讲）：
+  write 是异步的：数据先进入 write buffer，下一帧才写入终端 buffer。
+  不能立即 clearTerminalSnapshot——否则 StrictMode 双调时 cleanup 在 write 完成
+  前 serialize 会得到空 buffer，导致快照丢失。在 write 回调里再清除快照。
+
+这是 React 18 StrictMode 下副作用双重执行与 xterm 异步 write 的交互问题。
+
+
+----------------------------------------
+7.6 SSH 终端 EOL 与 Backspace 适配
+----------------------------------------
+
+  - convertEol: tab?.profile?.name === 'ssh'
+    远端 PTY 输出 \n 不带 \r，开启后 xterm 自动补 \r，避免新提示符追加在当前行末。
+  - 把 \x7f（DEL）替换为 \x08（BS）
+    避免远端 shell stty erase 不匹配时按 backspace 重复输出提示符。
+
+
+================================================================================
+                  第八篇  文件系统与搜索
+================================================================================
+
+----------------------------------------
+8.1 文件系统 IPC 处理器
+----------------------------------------
+
+文件：electron/main/ipcHandlers/fsHandler.cjs
+
+注释（行 11-19）明确了三条安全原则：
+  1. 所有路径由用户通过系统对话框主动选择，非任意路径访问
+  2. 不暴露 rm、chmod 等危险操作（FS_DELETE 内部用了但不直接暴露给渲染进程任意调用）
+  3. 文件监听后台模式持续运行
+
+关键操作的技术细节：
+
+（1）读文件大文件保护
+  128MB 上限，超过直接抛错。V8 字符串上限约 256MB 字符，
+  readFile + toString + IPC 序列化 三步叠加会触发 RangeError: Invalid string length。
+
+（2）写文件自动 mkdir -p
+  AI agent 模式下 write_file 可能落在尚未存在的目录里，
+  先 fs.mkdir(path.dirname(filePath), { recursive: true }) 再写。
+
+（3）删除的 retry + rm -rf 回退
+
+  await fs.rm(targetPath, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+
+  maxRetries 处理 watcher / Spotlight 索引短暂占用导致的 ENOTEMPTY。
+  若仍失败且错误码是 ENOTEMPTY/EPERM/EACCES，回退到
+  execFileAsync('rm', ['-rf', targetPath])——macOS 上 .app 包内的符号链接/
+  只读权限/扩展属性会让 fs.rm 失败，系统 rm -rf 能正确处理。
+
+
+----------------------------------------
+8.2 同步 vs 异步 I/O 取舍原则
+----------------------------------------
+
+核心原则：主进程请求路径上永远异步；启动期、一次性、极快的检测可同步；Worker 内可同步但建议异步。
+
+  | 场景 | 选择 | 原因 |
+  |---|---|---|
+  | IPC handler 内 | 异步 (fs.promises) | 不阻塞主进程事件循环 |
+  | 启动期配置 | 同步 (readFileSync) | 只执行一次，简单可靠 |
+  | 路径存在性检测 | 同步 (existsSync) | 极快，且常用于条件分支 |
+  | Worker 线程内 | 异步 (fs.promises) | Worker 阻塞不影响主进程，但异步仍更高效 |
+  | Git 扩展 readFile | 同步 | 历史选择，可优化 |
+  | 终端 cwd 检测 | 同步 (readlinkSync) | /proc/<pid>/cwd 单次读取，很快 |
+
+Electron 主进程是单线程事件循环，同步 I/O 会阻塞所有窗口的渲染。
+因此 fsHandler.cjs 的所有 IPC handler 全部用 fs.promises（fsp）：
+
+  const fs = require('fs').promises;       // 异步优先
+  const fsSync = require('fs');             // 仅少数场景
+
+
+----------------------------------------
+8.3 文件监听
+----------------------------------------
+
+（1）主进程直监（生产在用）
+
+  const watcher = fsSync.watch(watchPath, { recursive: true }, (eventType, filename) => {
+    const safeFilename = filename === undefined ? null : filename;
+    BrowserWindow.getAllWindows().forEach((win) => {
+      if (!win.isDestroyed() && win.webContents) {
+        win.webContents.send(Channels.FS_CHANGE, {
+          eventType, filename: safeFilename, path: watchPath, timestamp: Date.now(),
+        });
+      }
+    });
+    triggerGitRefresh(watchPath);
+  });
+
+关键点：
+  - recursive: true：macOS/Windows 原生支持，Linux 需 Node 20+
+  - 广播到所有窗口：保证多窗口都能收到
+  - filename 防御性处理：某些平台/事件下 filename 为 undefined，统一转 null
+
+（2）gitRoot 缓存 + 150ms 防抖
+
+  const gitRootCache = new Map();
+  function findGitRootCached(watchPath) {
+    if (gitRootCache.has(watchPath)) return gitRootCache.get(watchPath);
+    const root = findGitRoot(watchPath);
+    gitRootCache.set(watchPath, root);
+    return root;
+  }
+
+fs.watch 在大目录变更（npm install、git checkout）时会触发数十次事件，
+每次都调用 findGitRoot 同步向上遍历查找 .git 会阻塞主进程。两层优化：
+  - gitRoot 缓存：同一 watchPath 下所有文件的 git root 相同，缓存后只首次查找
+  - 150ms 防抖：同一 gitRoot 的多次刷新请求合并为一次
+
+（3）Worker 线程版（预留架构，未接入生产）
+
+fileWatcher.cjs 是 32 行精简 worker，用 worker_threads 的 parentPort 通信。
+设计意图：不阻塞主进程事件循环、后台模式持续运行、崩溃隔离。
+但没有任何 IPC handler require TaskManager，这套 worker 方案目前是预留的。
+
+
+----------------------------------------
+8.4 FileSystemProvider 远程抽象
+----------------------------------------
+
+文件：src/services/fileSystemProvider.ts
+
+按 scheme 注册的 Provider 模式，统一接口：
+
+  export interface FileSystemProvider {
+    scheme: string;
+    readDirectory(uri: string): Promise<FileSystemEntry[]>;
+    readFile(uri: string): Promise<string>;
+    writeFile(uri: string, content: string): Promise<void>;
+    createDirectory(uri: string): Promise<void>;
+    delete(uri: string, options?): Promise<void>;
+    rename(oldUri: string, newUri: string): Promise<void>;
+    stat(uri: string): Promise<FileStat | null>;
+  }
+
+URI 解析：parseRemoteUri 将 ssh://user@host/path 拆为 {scheme, authority, path}。
+
+统一入口 fileService.readFile 按 source 类型分发：
+
+  export async function readFile(fileSource: FileSource): Promise<string> {
+    if (isRemoteUri(fileSource)) {              // SSH 等远程 URI
+      const provider = getFileSystemProvider(fileSource);
+      if (!provider) throw new Error(`未找到远程文件系统 provider: ${fileSource}`);
+      return provider.readFile(fileSource);
+    }
+    if (isElectron() && isPath(fileSource)) {   // 本地路径
+      const stat = await window.electronAPI!.fs.stat(fileSource);
+      const mtime = new Date(stat.mtime).getTime();
+      const cached = getCached(fileSource, mtime);  // 双缓存查询
+      if (cached) return cached.content;
+      const content = await window.electronAPI!.fs.readFile(fileSource);
+      setCached(fileSource, content, mtime);
+      return content;
+    }
+    // ...浏览器 FileHandle 分支
+  }
+
+这层抽象让 IDE 既能跑在 Electron 里访问本地文件，又能跑在纯浏览器里用
+File System Access API，还能通过 provider 访问远程（SSH）文件。
+
+
+----------------------------------------
+8.5 双缓存策略（LRU + W-TinyLFU）
+----------------------------------------
+
+fileService 同时维护两套缓存，可通过 setCacheStrategy('lru'|'wtiny') 切换：
+
+  const fileCache = new FileContentCache(30);                    // LRU + mtime 校验
+  const wtinyCache = new WTinyLFU<string, {content: string; mtime: number}>({ maxSize: 50 });
+  let useWTinyLFU = true;  // 默认 W-TinyLFU
+
+读缓存时用 mtime 校验：文件已修改则失效删除，避免返回过期内容。
+warmupFileCache 用 requestIdleCallback 分批预热（每批 3 个文件，5s 超时），
+项目打开后渐进加载最近文件，不阻塞主线程。
+
+详见 11.1 缓存算法对比。
+
+
+----------------------------------------
+8.6 搜索 Worker 与流式返回
+----------------------------------------
+
+searchWorker.cjs 的 searchDir 是递归目录遍历器：
+
+  async function searchDir(dir) {
+    if (cancelled) return;
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (cancelled) return;
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (!excludeDirs.has(entry.name)) await searchDir(fullPath);
+        continue;
+      }
+      const stat = await fs.stat(fullPath);
+      if (stat.size > MAX_SEARCH_FILE_SIZE) continue;   // 单文件 10MB 上限
+      const content = await fs.readFile(fullPath, 'utf-8');
+      const lines = content.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].includes(query)) {
+          results.push({ file: fullPath, line: i + 1, text: lines[i].trim().substring(0, 200) });
+          matched++;
+          if (matched % 10 === 0) parentPort.postMessage({ type: 'progress', count: matched });
+          if (matched >= maxResults) { cancelled = true; return; }
+        }
+      }
+    }
+  }
+
+技术要点：
+  - 排除目录集合：node_modules, .git, dist, build, .next, coverage
+  - 单文件 10MB 上限：避免 readFile 触发 V8 Invalid string length
+  - 流式进度：每找到 10 条推一次 progress，而非攒一批
+  - 协作式取消：cancelled 标志在每个循环入口检查
+
+
+================================================================================
+                  第九篇  Git 集成
+================================================================================
+
+----------------------------------------
+9.1 Git 命令序列化（Promise 队列）
+----------------------------------------
+
+文件：extensions/git/gitCLI.js
+
+核心设计：按 cwd（仓库根）分组的串行队列。
+
+  const _gitQueues = new Map();  // cwd → Promise<void>
+
+  function execGit(args, options = {}) {
+    const cwd = options.cwd;
+    if (!cwd) return _spawnGit(args, options);  // 无 cwd（如 git --version）不进队列
+
+    const run = () => _spawnGit(args, options);
+    let queue = _gitQueues.get(cwd) || Promise.resolve();
+    // 无论前一个成功或失败，都继续执行下一个（then 第二参数 = onRejected）
+    const result = queue.then(run, run);
+    // 更新队列尾：result 完成后清空错误，避免一个失败阻塞后续所有命令
+    const nextTail = result.then(() => undefined, () => undefined);
+    _gitQueues.set(cwd, nextTail);
+    return result;
+  }
+
+要点：
+  ① 按 cwd 分组：同一仓库内的命令串行，不同仓库之间互不阻塞
+  ② then(run, run)：第二个参数是 onRejected，前一个失败也会继续执行下一个，
+     避免一个 git add 失败把后续所有命令都堵死
+  ③ nextTail 清空错误：result.then(()=>undefined, ()=>undefined) 把结果归一化为
+     undefined，队列尾永远是 fulfilled 状态
+
+注释说明动机：
+  同一仓库内的 git 命令串行执行，避免 discard / refresh / fastPoll 等并发操作
+  争抢 .git/index.lock；不同仓库之间互不阻塞。灵感来自 VS Code git 扩展的
+  askpass / exec 串行化策略。
+
+_spawnGit 的超时与错误归一化：
+
+  function _spawnGit(args, options) {
+    return new Promise((resolve) => {
+      const child = spawn('git', args, {
+        cwd,
+        env: { ...process.env, ...(env||{}), GIT_TERMINAL_PROMPT: '0' },  // 禁用交互提示
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      const timer = setTimeout(() => {
+        if (!settled) { settled = true; child.kill('SIGTERM'); resolve({stdout:'', stderr:`timeout`, code:-1}); }
+      }, timeout);
+    });
+  }
+
+GIT_TERMINAL_PROMPT: '0' 防止 git 在 stdin 等待凭据输入卡死；
+settled 标志防止 timeout 与 close 事件重复 resolve。
+
+
+----------------------------------------
+9.2 index.lock 残留清理
+----------------------------------------
+
+文件：extensions/git/repository.js
+
+  async _cleanupStaleLock() {
+    if (this._isRemote) return;  // 远程仓库跳过（文件在远程主机）
+    const lockPath = path.join(this.rootPath, '.git', 'index.lock');
+    try {
+      const stat = await fsp.stat(lockPath);
+      const age = Date.now() - stat.mtimeMs;
+      if (age > STALE_LOCK_THRESHOLD_MS) {  // 30s
+        await fsp.unlink(lockPath);
+        console.warn('[Repository] 清理超时的 .git/index.lock (age=%dms)', age);
+      }
+    } catch { /* lock 不存在：正常 */ }
+  }
+
+关键设计：
+  ① 只在写操作前清理：_execGitMutating = _cleanupStaleLock + _execGit，只读操作不清
+  ② 30s 阈值：避免误删外部正在运行的合法 git 进程持有的锁
+  ③ 远程仓库跳过：文件在远程主机，本地无法清理
+
+这是"串行队列（预防）+ stale lock 清理（兜底）"的双层防护——
+队列防止并发产生新 lock，清理处理历史残留 lock。
+
+
+----------------------------------------
+9.3 Repository 状态刷新机制
+----------------------------------------
+
+Repository 类用三套定时器 + fs.watch 组合：
+
+  | 机制 | 间隔 | 用途 |
+  |---|---|---|
+  | _watchInterval 慢轮询 | 本地 30s / 远程 60s | fs.watch 漏报兜底 |
+  | _fastPollTimer 快轮询 | 500ms，持续 5s | 操作后快速刷新窗口 |
+  | _watcherRefreshTimer | 300ms 防抖 | fs.watch 事件去抖 |
+  | _fileWatcher + _gitWatcher | fs.watch | 实时感知工作区 + .git 目录变更 |
+
+refresh 的 in-flight 去重：
+
+  async refresh() {
+    if (this._refreshInFlight) { this._pendingRefresh = true; return; }
+    this._refreshInFlight = true;
+    try { await this._doRefresh(); }
+    finally {
+      this._refreshInFlight = false;
+      if (this._pendingRefresh) {
+        this._pendingRefresh = false;
+        setImmediate(() => this.refresh().catch(()=>{}));  // 异步触发，不阻塞调用方
+      }
+    }
+  }
+
+并发 refresh 请求合并为一个，但标记 _pendingRefresh，当前完成后用 setImmediate
+异步补一次，保证最新的变更不丢。
+
+_setupWatcher 单独监听 .git 目录，只对 index/HEAD/FETCH_HEAD/ORIG_HEAD/refs*
+变更触发刷新，过滤掉 .git/objects 的频繁写入。
+pause/resume 实现按需激活——面板不可见时停轮询（远程 SSH execute 降为 0），
+可见时立即刷新一次。
+
+
+----------------------------------------
+9.4 远程仓库的特殊处理
+----------------------------------------
+
+  if (this._remoteExecutor) {
+    const cwd = options.cwd || this.rootPath;
+    const cmd = ['git', '--no-pager', ...args.map(shellEscapeArg)].join(' ');
+    const result = await this._remoteExecutor(`GIT_PAGER=cat ${cmd}`, cwd);
+    return result;
+  }
+
+shellEscapeArg 用正则白名单判断安全字符，含空格/特殊字符的用单引号包裹并转义
+内部单引号，防止 SSH 执行时 shell 解析错误。
+
+远程仓库跳过 fs.watch、跳过 _cleanupStaleLock、跳过 _fastPoll
+（避免 500ms 间隔的 SSH 命令密集执行导致 CPU 飙升）。
+
+
+================================================================================
+                  第十篇  前端架构与状态管理
+================================================================================
+
+----------------------------------------
+10.1 应用入口与 Monaco Worker 工厂
+----------------------------------------
+
+文件：src/main.tsx
+
+入口承担三件事：Monaco Worker 按需加载、插件系统初始化、Redux + Router 装配。
+
+Monaco Worker 工厂 + 双层兜底机制：
+
+  self.MonacoEnvironment = {
+    getWorker(_moduleId: string, label: string) {
+      if (label === 'json') {
+        if (jsonWorkerFactory) return jsonWorkerFactory();
+        return getEditorWorkerFallback();
+      }
+      // ... css / html / typescript 各有分支
+      return getEditorWorkerFallback();
+    },
+  }
+
+getEditorWorkerFallback 还有第二层兜底——当工厂变量尚未 resolve 时，直接用
+  new Worker(new URL('monaco-editor/esm/vs/editor/editor.worker.js', import.meta.url), { type: 'module' })
+
+两层兜底保证首屏 TS/JS 编辑器立刻可用，避免 worker 未就绪导致高亮卡顿。
+
+插件系统异步初始化：用 requestIdleCallback（兜底 setTimeout）延迟激活，
+完全不阻塞首屏渲染。插件管理器实例挂载到 window.__pluginManager。
+
+
+----------------------------------------
+10.2 Redux Toolkit 状态管理
+----------------------------------------
+
+文件：src/store/index.ts
+
+6 个 slice 组合，设置持久化采用「store.subscribe + 300ms 防抖」，
+避免在 Reducer 内同步写 localStorage 阻塞主线程：
+
+  let settingsSaveTimer: ReturnType<typeof setTimeout>;
+  store.subscribe(() => {
+    clearTimeout(settingsSaveTimer);
+    settingsSaveTimer = setTimeout(() => {
+      persistSettings(store.getState().settings);
+    }, 300);
+  });
+
+类型化 Hooks（React-Redux 9.x 新写法）：
+
+  export const useAppDispatch = useDispatch.withTypes<AppDispatch>();
+  export const useAppSelector = useSelector.withTypes<RootState>();
+
+Slices 拆分：
+
+  | Slice | 核心状态 | 技术要点 |
+  |---|---|---|
+  | layout | sidePanel/rightPanel/bottomPanel 可见性、宽度、DockableItems | localStorage 持久化；统一 dockableItems 模型支持左/右/底三区拖拽 |
+  | workspace | rootSource、openedFiles、editorGroups（多分屏）、mirrorContent、gitStatus | 最复杂的 slice；含 9 个 createAsyncThunk |
+  | terminal | tabs (Record)、panelLayout (groups/panes)、broadcastMode | 用 Record 而非数组存 tab；二分查找插入书签 |
+  | settings | theme、fontSize、wordWrap、minimap | loadSettings/persistSettings 与 store.subscribe 防抖配合 |
+  | modal | modalWebview、terminalModal | 最小化 slice，仅开关状态 |
+  | extensionUI | viewContainers、views、webviewPanels | 扩展贡献点注册 |
+
+workspaceSlice 深度剖析：
+  - 多分屏编辑器组（EditorGroup）+ 镜像内容（mirrorContent）
+  - 空组回收 + 索引重映射：当中间组被移除时，后续组索引前移，必须同步重映射
+    mirrorContent 和 editorSnapshots 的 key。关键工程教训：不在 Immer draft 上
+    边迭代边 delete，而是构建新对象后整体替换
+  - 预览 Tab（isPreview）替换逻辑：VSCode 风格的「单击预览、双击固定」
+
+
+----------------------------------------
+10.3 Fine-grained Selectors 性能优化
+----------------------------------------
+
+项目并不集中定义 reselect memoized selector，而是在每个组件内用 useAppSelector
+订阅最小粒度的 boolean / 字符串，依赖 React-Redux 的引用相等性做浅比较。
+
+典型例子在 FileTree.tsx：
+
+  const expanded = useAppSelector(
+    (state) => state.workspace.expandedDirs.includes(entryRelPath),
+  );
+
+注释说明设计意图：
+  展开状态由 store 订阅：原 expandedDirs 数组每次 toggle 都产生新引用，
+  通过 prop 传递会击穿所有节点的 React.memo。改为各节点自行订阅本节点是否展开，
+  useSelector 在返回值（boolean）未变时不会触发重渲染。
+
+这是规避「数组引用变化导致整树重渲染」的经典手法。
+
+
+----------------------------------------
+10.4 Preload 安全桥接
+----------------------------------------
+
+文件：electron/preload.cjs
+
+preload 在 sandbox 下运行，无法 require 相对路径本地模块，因此把 Channels 常量
+内联在文件中，确保脚本自包含。最终通过 contextBridge.exposeInMainWorld('electronAPI', ...)
+把受限 API 暴露给渲染进程。
+
+安全原则：
+  1. 不直接暴露 ipcRenderer，包装为受限 API
+  2. 所有通道名用 Channels 常量，编译期防错
+  3. 事件监听器返回取消订阅函数，防止内存泄漏
+  4. 白名单机制：仅暴露业务需要的 API
+  5. 扩展隔离：扩展只能通过 JSON-RPC 通信，无法直接访问此 API
+
+onChannel / onceChannel 封装（返回 unsub）：
+
+  function onChannel(channel, callback) {
+    const wrapped = (_event, data) => callback(data);
+    ipcRenderer.on(channel, wrapped);
+    return () => ipcRenderer.removeListener(channel, wrapped);
+  }
+
+
+----------------------------------------
+10.5 插件系统架构
+----------------------------------------
+
+插件系统分两层：内置 Plugin System（渲染进程内运行）和第三方 Extension Bridge
+（经 IPC 桥接 Extension Host 子进程）。
+
+（1）核心 src/plugin/core.ts 四大内部组件
+
+  - PluginRegistry：Map<id, PluginState> + Map<id, Plugin> + Map<id, PluginContext>
+  - CommandManager：命令注册与执行，register 返回 dispose 函数
+  - PluginStorageManager（亮点）：插件级 KV 存储，写合并采用指数退避
+
+指数退避写合并：
+
+  private scheduleFlush() {
+    if (this.writeTimer) clearTimeout(this.writeTimer);
+    // 指数退避：cooldown = min(cooldownMs * 2^writes, 30s)
+    const delay = Math.min(this.cooldownMs * Math.pow(2, this.consecutiveWrites), 30000);
+    this.writeTimer = setTimeout(() => this.flushToDisk(), delay);
+  }
+
+连续写越频繁，下次 flush 延迟越长（500ms → 1s → 2s → ... → 30s 封顶），
+避免高频写 localStorage 拖慢主线程。
+
+（2）Extension Bridge src/plugin/extensionBridge.ts
+
+架构定位：
+  Extension Host (Node.js) ←→ Main Process ←→ Preload IPC ←→ Renderer (ExtensionBridge)
+                                                          ↓
+                                                    Plugin System (Redux)
+
+store.subscribe 主动推送（亮点设计）：
+  - _subscribeWorkspaceRoot：root 变化时主动通知 git 扩展 openWorkspace，消除 5 秒轮询延迟
+  - _subscribeScmPanelVisibility：SCM 面板不可见时通知 git 扩展 pause 轮询
+  - _subscribeActiveFile：激活文件变化时通知 git 扩展高亮对应变更文件
+
+AI 文件变更批量刷新（250ms 防抖）：
+  避免连续 create-vite / write_file 触发高频 Explorer 刷新导致 GPU/CPU 飙升。
+
+
+----------------------------------------
+10.6 文件树优化（递归 memo + 享元）
+----------------------------------------
+
+文件：src/components/SidePanel/FileTree.tsx
+
+注意：本项目并未实际使用 react-virtualized / @tanstack/react-virtual，
+而是采用「递归 memo + 享元 + 细粒度 useSelector 订阅」替代虚拟滚动。
+
+性能优化要点：
+
+  1. React.memo + displayName
+  2. 细粒度 useSelector 订阅展开状态（避免数组引用变化击穿 memo）
+  3. 享元模式（Flyweight）缓存 JSX：
+
+     const iconElement = useMemo(() => (
+       <FileIcon name={entry.name} kind={entry.kind} expanded={expanded} />
+     ), [entry.name, entry.kind, expanded]);
+
+     const indentGuides = useMemo(() => {
+       if (level <= 0) return null;
+       return (
+         <div className="tree-indent-guides" style={{ left: 0, width: baseIndent + level * 12 + 6 }}>
+           {Array.from({ length: level }).map((_, i) => (
+             <span key={i} className="tree-indent-guide" style={{ left: baseIndent + i * 12 + 5 }} />
+           ))}
+         </div>
+       );
+     }, [level, baseIndent]);
+
+  4. useCallback 稳定回调引用：handleClick / refreshChildren / handleContextMenu 全部 useCallback
+  5. ref 存储最新值，规避闭包陷阱：expandedRef / onToggleExpandRef / lastOpRef
+  6. 懒加载子节点：expanded && children.length === 0 时才 readDirectory
+  7. 模块级拖拽状态：let currentDrag: DragState | null = null 跨递归节点共享
+  8. 自动展开激活文件所在目录，配合 activeFileExpandedRef 防止手动折叠后被 effect 立即重新展开
+  9. 拖拽防套娃：文件夹不能拖到自己的子目录
+
+
+----------------------------------------
+10.7 Electron 事件 Hooks
+----------------------------------------
+
+（1）useElectronEvents.ts
+
+集中订阅 Electron 主进程推送的系统级事件，并转发到 EventBus（Observer 模式）。
+
+  - menu.onOpenFolder / onOpenFile / onNewWindow → 派发 Redux action + EventBus emit
+  - window.onFocus / onBlur → eventBus.emit('app:focus'/'app:blur')
+  - fs.onChange → eventBus.emit('file:changed')
+  - extension.onMessage → 处理 lifeAiCode.fileChanged，把后端传的绝对路径转成相对
+    工作区根的路径，dispatch setExternalFileChange 触发 Explorer 精准刷新
+
+（2）useTsServerLifecycle.ts
+
+解决「打开 React 文件后高亮延迟 3 秒」的问题。
+把 tsserver 启动时机从「用户打开第一个文件」提前到「用户在资源管理器打开文件夹」：
+
+  useEffect(() => {
+    if (!rootSource || !isPath(rootSource) || isRemoteUri(rootSource)) {
+      if (currentRef.current !== null) {
+        currentRef.current = null;
+        tsService.stop().catch(() => {});
+      }
+      return;
+    }
+    if (currentRef.current === rootSource) return;
+    const previous = currentRef.current;
+    currentRef.current = rootSource;
+    // 切换工作区：先停旧的，再启新的
+    const p = (previous ? tsService.stop().catch(() => false) : Promise.resolve(true))
+      .then(() => tsService.start(rootPath))
+      .catch(() => false);
+  }, [rootSource]);
+
+要点：
+  - currentRef 防重复启动（tsService.start 内部也有幂等保护，双重保险）
+  - SSH 远程路径（ssh://）跳过，避免主进程盲目拼接出畸形 file:// URI
+  - 切换工作区时 stop 旧 server 失败也不阻塞 start 新 server
+
+（3）useSearch.ts（搜索策略 + 自适应算法）
+
+  - Strategy Pattern：IndexedSearchStrategy（倒排索引）+ WorkerSearchStrategy（Web Worker）
+  - PID 控制器自适应防抖：查询越长越应降低延迟，PID 输出 80-500ms 区间
+  - Kalman 滤波自适应批量大小：目标批次耗时 50ms，Kalman 滤波平滑 ratio，批次大小 2-50
+
+
+================================================================================
+                  第十一篇  算法库（亮点）
+================================================================================
+
+本篇是面试的最大亮点。IDEACODE 实现了一套跨学科算法库，从信息论到控制论到
+神经科学到强化学习到图机器学习，每个算法都有明确 IDE 场景映射。
+
+----------------------------------------
+11.1 缓存算法（LRU / ARC / W-TinyLFU）
+----------------------------------------
+
+（1）LRU（lruCache.ts）
+  哈希表 + 双向链表，虚拟头尾节点简化边界。O(1) get/set/delete。
+  特色：FileContentCache 子类带 mtime 校验；getExpired(maxAgeMs) 利用链表按时间
+  排序的特性从尾部扫描，遇到未过期即 break。
+  缺陷：无频率感知，扫描型访问会冲刷全部有效缓存（缓存污染）。
+
+（2）ARC 自适应替换缓存（arcCache.ts）
+  Megiddo & Modha 2003，平衡"最近性"与"频率"，维护四个链表：
+    - T1：最近访问一次（LRU）
+    - T2：最近访问多次（LRU）
+    - B1：从 T1 淘汰的幽灵记录（只存 key，value=null）
+    - B2：从 T2 淘汰的幽灵记录
+
+  自适应参数 p ∈ [0, c]：
+    - B1 命中 → p = min(p + max(|B2|/|B1|, 1), c) → 倾向 T1（最近性更重要）
+    - B2 命中 → p = max(p - max(|B1|/|B2|, 1), 0) → 倾向 T2（频率更重要）
+
+  竞争比保证：对任意访问序列竞争比 ≤ 2（vs 离线最优 LFD），LRU 无此保证。
+  抗扫描型访问强。应用：SimHash 缓存、Fuzzy 缓存。
+
+（3）W-TinyLFU（wTinyLFU.ts）
+  Caffeine（Java）核心算法，三段式架构：
+    Window LRU (1%) → Main SLRU [Probation(20%) + Protected(80%)]
+
+  TinyLFU 频率估计器（Count-Min Sketch）：
+    - d × w 计数器数组，d 个独立 FNV-1a 哈希
+    - estimate(key) = min_j { sketch[j][hash_j(key)] }（永远不高估）
+    - 周期重置：每 resetInterval 次访问，所有计数器乘以衰减因子 0.5，防止历史数据固化
+
+  淘汰流程：
+    1. 新条目进 Window LRU
+    2. Window 满 → 受害者移入 Main Probation
+    3. Probation 满 → 用 TinyLFU 比较新条目与受害者频率，频率高者保留
+    4. Probation 中高频条目（freq > 3）晋升到 Protected
+    5. Protected 满 → 最旧降级到 Probation
+
+  应用：文件内容缓存（默认）。
+
+三者对比：
+
+  | 算法 | 频率感知 | 抗扫描 | 竞争比 | 空间 | 适用场景 |
+  |------|---------|--------|--------|------|---------|
+  | LRU | 否 | 弱 | 无保证 | O(c) | 简单场景，最近打开文件 |
+  | ARC | 自适应（p 参数） | 强 | ≤2 | O(c) + 幽灵 | 混合访问模式，SimHash 缓存 |
+  | W-TinyLFU | TinyLFU 估计 | 极强 | 经验最优 | O(c) + Sketch | 文件内容缓存（默认） |
+
+
+----------------------------------------
+11.2 搜索算法
+----------------------------------------
+
+（1）Boyer-Moore-Horspool + Aho-Corasick（boyerMoore.ts）
+  Horspool（单模式，Ctrl+F）：只使用坏字符规则的最后一位比较结果决定偏移，
+  跳过好后缀规则，Unicode 字母表下实现更简单，平均 O(n/m)（模式越长跳得越远）。
+
+  Aho-Corasick（多模式）：Trie + 失败指针，BFS 构建 failure link，
+  一次扫描找到所有模式。O(n + k·m + z)。
+
+（2）FM-Index（fmIndex.ts）
+  基于 BWT + 游程编码的压缩态全文索引，用于终端输出滚动缓冲区搜索
+  （含大量 ANSI 转义，重复度高，BWT 压缩率极高）。
+
+  构建：
+    1. 加哨兵 \x00 保证 BWT 可逆
+    2. 对所有循环移位排序构建后缀数组
+    3. BWT[i] = s[(sa[i]-1+n) % n]
+    4. C 表：C[c] = 字典序中小于 c 的字符数
+    5. Occ 表：Occ(c, i) = BWT[0..i-1] 中 c 的累计次数（Int32Array 前缀和）
+
+  反向搜索（backward search）：从模式末尾向前，用 LF-mapping
+    sp = C[c] + Occ(c, sp)
+    ep = C[c] + Occ(c, ep+1) - 1
+  逐步缩小匹配区间 [sp, ep]，O(m) 无需解压。
+
+（3）倒排索引 + BM25F + BK-Tree（invertedIndex.ts）
+  多字段 BM25F：文档分 fileName（权重 3.0）、filePath（1.5）、content（1.0）三字段，
+  各字段独立计算词频和长度，加权组合。
+
+    score = Σ IDF(qi) · Σ_f w_f · tf·(k1+1) / (tf + k1·(1-b+b·|D|/avgdl))
+    IDF = log((N - n + 0.5)/(n + 0.5) + 1)
+
+  BK-Tree 模糊匹配：基于 Levenshtein 距离的树形索引，查询时利用三角不等式剪枝
+  （minChild = max(1, dist - maxDist)），O(1) 词项查找 + 拼写纠错。
+
+  SPSA 在线调参（BM25Tuner）：根据用户点击反馈用同时扰动随机逼近调整 k1、b 参数，
+  loss = 点击项在结果中的归一化排名。
+
+  Tombstone 机制：删除文件不立即清理，标记 tombstone，比例超 30% 才 compact()
+  物理压缩，避免频繁重建。
+
+（4）Count-Min Sketch（countMinSketch.ts）
+  概率计数，次线性空间。d × w 计数器数组，w = ⌈e/ε⌉、d = ⌈ln(1/δ)⌉，
+  估计值 f̂(x) = min_j C[j][h_j(x)]，永远不高估。
+
+  FileSearchPreFilter 三级级联预过滤：
+    L1: Count-Min Sketch（O(d) 查询，δ 误报率）
+    L2: 前缀快速匹配
+    L3: Boyer-Moore 精确搜索
+
+  对文件做 4-gram（步长 len/200）+ 5-gram（步长 len/100）采样后加入 Sketch，
+  典型淘汰 95%+ 不相关文件。
+
+（5）SimHash（simHash.ts）
+  局部敏感哈希（LSH）预过滤。FNV-1a 64-bit 哈希，提取 2-gram（权重 1）+
+  3-gram（权重 0.5 减噪），每位按 weight×(±1) 累加，>0 取 1。
+
+  汉明距离用 Brian Kernighan 算法 diff &= diff - 1n（O(bits_set)），
+  加速版逐字节查 BYTE_POPCOUNT 表。
+  自适应阈值：query 越长阈值越小（≤3→12, ≤6→10, ≤10→8, >10→6）。
+  配合 ARC 缓存避免重复计算 SimHash。
+
+
+----------------------------------------
+11.3 模糊匹配
+----------------------------------------
+
+（1）Damerau-Levenshtein + Jaro-Winkler（levenshtein.ts）
+  Damerau-Levenshtein：标准 Levenshtein 增加相邻字符交换操作，捕捉键位交换错误。
+  三行滚动数组，提前终止阈值：rowMin > maxDistance 立即返回，
+  且只计算 [i-maxDistance, i+maxDistance] 带状区域。
+
+  Jaro-Winkler：基于公共字符和交换次数，对短字符串（文件名/标识符）特别有效。
+  Winkler 增强给前缀匹配加分（前 4 字符）。
+
+  fuzzyMatch 自适应：≤6 字符用 Jaro-Winkler，长字符串用 Damerau-Levenshtein。
+
+（2）模糊搜索 DP（fuzzySearch.ts）
+  命令面板（Cmd+P）文件定位。动态规划最优匹配得分，综合：
+    - 注意力加权（系列位置效应）：U 型分布，首尾权重高
+      w_i = 1 + 0.6·(1 - |i/mid - 1|)，归一化保持基础分不变
+    - 连续匹配奖励（+2.5）、单词首字母奖励（+3.0）、驼峰奖励（+2.0）、前缀奖励（+4.0）
+    - 长度归一化：raw / sqrt(queryLen × targetLen) 使跨查询可比
+
+  FuzzySearchEngine 增强管道：
+    1. ARC 缓存
+    2. SimHash LSH 预过滤（淘汰 60%~95% 候选，>50 候选 + query≥2 字符时启用）
+    3. UCB1 Bandit 动态剪枝：将候选视为多臂老虎机
+       UCB_i = μ̂_i + √(2 ln N / n_i)，未探索的候选优先（Infinity），
+       每轮对 top-K UCB 候选做精确 DP，用下置信界 LCB 剪枝最低 30%
+    4. TF-IDF + BM25 饱和归一化精确评分：DP 中匹配字符基础分从 1 变为 IDF(c)，
+       稀有字符匹配信息量大；BM25 饱和防止长文件名虚高分
+
+
+----------------------------------------
+11.4 智能算法
+----------------------------------------
+
+（1）文件预测（filePrediction.ts）
+  条件熵预取：H(Y|X) = -Σ P(y|x)·log₂ P(y|x)，H 越小越确定越值得预取。
+
+  个性化 PageRank（CSR 稀疏 + Chebyshev 加速）：
+    PPR = (1-d)·r + d·Mᵀ·PPR
+    - CSR 稀疏存储：SpMV O(nnz) 替代密集 O(n²)
+    - Chebyshev 半迭代加速：收敛速度 O(√cond) vs O(cond)
+    - Perron-Frobenius 谱隙预估迭代次数
+
+  二阶马尔可夫 + Katz 回退平滑：
+    P(Z|X,Y) 数据充分（visits≥3）用二阶；不充分回退到一阶 P(Z|Y)；
+    无数据回退到边缘 P(Z)。Good-Turing 折扣处理稀疏。
+
+  Beta-Bernoulli 贝叶斯置信：对每个预取目标维护 Beta(α,β) 后验，
+  预测成功 α+1，未访问 β+1，用 95% 置信下界排序（替代点估计）。
+  综合置信度 = bayesianLower·0.7 + (1-entropy/maxEntropy)·0.3。
+
+  EWMA 衰减（α=0.98）逐步遗忘旧模式，每 100 次访问触发一次。
+
+（2）Node2Vec 图嵌入（node2vec.ts）
+  Grover & Leskovec 2016，融合 DFS/BFS 的二阶随机游走：
+    α_{pq}(t,x) = 1/p (d_tx=0) | 1 (d_tx=1, BFS) | 1/q (d_tx=2, DFS)
+    - p（return）大 → 较少回访
+    - q（in-out）>1 → BFS 局部倾向；<1 → DFS 全局倾向
+
+  Skip-Gram + 负采样训练嵌入：
+    max Σ log σ(v_j·v_i) + Σ E_{n~P_n}[log σ(-v_n·v_i)]
+  Xavier 初始化，windowSize=3，学习率随 epoch 衰减 lr·(1-epoch/epochs)，
+  提前终止（totalLoss<1e-6）。训练完归一化嵌入，余弦相似度推荐。
+
+  图构建：从 Hebbian 共现矩阵 coocMatrix['fileA::fileB'] 构建邻接表，
+  权重低于阈值过滤。
+
+（3）卡尔曼滤波（kalmanFilter.ts）
+  标量版（1 维状态）：
+    预测: x̂⁻ = x̂, P⁻ = P + Q
+    增益: K = P⁻ / (P⁻ + R)
+    更新: x̂ = x̂⁻ + K·(z - x̂⁻), P = (1-K)·P⁻
+  Q 大信任观测，R 大信任模型。adaptR 自适应调节。
+
+  向量版（VectorKalmanFilter）支持 [位置, 速度, 加速度] 多维状态，
+  setConstantAccelerationModel(dt) 配置常加速度运动模型 A 矩阵
+  [[1,dt,dt²/2],[0,1,dt],[0,0,1]]。
+  应用：文件读取速度估计、滚动速度预测、搜索延迟平滑。
+
+（4）PID 控制器（pidController.ts）
+    u(t) = Kp·e(t) + Ki·∫e + Kd·(de/dt)
+  增量式微分 Kd·(eₖ - 2eₖ₋₁ + eₖ₋₂)/dt，
+  防积分饱和（integralMax 限幅）、输出限幅（outMin/outMax）、
+  微分项低通衰减（×0.7 防噪声放大）。
+  应用：自适应防抖延迟调参、搜索响应调度、动画平滑、终端流控。
+
+（5）Lyapunov 调度器（lyapunovScheduler.ts）
+  Lyapunov 稳定性理论引导的实时帧预算调度。
+  系统状态 x(t) = [q₁..qₙ, Δf]（队列延迟 + 帧预算剩余率），动力学 ẋ = Ax + Bu + w。
+
+  DARE 求解 P（离散代数 Riccati 方程）：
+    P = AᵀPA - AᵀPB(R + BᵀPB)⁻¹BᵀPA + Q
+  用 Kleinman Newton 迭代近似。
+
+  Lyapunov 函数 V(x) = xᵀPx：
+    - V̇ ≤ -αV → 平稳态，正常调度
+    - V̇ → 0 → 临界态，降低非关键任务预算
+    - V > V_th → 发散态，紧急降载
+
+  收敛性：Lyapunov 直接法 V>0 且 V̇<0，收敛速率 = λ_min(P)/λ_max(P)。
+  结合 requestAnimationFrame + requestIdleCallback 双通道调度，防止爆量输入导致雪崩。
+
+
+----------------------------------------
+11.5 神经科学启发
+----------------------------------------
+
+BCM 神经标签管理（neuralTabManager.ts）
+  Bienenstock-Cooper-Munro 1982 突触可塑性模型：
+    dw/dt = φ(y, θ_M)·x - ε·w
+    φ(y, θ_M) = y·(y - θ_M)  (y≥0)
+    θ_M = E[y²]  (滑动均方阈值)
+  y > θ_M → LTP（增强，Tab 晋升）；y < θ_M → LTD（抑制，Tab 降级）。
+
+  四个增强模块：
+    1. STDP（脉冲时间依赖可塑性）：Δw = +A₊·exp(-Δt/τ₊) (LTP) / -A₋·exp(Δt/τ₋) (LTD)，
+       捕捉 Tab 切换方向性
+    2. Oja 主成分提取：Δw = η(y·x - y²·w)，在线 PCA 收敛到协方差矩阵最大特征向量，
+       发现协同活跃 Tab 簇
+    3. 泊松过程 KDE：Silverman 带宽非参数活动强度估计
+       λ(t) = (1/(n·h))·Σ K((t-tᵢ)/h)
+    4. Lyapunov 稳定性：V(w)=Σwᵢ², dV/dt≤0 保证有界
+
+  映射：突触强度 w = Tab 保留优先级，突触前活动 x = Tab 可见性，
+  突触后活动 y = Tab 活跃度（EWMA(editFreq + dwellTime)），遗忘率 ε = 长期未用自然衰减。
+
+
+----------------------------------------
+11.6 强化学习
+----------------------------------------
+
+（1）搜索 Bandit（searchBandit.ts）
+  Thompson Sampling + UCB 双策略。每个搜索结果是"臂"，点击=奖励 1，未点击=0。
+
+  Thompson Sampling：对每个臂维护 Beta(α,β) 先验，排序时从 Beta 采样得分。
+  JS 无原生 Beta 采样，用截断正态近似：
+    mean = α/(α+β), std = sqrt(αβ/((α+β)²(α+β+1)))
+  Box-Muller 生成正态样本截断到 [0,1]。时间衰减 timeWeight = timeDecay^age。
+
+  UCB：score = μ̂ + c·√(ln(t)/n)，从未展示的臂返回 Infinity 优先 Explore。
+
+  混合排序：mixedScore = mixRatio·normStatic + (1-mixRatio)·banditScore，
+  normStatic 是静态 BM25F 得分归一化到 [0,1]。
+  自然实现 Explore-Exploit：低 α/β 臂方差大偶尔排前（Explore），
+  高 α/β 臂采样集中（Exploit）。
+
+（2）增量熵（incrementalEntropy.ts）
+  递推 Shannon 熵 O(1) 单字符追加，用于终端输出实时熵检测：
+    H(S') = H(S)·n/(n+1) + log₂(n+1) - log₂(n) - 新旧熵项校正
+  维护字符频率直方图，addChar 计算增量 newTerm - oldTerm·(n/(n+1))。
+  每 100 字符做一次精确校正避免漂移，裁剪到 [0,8]（8 = log₂(256)）。
+
+  SlidingWindowEntropy：固定大小循环缓冲区 + 频率 Map，推入新字符同时移除最旧，
+  每 16 字符重算一次，用于分段二进制检测。
+
+（3）文件社区（fileCommunity.ts）
+  谱聚类（Ng-Jordan-Weiss 2002）：归一化拉普拉斯 L = I - D^(-1/2)·W·D^(-1/2)，
+  取最小 k 个特征向量做 k-means，等价于松弛后的图最小割。
+  中心 = 度数最大节点，内聚度 = 社群内平均边权重。
+
+  CP 张量分解：三阶张量 T[fileA, fileB, relation] ≈ Σ_r λ_r·a_r ∘ b_r ∘ c_r，
+  ALS（交替最小二乘）求解。发现"虽不直接共现但通过 import 间接相关"的跨关系文件对。
+
+（4）Walsh-Hadamard 变换（walshHadamard.ts）
+  快速 Walsh-Hadamard 变换（FWHT）用于 diff 加速。蝶形变换 O(N log N) 就地：
+
+    for (let step = 1; step < N; step <<= 1) {
+      for (let i = 0; i < N; i += step << 1) {
+        for (let j = 0; j < step; j++) {
+          const u = data[i + j], v = data[i + j + step];
+          data[i + j] = u + v;
+          data[i + j + step] = u - v;
+        }
+      }
+    }
+
+  H_{2N} = [H_N H_N; H_N -H_N]，正交对称矩阵。
+  行签名 = FWHT 后取 top-K 最大绝对值系数。两行签名内积近似相似度，
+  将 O(N²) 行比较降为 O(N log N + K·C²)。
+
+  WalshLineClusterer：大文件 diff 预聚类，先计算所有行签名，相似度高（>0.3）的行聚集，
+  只在聚类内部做精确 Myers/LCS diff。
+
+
+================================================================================
+                  第十二篇  性能优化与工程约定
+================================================================================
+
+----------------------------------------
+12.1 主进程性能优化清单
+----------------------------------------
+
+  1. v8-compile-cache 加速二次启动（缓存目录持久化到 ~/.ideacode/v8-cache）
+  2. SystemMonitor GPU 只采集一次，周期采集只跑 CPU+内存，间隔 5s
+  3. 异步 IPC only，避免同步 IPC 或 remote 模块防止进程阻塞
+  4. 文件监听 gitRoot 缓存 + 150ms 防抖
+  5. 同步 I/O 只用在启动期、一次性、极快的检测
+  6. 扩展宿主延迟 2s 启动，避免与应用启动竞争资源
+  7. semanticTokens 用 Uint32Array 减少 IPC 序列化开销
+  8. tsserver 请求 3s 超时兜底，ensureServer 惰性重启
+  9. Git 命令按仓库串行化，避免 .git/index.lock 冲突
+  10. index.lock 30s 阈值清理历史残留
+  11. fs.watch recursive 跨平台兼容（Linux 需 Node 20+）
+  12. 终端输出 PID + 水位线两层流控
+  13. 扩展宿主崩溃自动重启（maxRestarts=5, delay=1s）
+  14. 热重启防抖 + SIGTERM→SIGKILL 两段式终止
+
+
+----------------------------------------
+12.2 渲染进程性能优化清单
+----------------------------------------
+
+  1. Redux store.subscribe + 300ms 防抖持久化 settings
+  2. Fine-grained selectors：组件内订阅最小粒度 boolean，规避数组引用变化击穿 memo
+  3. 享元 JSX 缓存：FileTree 图标与缩进线 useMemo
+  4. requestIdleCallback 延迟初始化插件和扩展桥接，不阻塞首屏
+  5. Monaco Worker 双层兜底（工厂变量 + URL Worker 兜底）
+  6. tsserver 预热：root 变化即启动，先停后启，幂等保护
+  7. AI 文件变更批量刷新（250ms 防抖合并）
+  8. Git 扩展按需轮询：SCM 面板不可见时 pause，可见时 resume + 立即刷新
+  9. Immer draft 安全：不边迭代边 delete，构建新对象后整体替换
+  10. 语义 token 位置重映射消除高亮跳动
+  11. 事件驱动重试替代盲等（tsserver diagnostics 立即重试）
+  12. xterm 双重 rAF 防 Canvas 黑屏
+  13. 拖拽期间 fit 抑制，避免高频 fit 导致 cols 失步
+  14. 插件存储指数退避合并写
+  15. 搜索 PID 自适应防抖 + Kalman 自适应批量
+
+
+----------------------------------------
+12.3 打包与构建优化
+----------------------------------------
+
+  1. Electron packaging macOS：compression: store for ASAR，dmg.format: UDRO
+     禁用压缩加速构建
+  2. 开发打包禁用代码签名：hardenedRuntime: false, identity: null
+  3. Vite build 内存限制：NODE_OPTIONS=--max-old-space-size=4096 防 OOM
+  4. 扩展构建并行：build:ssh-extension & build:git-extension & wait
+  5. extension-host 子进程启用 v8-compile-cache
+  6. ASAR 内 .mjs 依赖替换为 app.asar.unpacked（spawn 不能从 ASAR 内加载）
+  7. 多语言按需动态 import() 减少首屏体积
+  8. SearchAddon / WebglAddon 懒加载分割 bundle
+
+
+================================================================================
+                  第十三篇  面试问答要点
+================================================================================
+
+----------------------------------------
+13.1 架构设计类问题
+----------------------------------------
+
+Q1: 为什么用三层进程隔离？
+A: 三个目标——进程隔离（扩展崩溃不拖垮主界面）、安全隔离（扩展无法直接访问 DOM/OS API）、
+   资源隔离（每个窗口独立内存空间）。主进程是唯一能访问 OS API 的进程，
+   渲染进程 sandbox=true 无 Node 能力，扩展宿主 ELECTRON_RUN_AS_NODE=1 纯 Node 无 Chromium。
+
+Q2: 为什么从单体架构演进到微内核？
+A: v1 单体架构所有 Manager 手动实例化、IPC Handler 分散注册，耦合度高。
+   v2 引入 ServiceBus + ServiceRegistry，服务化拆分，内核零 Electron 依赖，
+   通过 IpcBridgeAdapter 和 setSpawnFn 两个注入点适配多平台。
+   采用双轨策略（Feature Flag）渐进迁移，try/catch 自动降级。
+
+Q3: ServiceBus 的四种通信模式分别用在什么场景？
+A: request（RPC）：需要返回值的调用，如 fs:readFile；本地优先策略，同进程零开销。
+   notify（fire-and-forget）：单向通知，如 window:showMessage。
+   publish/subscribe：事件广播，如 file:changed；返回 Disposable 供释放。
+   JSON-RPC 2.0：与扩展宿主子进程通信，带 30s 超时的 pending Map。
+
+Q4: IPC 桥接的猴子补丁设计？
+A: 重写 bus.publish，让一次 publish 同时通知同进程订阅者（原逻辑）和所有渲染窗口
+   （windowManager.broadcast）。这样上层调用方无需关心订阅者在哪个进程，
+   实现跨进程的透明 Pub/Sub。
+
+Q5: 为什么用 fork 而非 spawn 创建扩展宿主？
+A: fork 是 spawn 的特化版本，自动建立 IPC 通道（fd=3），父子通过 process.send/
+   child.send 通信，无需手写 stdio 协议。而 tsserver 用 spawn 是因为 LSP 基于
+   Content-Length 分帧的 stdio 协议，不是 Node IPC。
+
+Q6: ELECTRON_RUN_AS_NODE 的作用？
+A: process.execPath 是 Electron 二进制，不加此环境变量会启动完整 Electron 应用
+   （带 Chromium）。设为 '1' 后以纯 Node.js 模式运行，无窗口、无 Cocoa 初始化。
+   复用同一份二进制同时充当"带 GUI 的主进程"和"纯 Node 子进程"。
+   但 macOS 上某些版本仍会初始化 Cocoa NSApplication，需 app.dock.hide() 兜底。
+
+
+----------------------------------------
+13.2 进程与线程类问题
+----------------------------------------
+
+Q1: ProcessManager 如何实现平台解耦？
+A: 通过 ChildProcess 抽象接口（pid/alive/send/onMessage/onExit/onError/kill）
+   和 setSpawnFn 注入式 spawn 函数。Electron 用 child_process.fork，
+   Web 用 Worker，内核不感知具体实现。
+
+Q2: 进程崩溃自动重启如何避免风暴？
+A: 三参数控制：autoRestart（是否启用）+ maxRestarts（默认 5）+ restartDelayMs（默认 1s）。
+   restartCount 跨重启保留（existing?.restartCount || 0），达到上限停止重启。
+   setTimeout 延迟避免崩溃循环打满 CPU。
+
+Q3: 扩展宿主的 _hotRestarting 和 stopping 两个标志为什么必须区分？
+A: stopping 表示用户主动永久停止（stop()），exit 后不再自启；
+   _hotRestarting 表示为热重启而 kill，exit 后应立即 start()。
+   原先复用 stopping 会导致 exit 处理器中 `if (this.stopping) return;` 直接
+   跳过重启逻辑，使热重启变成永久停止。两个标志语义正交：
+   - stopping=true, _hotRestarting=false：用户主动停止，永久退出
+   - stopping=false, _hotRestarting=true：热重启中，exit 后立即 start()
+   - stopping=false, _hotRestarting=false：异常崩溃，延迟自动重启
+   exit 处理器读取 wasHotRestarting 局部变量（exit 前先保存），分支处理。
+
+Q4: extension-host 的 fork 为什么必须传 ELECTRON_RUN_AS_NODE=1？
+A: fork 用的是 process.execPath（Electron 二进制），不设此环境变量时
+   Electron 会进入"应用模式"——尝试读取 app.whenReady、创建窗口、加载
+   package.json 的 main 字段。扩展宿主只是无头 Node 进程，需要以纯 Node
+   模式启动。同时子进程未调用 app.dock.hide() 会在 macOS 上创建额外的
+   Dock 图标。ELECTRON_RUN_AS_NODE 让 Electron 二进制直接当 node 用。
+
+Q5: tsserver LSP 通信为什么用 Content-Length 分帧而不是换行？
+A: LSP 消息体可能包含换行符（JSON 中的 \n），单纯按换行分帧会切碎消息。
+   Content-Length 头 + \r\n\r\n 分隔符是 LSP 规范的 framing 方式：
+   "Content-Length: N\r\n\r\n" + N 字节 JSON。我们额外加 64MB 上限保护
+   防止协议错位时无限读取内存。
+
+Q6: node-pty 终端为什么需要 PID 流控 + 水位线背压？
+A: 终端输出速度可能远超渲染速度（如 npm install -g 输出几十 MB 日志）。
+   如果不背压：data 事件堆积 → 主进程 IPC 队列爆炸 → 渲染进程消息队列
+   爆炸 → OOM。流控策略：
+   - 缓冲超过 highWatermark（默认 1MB）→ 调用 socket.pause() 暂停 PTY
+   - 缓冲降到 lowWatermark → socket.resume() 恢复
+   - 渲染进程消费后通过 IPC 反馈 ack，主进程据此降水位
+
+================================================================
+第十三篇 · 13.3 性能优化类面试问答
+================================================================
+
+Q1: 为什么 SystemMonitor 的 GPU 信息只在启动时采集一次？
+A: systeminformation.graphics() 在 macOS 底层调用 system_profiler，
+   是同步阻塞调用，耗时 1~3 秒。如果在 5 秒定时器里反复调用，主进程会
+   周期性卡顿。GPU 型号/显存几乎不变，所以启动时采集一次缓存即可；
+   周期采集只跑 currentLoad（CPU）和 mem（内存），它们走 Mach 调用很快。
+
+Q2: v8-compile-cache 的缓存目录为什么改到 ~/.ideacode/v8-cache？
+A: 默认 os.tmpdir() 在 macOS 是 /var/folders/.../T/，系统周期性清理，
+   二次启动缓存命中率极低。改到 ~/.ideacode/v8-cache 持久化后：
+   - 首次启动：编译所有 require 的模块，写入缓存
+   - 二次启动：直接 mmap 缓存文件，跳过 V8 编译，主进程启动提速 30~50%
+   v8-compile-cache 内部按 arch/version 子目录隔离，跨架构安全。
+
+Q3: 语义 token 为什么用 Uint32Array 而不是 Array<number>？
+A: IPC 序列化时 Array<number> 走 JSON.stringify（每个数字变 1~10 字符+
+   分隔符），1M 个 token 序列化耗时数百 ms。Uint32Array 的底层
+   ArrayBuffer 通过 structured clone 直接 memcpy，1M 个 token 只占 4MB
+   内存，序列化耗时 < 10ms。代价：必须保证 token 编码能塞进 32 位
+   （typeIdx 8 位 + modifierSet 24 位刚好 32 位）。
+
+Q4: Git 状态轮询为什么从 2s 改成 30s？
+A: 2s 轮询在大型仓库（10w+ 文件）每次触发 git status 子进程，CPU 持续
+   30%+。引入 fs.watch 文件监听后，状态变化能即时推送，轮询仅作兜底。
+   30s 是兜底轮询的经验值：足够及时发现 fs.watch 漏掉的事件（如网络
+   文件系统），又不会造成明显 CPU 负载。远程仓库进一步放宽到 60s，
+   且 SCM 面板不可见时暂停轮询（visibilitychange 事件）。
+
+Q5: cooccurrence 矩阵为什么要 30 秒批量写 localStorage？
+A: 每次编辑文件都更新共现矩阵，按文件切换频率高峰期 1 分钟 20+ 次。
+   每次 localStorage.setItem 序列化整个矩阵（KB 级）+ 写磁盘同步 I/O，
+   高频写入会导致主线程卡顿。批量策略：
+   - 内存中标记 dirty，30 秒定时器统一 flush
+   - 应用退出时 flush 一次（beforeunload）
+   - 序列化耗时从平均 20ms/次降到 1ms/次
+
+Q6: 树组件为什么必须用虚拟滚动 + 100ms 防抖？
+A: 大型项目文件树 1w+ 节点，全量渲染 DOM 会导致：
+   - 首屏渲染 3s+（每节点 5 个 DOM 元素 = 5w DOM）
+   - 滚动掉帧（style 重新计算）
+   虚拟滚动只渲染可视区 + overscan（前后各 5 个），DOM 数量恒定 30~50。
+   100ms 防抖用于展开/折叠：用户连点目录时合并多次 tree update，
+   避免每次 setState 触发整树 diff。
+
+Q7: Vite build 为什么需要 NODE_OPTIONS=--max-old-space-size=4096？
+A: Monaco Editor 是大型模块集合（worker + 多语言 definition），Vite
+   打包时 Rollup 需要在内存中维护完整 AST + sourcemap。默认 Node 堆
+   1.4GB 不够，会 OOM 崩溃（exit code 134 + JavaScript heap OOM）。
+   4GB 经验值：足够装下 Monaco + 项目代码，又不至于触发 swap。
+
+================================================================
+第十三篇 · 13.4 算法与数据结构类面试问答
+================================================================
+
+Q1: ARC 缓存相比 LRU/LFU 的优势？为什么用 W-TinyLFU 而非纯 ARC？
+A: ARC（Adaptive Replacement Cache）动态调整 LRU 和 LFU 的比例，
+   根据访问模式自适应：偏近期数据时增大 LRU 区，偏长期热点时增大 LFU 区。
+   - 优势：避免 LRU 抗扫描污染差、LFU 早期热点难驱逐的问题
+   - W-TinyLFU 优势：TinyLFU 的 Count-Min Sketch 频率估计 + W 窗口保护
+     新数据，内存占用比 ARC 的两个历史链表更小（O(1) 计数器 vs O(n) 链表）
+   - 项目选择：文件缓存用 W-TinyLFU（容量大、扫描多），元数据用 ARC（小容量
+     但访问模式混合）
+
+Q2: FM-Index 在文件搜索中的具体作用？相比朴素字符串匹配快多少？
+A: FM-Index 基于 Burrows-Wheeler Transform，能在 O(m) 时间匹配长度 m 的
+   pattern，且支持 rank/select O(1) 查询。文件搜索场景：
+   - 朴素匹配：O(n*m)，1GB 文件搜 10 字符 pattern 约 10^10 次比较
+   - FM-Index：构建后 O(m) = 10 次操作 + 命中位置回溯
+   - 实测：10w 行文件搜索从 ~200ms 降到 ~5ms
+   缺点：构建索引耗时（O(n)），所以只对常驻索引文件做。
+
+Q3: SimHash 用于什么？为什么不用普通哈希？
+A: SimHash 用于"近似重复检测"，如代码片段去重、相似文件提示。普通哈希
+   （SHA-1）一个字符变化整个哈希变化；SimHash 的局部敏感性使得相似输入
+   产生相近哈希（汉明距离小）。
+   - 项目场景：判断两个 .ts 文件是否结构相似（复制粘贴重构）
+   - 计算：分词 → 每个词 MD5 → 按位累加 → 符号化 → 64 位指纹
+   - 判定：汉明距离 ≤ 3 视为近似重复
+
+Q4: 多臂老虎机（Bandit）算法在 IDE 里的应用？
+A: 用于"命令推荐"——根据用户使用频率动态调整快捷菜单排序。
+   - ε-greedy：90% 用历史最优，10% 探索新命令（避免冷启动偏差）
+   - UCB1：选择 score = avg_reward + sqrt(2*ln(N)/n_i) 最高的
+   - 项目实现：每个命令一个 arm，每次触发记一次 reward=1，定期重新计算
+   - 效果：常用命令 3 天内排到 Top 3，长尾命令仍偶尔曝光
+
+Q5: 卡尔曼滤波 + PID 控制用在什么场景？
+A: 用于"系统资源预测 + 自动调节"。例如预测 CPU 负载，提前调度 GC 或
+   通知扩展宿主降频。
+   - 卡尔曼滤波：观测值 = 当前 CPU（有噪声），状态估计 = 真实负载
+     predict: x = A*x + B*u, P = A*P*A' + Q
+     update:   K = P*H'/(H*P*H' + R), x = x + K*(z - H*x), P = (I-K*H)*P
+   - PID：根据预测误差调整采样频率
+     u(t) = Kp*e(t) + Ki*∫e + Kd*de/dt
+   - 项目效果：CPU 飙升场景提前 1~2 秒感知，避免突发卡顿
+
+Q6: Node2Vec 在代码理解中的作用？
+A: Node2Vec 把代码调用图/依赖图嵌入到向量空间，用于"相似函数推荐"和
+   "重构影响分析"。
+   - 构建：把 import 关系当有向图，random walk 生成节点序列
+   - 训练：Word2Vec Skip-gram 学到每个节点的 embedding
+   - 应用：用户编辑 funcA 时，召回 embedding 余弦相似度 > 0.8 的函数
+     作为"可能需要一起修改"的提示
+   - 性能：图 1w 节点训练约 30s，召回 < 50ms
+
+Q7: Lyapunov 稳定性分析在工程上具体用了什么？
+A: 用于"扩展资源调度的稳定性证明"。我们用一个动态调度策略：
+   多个扩展竞争 CPU 配额，调度器根据负载动态分配。
+   - 状态：x_i = 扩展 i 的实际配额/期望配额
+   - Lyapunov 函数：V = Σ(x_i - 1)²
+   - 证明：调度规则保证 dV/dt ≤ 0，即系统收敛到所有扩展都拿到期望配额
+   - 工程意义：避免某些扩展饿死、避免调度震荡
+
+================================================================
+第十三篇 · 13.5 工程实践与踩坑类面试问答
+================================================================
+
+Q1: macOS 打包为什么 ASAR 用 compression: store，DMG 用 format: UDRO？
+A: 都是为了"不压缩"——牺牲一点磁盘空间换更快的安装/启动速度。
+   - ASAR 默认会 gzip 压缩内部文件，启动时 Electron 需要解压读取，
+     大型项目（200MB+）启动慢 1~2 秒。store 模式直接 mmap，启动快
+   - DMG 默认 UDZO（zlib 压缩），挂载时内核解压；UDRO 只读不压缩，
+     挂载即用，安装拖拽速度快 3~5 倍
+   - 适用场景：内部部署、CI 频繁重装。对外发布可恢复压缩减小下载体积。
+
+Q2: 开发打包为什么 hardeningRuntime: false + identity: null？
+A: macOS 代码签名 + Hardened Runtime 是公证（Notarization）前置条件，
+   开发阶段没必要：
+   - 签名证书申请慢（Apple Developer 1~2 天审核）
+   - Hardened Runtime 限制动态库加载，调试时 electron-rebuild 装的
+     node-pty 等原生模块会报签名不匹配
+   - identity: null 跳过签名，配合 hardeningRuntime: false 直接出包
+   生产打包时移除这两个配置，启用正式签名 + 公证。
+
+Q3: SSH 远程项目为什么不能复用 typescript-language-server？
+A: typescript-language-server 用 file:// URI，且 tsserver 进程通过
+   fs.readFile 读本地文件。SSH 项目文件在远程主机，无法本地访问：
+   - file:// URI 不识别 ssh://
+   - 即使改 URI，tsserver 也读不到远程文件
+   解决方案：自建 tsSdk Worker，在渲染进程 Web Worker 里跑
+   ts.LanguageService，文件读取通过 fileService.readFile 异步加载
+   （本地走 fs.readFile，SSH 走 sftp），统一抽象。
+
+Q4: tsSdk Worker 的同步 LanguageServiceHost 怎么解决跨文件异步加载？
+A: ts.LanguageServiceHost 要求 fileExists/readFile 同步返回，但
+   跨文件加载是异步的（SSH sftp）。我们的方案：
+   1. ts.preProcessFile 解析当前文件的 import 列表（同步）
+   2. postMessage 给主线程异步 fetch（带 5s 超时）
+   3. fetch 结果缓存到内存，下次同步读取命中
+   4. fire-and-forget：不阻塞当前请求，下次请求时缓存已就绪
+   代价：首次打开文件 hover/completion 可能没数据，500ms 后再请求
+   就有了——前端通过语义高亮 toggle 触发重新请求。
+
+Q5: SSH 远程 JSX 文件为什么用 typescript 而非 typescriptreact？
+A: Monaco 的 Monarch tokenizer 对 typescriptreact 支持不稳定，
+   会丢失 JSX 标签高亮。改用 typescript + 自定义 decoration：
+   - buildJsxDecorations：扫描 <Tag> 和 </Tag> 用 InlineDecoration 标注
+   - buildDeclarationDecorations：用 ts.LanguageService.getNavigationTree
+     拿到 class/method 声明位置，用 decoration 高亮
+   语义 token（变量/函数）依然走 tsSdk，但语法 token 走 decoration，
+   两层叠加稳定且可控。
+
+Q6: SSH extension 的 ssh.internal.execute PTY 模式为什么有 stdout 污染？
+A: PTY 模式下命令输出包含：命令回显 + shell 提示符 + stderr 合并 +
+   ANSI 转义。例如 git diff 输出会被混入这些内容导致解析失败：
+   - 命令回显：执行的命令本身被打印一遍
+   - shell prompt：`user@host:~$` 出现在输出末尾
+   - exit code 不可靠：PTY 不直接返回退出码
+   解决：禁用 PTY，用 exec 模式（除非确实需要交互式如 sudo）。
+   git/fileTree 等纯数据命令一律非 PTY。
+
+Q7: Git 写操作前为什么要清理 .git/index.lock？为什么 30 秒阈值？
+A: .git/index.lock 是 git 操作时创建的锁文件，正常完成后删除。但
+   进程崩溃/强杀会残留锁文件，导致后续 git 操作报错
+   "Unable to create index.lock"。
+   - 30 秒阈值：正常 git status < 5s，留 6 倍冗余；超过 30s 几乎必是
+     残留锁
+   - 清理时机：每次写操作前（stage/commit/checkout/push/pull）
+   - 实现：fs.stat 检查 mtime，过期则 unlink
+   不能在 git status 前清，因为可能有别的 git 进程正在跑。
+
+Q8: Git 命令为什么要按仓库序列化（Promise 队列）？
+A: 多个 git 命令并发执行时，会同时尝试创建 .git/index.lock：
+   - git status A 创建 lock
+   - git status B 创建 lock 失败 → 报错
+   - git status A 完成，删 lock
+   - git status C 此时才能跑
+   序列化：每个仓库维护一个 Promise 链，新命令 append 到链尾。
+   await chain → 执行 → resolve → 下一个开始。读操作（status）也
+   走队列是为了保证顺序一致性（避免拿到中间状态）。
+
+Q9: TerminalInstance 的 outputFilter 为什么要区分"是否修改了 data"？
+A: outputFilter 用于过滤密码提示等敏感信息。如果无条件删首字符 \r：
+   - 命令正常输出末尾的 \r\n 被删 \r → 渲染时换行错乱
+   - xterm.js convertEol 已经处理 \r\n，再删反而破坏
+   - 没修改 data 时直接返回原 buffer 避免拷贝
+   修改时（命中 password: 关键字）才删对应行首 \r，最小化副作用。
+
+Q10: 终端 xterm.js 为什么用双重 rAF 防 Canvas 黑屏？
+A: xterm.js webgl 渲染器在 Canvas resize 时会触发黑屏，原因：
+   - resize 触发 webgl context lost
+   - 重新分配 framebuffer 需要一帧时间
+   - React StrictMode 下 effect 双调用，resize 触发两次
+   双重 rAF：requestAnimationFrame(() => requestAnimationFrame(resize))
+   确保布局稳定后再触发 webgl resize，避免中间帧黑屏。同时 StrictMode
+   用 ref 标记已初始化，跳过第二次 effect 调用。
+
+Q11: 进程退出后 BrowserWindow 不从 Map 删除会有什么问题？
+A: 内存泄漏。BrowserWindow 是 Node 包装的 native 对象，即使窗口
+   closed 后 JS 引用还在 Map 里，对象不会被 GC：
+   - 每个窗口约 50MB（webContents + JS context）
+   - 反复打开关闭 100 次泄漏 5GB
+   解决：win.on('closed', () => this.windows.delete(windowId))。
+   扩展宿主、tsserver 等子进程同理，exit 后清引用 + 清 pending
+   requests（reject 所有等待中的 Promise）。
+
+Q12: koa-connect 包装 Express 中间件为什么会数据丢失？
+A: koa-connect 的桥接逻辑里，Express 中间件修改的 res.locals /
+   res.headers 不会自动同步回 koa ctx。例如 Express 写 ctx.status = 200，
+   实际 koa 上下文还是 404，最终响应状态错误。
+   解决：原生 Koa 中间件实现，所有 ctx 操作走 Koa 原生 API，
+   不混用 Express 中间件。
+
+================================================================
+                          【全篇完】
+================================================================
+
+附录：本文件涉及的核心源码索引（按子系统）
+
+【主进程】
+  electron/main.cjs                       - 主进程入口、v8-cache、双轨策略
+  electron/main/windowManager.cjs         - 多窗口生命周期
+  electron/main/extensionHost.cjs         - 扩展宿主 fork + 热重启
+  electron/main/lifecycle.cjs             - 应用生命周期
+  electron/main/systemMonitor.cjs         - 系统资源监控
+  electron/main/tray.cjs                  - 系统托盘
+  electron/main/historyManager.cjs        - 窗口会话历史
+  electron/main/appMenu.cjs               - 应用菜单
+  electron/main/utils/env.cjs             - PATH 修复
+
+【IPC Handler】
+  electron/main/ipcHandlers/index.cjs     - 注册总入口
+  electron/main/ipcHandlers/terminalHandler.cjs
+  electron/main/ipcHandlers/fsHandler.cjs
+  electron/main/ipcHandlers/gitHandler.cjs
+  electron/main/ipcHandlers/extensionHandler.cjs
+
+【LSP / 子进程管理】
+  electron/main/lsp/tsserverManager.cjs   - tsserver LSP 进程
+  electron/main/workers/fileWatcher.cjs   - 文件监听 worker
+  electron/main/workers/searchWorker.cjs  - 搜索 worker
+  electron/main/workers/taskManager.cjs   - 长任务管理
+
+【扩展宿主】
+  electron/extension-host/index.cjs       - 宿主入口
+  electron/extension-host/rpc.cjs         - JSON-RPC 实现
+  electron/extension-host/vscode-api-bridge.cjs - VSCode API 模拟
+
+【微内核】
+  packages/kernel/src/Microkernel.ts      - 内核入口
+  packages/kernel/src/ServiceBus.ts       - 消息总线
+  packages/kernel/src/ServiceRegistry.ts  - 服务注册
+  packages/kernel/src/ProcessManager.ts   - 通用进程管理器
+  packages/kernel/src/ipc/ElectronMainIpcBridge.cjs
+
+【共享】
+  electron/shared/channels.cjs            - IPC 通道常量
+  electron/preload.cjs                    - 预加载桥接
+
+【渲染进程 · 编辑器】
+  src/components/MonacoEditor/index.tsx   - Monaco 集成
+  src/services/tsLanguageService.ts       - TS LSP 客户端
+  src/workers/tsSdk.worker.ts             - 自建 TS SDK Worker
+  src/services/workerSemanticTokens.ts    - 语义 token 解码
+
+【渲染进程 · 终端】
+  src/components/Terminal/TerminalInstance.tsx
+
+【渲染进程 · 文件系统】
+  src/services/fileService.ts
+  src/services/fileSystemProvider.ts
+
+【渲染进程 · 状态】
+  src/store/slices/*                      - Redux Toolkit 分片
+  src/hooks/*                             - 细粒度 selector hooks
+
+【算法库】
+  src/utils/algorithms/arcCache.ts        - ARC 自适应缓存
+  src/utils/algorithms/wTinyLFU.ts        - W-TinyLFU
+  src/utils/algorithms/fmIndex.ts         - FM-Index 全文索引
+  src/utils/algorithms/simHash.ts         - 相似哈希
+  src/utils/algorithms/bandit.ts          - 多臂老虎机
+  src/utils/algorithms/kalman.ts          - 卡尔曼滤波
+  src/utils/algorithms/pid.ts             - PID 控制
+  src/utils/algorithms/lyapunov.ts        - 稳定性分析
+  src/utils/algorithms/bcm.ts             - BCM 神经可塑性
+  src/utils/algorithms/node2vec.ts        - 图嵌入
+
+【插件系统】
+  src/plugin/PluginStorageManager.ts      - 指数退避存储
+  src/plugin/*                            - 插件运行时
+
+【构建】
+  package.json                            - 依赖与脚本
+  electron-builder 配置见 package.json build 字段
+  scripts/electron-dev.mjs                - 开发模式启动
+  scripts/fix-node-pty.mjs                - node-pty 原生模块修复
+
+================================================================
+文档统计：约 3250 行 / 涵盖 13 大篇章 / 80+ 核心源码位置
+面向用途：技术面试 / 项目复盘 / 架构评审
+================================================================
+

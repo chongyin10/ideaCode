@@ -42,6 +42,7 @@ import ContextMenu, { type MenuItem } from '../components/ContextMenu';
 import FileReferencesModal from '../components/FileReferencesModal';
 import { findFileReferences, type FileSearchResult } from '../services/searchService';
 import { revealInExplorer } from '../services/fileOperations';
+import { notifyPanelResizeStart, notifyPanelResizeEnd } from '../services/panelResizeNotifier';
 import { BCMTabManager } from '../utils/algorithms/neuralTabManager';
 import { EntropyFilePrefetcher } from '../utils/algorithms/filePrediction';
 import { eventBus } from '../utils/eventBus';
@@ -556,8 +557,16 @@ function Home() {
 
   useEffect(() => {
     if (draggingIdx < 0) return;
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!splitRef.current) return;
+    // §rAF 节流：mousemove 高频触发，若每次都同步 dispatch 两次 Redux + 重渲染，
+    // 多个 DiffEditor 会同时 layout() 重新计算 diff，阻塞主线程导致拖动延迟/不同步。
+    // 用 rAF 合并：每帧最多 dispatch 一次，保证视觉与光标同步。
+    let rafId: number | null = null;
+    let lastEvent: MouseEvent | null = null;
+
+    const applyResize = () => {
+      rafId = null;
+      const e = lastEvent;
+      if (!e || !splitRef.current) return;
       const rect = splitRef.current.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const totalWidth = rect.width;
@@ -573,12 +582,28 @@ function Home() {
         dispatch(setGroupRatio({ groupIndex: draggingIdx + 1, ratio: newRight }));
       }
     };
-    const handleMouseUp = () => setDraggingIdx(-1);
+
+    const handleMouseMove = (e: MouseEvent) => {
+      lastEvent = e;
+      if (rafId === null) {
+        rafId = requestAnimationFrame(applyResize);
+      }
+    };
+    const handleMouseUp = () => {
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      setDraggingIdx(-1);
+      // 通知 DiffEditor/MonacoEditor 恢复 automaticLayout 并统一 layout
+      notifyPanelResizeEnd();
+    };
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', handleMouseUp);
     return () => {
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
+      if (rafId !== null) cancelAnimationFrame(rafId);
     };
     // draggingIdx is the only real dep; egDragRef is stable ref
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -586,6 +611,8 @@ function Home() {
 
   const handleDragStart = useCallback((dividerIndex: number) => (e: React.MouseEvent) => {
     e.preventDefault();
+    // 通知 DiffEditor/MonacoEditor 暂停 automaticLayout，避免拖动期间高频 layout() 阻塞主线程
+    notifyPanelResizeStart();
     setDraggingIdx(dividerIndex);
   }, []);
 

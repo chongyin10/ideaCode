@@ -596,6 +596,7 @@ var require_repository = __commonJS({
         this._fileWatcher = null;
         this._gitWatcher = null;
         this._watcherRefreshTimer = null;
+        this._indexWatched = false;
         if (!this._isRemote) {
           this._setupWatcher();
         }
@@ -634,6 +635,17 @@ var require_repository = __commonJS({
                 this._scheduleWatcherRefresh();
               }
             });
+            const indexPath = path2.join(gitDir, "index");
+            if (fs2.existsSync(indexPath)) {
+              this._indexWatched = true;
+              fs2.watchFile(indexPath, { persistent: false, interval: 2e3 }, (curr, prev) => {
+                if (this._disposed) return;
+                if (curr.mtimeMs !== prev.mtimeMs) {
+                  console.log(`[Repository] \xA7\u8BCA\u65AD index mtime \u53D8\u5316: ${prev.mtimeMs} \u2192 ${curr.mtimeMs}, \u89E6\u53D1 refresh`);
+                  this._scheduleWatcherRefresh();
+                }
+              });
+            }
           }
         } catch (err) {
           console.error("[Repository] \u542F\u52A8\u6587\u4EF6\u76D1\u542C\u5668\u5931\u8D25:", err.message);
@@ -709,8 +721,10 @@ var require_repository = __commonJS({
             ["status", "--porcelain=v2", "--branch", "--untracked-files=normal", "--ignored=no"],
             { timeout: 1e4 }
           );
+          console.log(`[Repository] \xA7\u8BCA\u65AD git status exit=${output.code} stdoutLen=${output.stdout.length} stderr=${(output.stderr || "").slice(0, 200)}`);
           if (output.code !== 0) {
             this._lastError = output.stderr || `exit code ${output.code}`;
+            console.log(`[Repository] \xA7\u8BCA\u65AD git status \u5931\u8D25\uFF0C\u4FDD\u7559\u65E7 state\uFF0C\u4E0D fire`);
             return;
           }
           this.state = parseStatus(output.stdout);
@@ -729,9 +743,11 @@ var require_repository = __commonJS({
           this.state.merge.forEach(tagMain);
           this.state.untracked.forEach(tagMain);
           await this._refreshSubmodules();
+          console.log(`[Repository] \xA7\u8BCA\u65AD refresh \u5B8C\u6210 staged=${this.state.staged.length} changes=${this.state.changes.length} merge=${this.state.merge.length} untracked=${this.state.untracked.length} listeners=${this._changeListeners.size}`);
           this._fire();
         } catch (err) {
           this._lastError = err.message;
+          console.log(`[Repository] \xA7\u8BCA\u65AD _doRefresh \u5F02\u5E38: ${err.message}`);
         }
       }
       /**
@@ -1193,6 +1209,13 @@ var require_repository = __commonJS({
           }
           this._gitWatcher = null;
         }
+        if (this._indexWatched) {
+          try {
+            fs2.unwatchFile(path2.join(this.rootPath, ".git", "index"));
+          } catch {
+          }
+          this._indexWatched = false;
+        }
         this._changeListeners.clear();
       }
       /**
@@ -1360,6 +1383,7 @@ function resolveActiveFileStaged(path2) {
 }
 function pushState() {
   const state = currentRepo?.state || null;
+  console.log(`[Git Extension] \xA7\u8BCA\u65AD pushState staged=${state?.staged?.length || 0} changes=${state?.changes?.length || 0} webviewPanel=${!!webviewPanel}`);
   try {
     send("git.statusChanged", { status: buildStatusMap(state) });
   } catch (e) {
@@ -1384,6 +1408,7 @@ function pushState() {
   };
   try {
     webviewPanel.webview.postMessage(message);
+    console.log(`[Git Extension] \xA7\u8BCA\u65AD postMessage \u5230 webview \u6210\u529F`);
   } catch (e) {
     console.error("[Git Extension] postMessage failed:", e.message);
   }

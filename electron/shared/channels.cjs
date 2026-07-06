@@ -27,6 +27,11 @@ const Channels = {
   FS_COPY: 'fs:copy',
   FS_REVEAL: 'fs:reveal',
   FS_CHANGE: 'fs:change',
+  /* ── 内容搜索（ripgrep）── §对标 VSCode，主进程 spawn rg，流式推送结果 */
+  FS_SEARCH: 'fs:search',
+  FS_SEARCH_CANCEL: 'fs:searchCancel',
+  FS_SEARCH_PROGRESS: 'fs:searchProgress',
+  FS_SEARCH_DONE: 'fs:searchDone',
 
   /* ─── 窗口管理 ─── */
   WINDOW_CREATE: 'window:create',

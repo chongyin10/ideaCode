@@ -11,7 +11,7 @@ import {
   Plus, X, Trash2, Search, Bookmark, SplitSquareVertical,
   Maximize2, Minimize2, Terminal, ChevronDown,
   Wifi, WifiOff, Copy, ClipboardPaste, Sparkles,
-  PanelTopOpen, Pencil,
+  PanelTopOpen, Pencil, Check,
 } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import {
@@ -34,6 +34,7 @@ import {
   clearTerminal, setTerminalBroadcastMode,
 } from '../../services/terminalManager';
 import { notifyPanelResizeStart, notifyPanelResizeEnd } from '../../services/panelResizeNotifier';
+import { getMonacoEditorActions } from '../../services/monacoEditorBridge';
 import { DockableContent } from '../DockableContent';
 import TerminalInstance, { type TerminalInstanceHandle } from '../Terminal/TerminalInstance';
 import ContextMenu, { type MenuItem } from '../ContextMenu';
@@ -55,6 +56,80 @@ function CrossAreaBottomContent({ activeBottomTab }: { activeBottomTab: BottomTa
     <div className="bottom-panel__cross-area" style={{ display: 'flex', flex: 1, flexDirection: 'column', overflow: 'hidden' }}>
       <DockableContent item={item} />
     </div>
+  );
+}
+
+/* ─── 终端 tab 改名编辑器（独立组件，与编辑器零耦合） ───
+ *
+ * 设计要点：
+ * 1. uncontrolled input（defaultValue + ref 读取）：不受 React re-render 影响，
+ *    即使焦点被其他组件（Monaco/xterm）抢走，已输入的内容仍保留在 DOM 中。
+ * 2. 显式保存/取消按钮：不依赖 onBlur 自动保存，避免焦点被抢时误触发保存。
+ * 3. 事件 stopPropagation：input 和按钮的事件都不冒泡到 tab 容器，避免触发
+ *    switchTab / dragStart。
+ * 4. 按钮 onMouseDown preventDefault：点击按钮时不让 input blur，确保 ref
+ *    能读到最新值。
+ * 5. 编辑期间通过父级禁用 tab 的 draggable，避免拖拽与改名冲突。
+ */
+interface TabRenameEditorProps {
+  initialName: string;
+  onSave: (name: string) => void;
+  onCancel: () => void;
+}
+
+function TabRenameEditor({ initialName, onSave, onCancel }: TabRenameEditorProps) {
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // 挂载后聚焦并全选当前名字。
+  // IME 上下文已由编辑按钮 mousedown 中 focus Monaco 编辑器切换到 Monaco textarea，
+  // 此处从 Monaco textarea → input 的程序性 focus 能正确切换 IME 上下文。
+  useEffect(() => {
+    const input = inputRef.current;
+    if (input) {
+      input.focus();
+      input.select();
+    }
+  }, []);
+
+  const handleSave = useCallback(() => {
+    const trimmed = inputRef.current?.value.trim();
+    if (trimmed) onSave(trimmed);
+    else onCancel();
+  }, [onSave, onCancel]);
+
+  return (
+    <>
+      <input
+        ref={inputRef}
+        className="terminal-tab__rename-input"
+        defaultValue={initialName}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === 'Enter') handleSave();
+          else if (e.key === 'Escape') onCancel();
+        }}
+        onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
+      />
+      <div className="terminal-tab__rename-actions">
+        <button
+          className="terminal-tab__save"
+          title="保存"
+          onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+          onClick={(e) => { e.stopPropagation(); handleSave(); }}
+        >
+          <Check size={10} />
+        </button>
+        <button
+          className="terminal-tab__cancel"
+          title="取消"
+          onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+          onClick={(e) => { e.stopPropagation(); onCancel(); }}
+        >
+          <X size={10} />
+        </button>
+      </div>
+    </>
   );
 }
 
@@ -134,8 +209,8 @@ const BottomPanel = () => {
   const [searchVisible, setSearchVisible] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [isResizing, setIsResizing] = useState(false);
+  /** 当前正在改名的 tab id（null = 未编辑）。改名 UI 完全由 TabRenameEditor 组件自包含 */
   const [editingTabId, setEditingTabId] = useState<string | null>(null);
-  const [editingName, setEditingName] = useState('');
   const panelRef = useRef<HTMLDivElement>(null);
   const terminalRefs = useRef<Map<string, TerminalInstanceHandle>>(new Map());
 
@@ -343,22 +418,19 @@ const BottomPanel = () => {
   }, [dispatch]);
 
   const startRenameTab = useCallback((tabId: string) => {
-    const tab = terminalStateRef.current.tabs[tabId];
-    if (!tab) return;
     setEditingTabId(tabId);
-    setEditingName(tab.name);
   }, []);
 
-  const finishRenameTab = useCallback(() => {
-    if (editingTabId) {
-      const trimmed = editingName.trim();
-      if (trimmed) {
-        dispatch(renameTab({ id: editingTabId, name: trimmed }));
-      }
-    }
+  /** 保存改名：由 TabRenameEditor 的保存按钮 / Enter 触发 */
+  const handleRenameSave = useCallback((tabId: string, name: string) => {
+    dispatch(renameTab({ id: tabId, name }));
     setEditingTabId(null);
-    setEditingName('');
-  }, [editingTabId, editingName, dispatch]);
+  }, [dispatch]);
+
+  /** 取消改名：由 TabRenameEditor 的取消按钮 / Esc 触发 */
+  const handleRenameCancel = useCallback(() => {
+    setEditingTabId(null);
+  }, []);
 
   const handleSplitTab = useCallback(async () => {
     const state = terminalStateRef.current;
@@ -696,7 +768,9 @@ const BottomPanel = () => {
               className="bottom-panel__search-input"
               placeholder={t('bottomPanel.searchPlaceholder')}
               value={searchTerm}
-              onChange={e => setSearchTerm(e.target.value)}
+              onChange={e => {
+                setSearchTerm(e.target.value)
+              }}
               onKeyDown={e => {
                 if (e.key === 'Enter') {
                   if (e.shiftKey) handleSearchPrev();
@@ -786,11 +860,13 @@ const BottomPanel = () => {
                 <div
                   key={tab.id}
                   data-tab-id={tab.id}
-                  className={`terminal-tab ${tab.id === activeTabIdMemo ? 'active' : ''} ${tab.exited ? 'exited' : ''} ${draggingTabId === tab.id ? 'terminal-tab--dragging' : ''} ${dragOverTabId === tab.id ? `terminal-tab--drag-over terminal-tab--drag-${dragOverPos}` : ''}`}
-                  draggable
+                  className={`terminal-tab ${tab.id === activeTabIdMemo ? 'active' : ''} ${tab.exited ? 'exited' : ''} ${draggingTabId === tab.id ? 'terminal-tab--dragging' : ''} ${dragOverTabId === tab.id ? `terminal-tab--drag-over terminal-tab--drag-${dragOverPos}` : ''} ${editingTabId === tab.id ? 'terminal-tab--editing' : ''}`}
+                  draggable={editingTabId !== tab.id}
                   onDragStart={(e) => handleTabDragStart(e, tab.id)}
                   onDragEnd={handleTabDragEnd}
                   onClick={() => {
+                    // 编辑中不响应点击切换，避免抢焦点
+                    if (editingTabId === tab.id) return;
                     handleSwitchTab(tab.id);
                     terminalRefs.current.get(tab.id)?.focus();
                   }}
@@ -800,44 +876,41 @@ const BottomPanel = () => {
                     <span className={`terminal-tab__status ${tab.ready ? 'ready' : ''} ${tab.exited ? 'exited' : ''}`} />
                   </div>
                   {editingTabId === tab.id ? (
-                    <input
-                      className="terminal-tab__rename-input"
-                      value={editingName}
-                      onChange={(e) => setEditingName(e.target.value)}
-                      onBlur={() => finishRenameTab()}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          finishRenameTab();
-                        } else if (e.key === 'Escape') {
-                          setEditingTabId(null);
-                          setEditingName('');
-                        }
-                      }}
-                      onClick={(e) => e.stopPropagation()}
-                      autoFocus
+                    <TabRenameEditor
+                      initialName={tab.name}
+                      onSave={(name) => handleRenameSave(tab.id, name)}
+                      onCancel={handleRenameCancel}
                     />
                   ) : (
                     <span className="terminal-tab__name">{tab.name}</span>
                   )}
-                  <div className={`terminal-tab__actions ${editingTabId === tab.id ? 'is-editing' : ''}`}>
-                    {editingTabId !== tab.id && (
+                  {editingTabId !== tab.id && (
+                    <div className="terminal-tab__actions">
                       <button
                         className="terminal-tab__edit"
                         title={t('bottomPanel.renameTooltip')}
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          // §IME 上下文跳板：在用户手势（mousedown）中 focus Monaco 编辑器，
+                          // 让 IME 上下文从 xterm textarea 切换到 Monaco textarea。
+                          // 后续 TabRenameEditor 的 input.focus() 从 Monaco textarea 切到 input 时
+                          // IME 上下文能正确跟随；而从 xterm textarea 直接切到 input 时不切换。
+                          try { getMonacoEditorActions()?.getEditor()?.focus(); } catch { /* editor 可能未挂载 */ }
+                        }}
                         onClick={(e) => { e.stopPropagation(); startRenameTab(tab.id); }}
                       >
                         <Pencil size={10} />
                       </button>
-                    )}
-                    {editingTabId !== tab.id && (
                       <button
                         className="terminal-tab__close"
+                        onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
                         onClick={(e) => { e.stopPropagation(); handleCloseTab(tab.id); }}
                       >
                         <X size={10} />
                       </button>
-                    )}
-                  </div>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

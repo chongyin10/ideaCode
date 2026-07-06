@@ -29,6 +29,7 @@ import {
 } from '../../services/monacoSemanticTokens';
 import { tsService, type TsSemanticTokens } from '../../services/tsLanguageService';
 import { isRemoteUri } from '../../services/fileService';
+import { onPanelResizeStart, onPanelResizeEnd } from '../../services/panelResizeNotifier';
 import './DiffEditorPanel.css';
 
 /* ─── 辅助：为 diff 左侧（git HEAD）构造独立虚拟路径 ─── */
@@ -322,6 +323,37 @@ const DiffEditorPanel = ({ diffData, groupId }: DiffEditorPanelProps) => {
       diagUnsubRef.current = null;
       retryTriggerRef.current = null;
     };
+  }, []);
+
+  /* ── 面板拖拽期间暂停 automaticLayout，避免高频 layout() 重算 diff 阻塞主线程 ──
+   * 多个 DiffEditor 同时响应 resize 会每帧重算 diff，导致拖动时光标与分隔条脱节。
+   * 拖动期间禁用两个子编辑器的 automaticLayout（断开 Monaco 内部 ResizeObserver），
+   * 松手后恢复并手动 layout() 一次，让 diff 以最终尺寸重新计算。
+   */
+  useEffect(() => {
+    const disableAutoLayout = () => {
+      const editor = diffEditorRef.current;
+      if (!editor) return;
+      try {
+        editor.getOriginalEditor().updateOptions({ automaticLayout: false });
+        editor.getModifiedEditor().updateOptions({ automaticLayout: false });
+      } catch { /* editor 可能已销毁 */ }
+    };
+    const enableAutoLayout = () => {
+      const editor = diffEditorRef.current;
+      if (!editor) return;
+      try {
+        editor.getOriginalEditor().updateOptions({ automaticLayout: true });
+        editor.getModifiedEditor().updateOptions({ automaticLayout: true });
+        // 恢复后手动 layout，确保以最终容器尺寸重算 diff
+        requestAnimationFrame(() => {
+          try { editor.layout(); } catch { /* editor 可能已销毁 */ }
+        });
+      } catch { /* editor 可能已销毁 */ }
+    };
+    const unsubStart = onPanelResizeStart(disableAutoLayout);
+    const unsubEnd = onPanelResizeEnd(enableAutoLayout);
+    return () => { unsubStart(); unsubEnd(); };
   }, []);
 
   /* ── 跳转到差异块 ── */

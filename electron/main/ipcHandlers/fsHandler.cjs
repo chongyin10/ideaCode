@@ -1,11 +1,50 @@
 const fs = require('fs').promises;
 const fsSync = require('fs');
 const path = require('path');
-const { execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
 const { promisify } = require('util');
 const execFileAsync = promisify(execFile);
 const { ipcMain, BrowserWindow, shell, app } = require('electron');
 const { Channels } = require('../../shared/channels.cjs');
+
+/**
+ * 解析 ripgrep 可执行文件路径。
+ *
+ * 优先级：
+ *   1. 项目依赖 @vscode/ripgrep 的平台子包（1.18+ 拆分为 optionalDependencies，
+ *      二进制在 @vscode/ripgrep-<platform>-<arch>/bin/rg；打包后稳定可用，跨平台）
+ *   2. 系统 PATH 中的 rg（开发环境兜底）
+ *
+ * 注意：@vscode/ripgrep 1.18+ 的入口 index.js 是 ESM，CommonJS 不能直接 require。
+ * 这里用 require.resolve 直接解析平台子包的二进制路径，绕开 ESM 限制。
+ *
+ * 解析结果缓存，避免每次搜索都 require.resolve + which。
+ */
+let cachedRgPath = null;
+function getRipgrepPath() {
+  if (cachedRgPath !== null) return cachedRgPath;
+  // 1. 项目依赖的平台子包二进制
+  try {
+    const arch = process.env.npm_config_arch || process.arch;
+    const binaryName = process.platform === 'win32' ? 'rg.exe' : 'rg';
+    const platformPkg = `@vscode/ripgrep-${process.platform}-${arch}`;
+    const rgPath = require.resolve(`${platformPkg}/bin/${binaryName}`);
+    if (rgPath && fsSync.existsSync(rgPath)) {
+      cachedRgPath = rgPath;
+      return rgPath;
+    }
+  } catch { /* 平台子包未安装，继续兜底 */ }
+  // 2. 系统 PATH（开发环境 rg 已安装时）
+  try {
+    const which = require('child_process').execSync('which rg', { encoding: 'utf-8' }).trim();
+    if (which) {
+      cachedRgPath = which;
+      return which;
+    }
+  } catch { /* 系统 PATH 无 rg */ }
+  cachedRgPath = false; // 标记为不可用，避免重复探测
+  return false;
+}
 
 /**
  * 文件系统 IPC 处理器
@@ -58,22 +97,41 @@ function findGitRootCached(watchPath) {
 
 function registerFsHandlers() {
   /* ── 读取目录 ── */
+  // §修复 EISDIR：Dirent.isDirectory()/isFile() 不会跟随符号链接，指向目录的符号链接
+  // （pnpm node_modules、.bin 等）会被误判为非目录，后续 readFile 会抛 EISDIR。
+  // 对符号链接用 fs.stat 跟随一次，拿到真实类型。
   ipcMain.handle(Channels.FS_READ_DIR, async (_event, dirPath) => {
     const entries = await fs.readdir(dirPath, { withFileTypes: true });
-    return entries.map((e) => ({
-      name: e.name,
-      isDirectory: e.isDirectory(),
-      isFile: e.isFile(),
-    }));
+    const result = [];
+    for (const e of entries) {
+      let isDirectory = e.isDirectory();
+      let isFile = e.isFile();
+      if (e.isSymbolicLink()) {
+        try {
+          const realStat = await fs.stat(path.join(dirPath, e.name));
+          isDirectory = realStat.isDirectory();
+          isFile = realStat.isFile();
+        } catch {
+          // 断裂符号链接：保留原始类型（isDirectory=false, isFile=false）
+        }
+      }
+      result.push({ name: e.name, isDirectory, isFile });
+    }
+    return result;
   });
 
   /* ── 读取文件 ── */
   // 大文件保护：V8 字符串上限约 256MB 字符，超大文件（source map、minified bundle、
   // 大日志）在 readFile + toString + IPC 序列化阶段会触发 RangeError: Invalid string length。
   // 超过 MAX_READ_SIZE 的文件直接拒绝，由渲染层提示用户文件过大。
+  // §修复 EISDIR：fs.stat 能成功返回目录信息，但 fs.readFile 对目录会抛 EISDIR。
+  // 在此提前拦截目录，避免触发 EISDIR 错误（防御性：即使上层误传目录路径也不会卡）。
   const MAX_READ_SIZE = 128 * 1024 * 1024; // 128MB
   ipcMain.handle(Channels.FS_READ_FILE, async (_event, filePath) => {
     const stat = await fs.stat(filePath);
+    if (stat.isDirectory()) {
+      throw new Error(`EISDIR: 无法读取目录: ${filePath}`);
+    }
     if (stat.size > MAX_READ_SIZE) {
       throw new Error(`文件过大（${(stat.size / 1024 / 1024).toFixed(1)}MB），超过 ${MAX_READ_SIZE / 1024 / 1024}MB 读取上限`);
     }
@@ -247,6 +305,235 @@ function registerFsHandlers() {
       return { success: true };
     }
     return { success: false, reason: '未找到监听器' };
+  });
+
+  /* ── 内容搜索（ripgrep）──
+   *
+   * §对标 VSCode：主进程 spawn rg --json，rg 在 Rust 端流式扫描文件，
+   * 只把匹配行通过 stdout 返回，避免把整个大文件读到 V8（旧实现因 readFile
+   * 362MB minified bundle 触发 128MB 上限报错）。
+   *
+   * rg 自动处理：
+   *   - 二进制文件（前 8KB 检测 NUL 字节，自动跳过）
+   *   - .gitignore（默认遵守，无需硬编码 skipDirs）
+   *   - 大文件（--max-filesize 跳过，不会 OOM）
+   *   - 隐藏文件（默认不搜）
+   *   - 多线程并行
+   *
+   * 流式推送：stdout 按行解析 JSON，节流（80ms）批量 send 给渲染进程，
+   * 避免每条匹配都触发一次 IPC。
+   */
+  let currentSearch = null; // { proc, cancelled, searchId }
+
+  function killCurrentSearch() {
+    if (!currentSearch) return;
+    currentSearch.cancelled = true;
+    try { currentSearch.proc?.kill('SIGTERM'); } catch { /* 已退出 */ }
+    currentSearch = null;
+  }
+
+  app.on('before-quit', killCurrentSearch);
+
+  ipcMain.handle(Channels.FS_SEARCH, async (event, params) => {
+    const { rootPath, query, options = {}, searchId } = params;
+    const {
+      caseSensitive = false,
+      wholeWord = false,
+      useRegex = false,
+      includePattern = '',
+      excludePattern = '',
+      maxResults = 1000,
+    } = options;
+
+    const sender = event.sender;
+    const rgPath = getRipgrepPath();
+    if (!rgPath) {
+      if (!sender.isDestroyed()) {
+        sender.send(Channels.FS_SEARCH_DONE, {
+          searchId, results: [], totalMatches: 0, isTruncated: false,
+          error: '未找到 ripgrep，请安装 @vscode/ripgrep 或系统 rg',
+        });
+      }
+      return { started: false, error: 'ripgrep unavailable' };
+    }
+
+    // 启动新搜索前取消上一次（单实例简化模型）
+    killCurrentSearch();
+
+    const args = [
+      '--json',
+      // §每文件最多匹配数：避免单个文件（如 minified bundle）爆量占用结果配额
+      '--max-count', String(Math.min(100, Math.ceil(maxResults / 10) || 10)),
+      // §跳过超大文件：rg 会直接 skip，不会 OOM 也不会报错
+      '--max-filesize', '50M',
+      '--color', 'never',
+      '--no-heading',
+      '--line-number',
+    ];
+    if (!caseSensitive) args.push('-i');
+    if (wholeWord) args.push('-w');
+    // 非正则模式用字面量匹配，避免查询词中的正则元字符引发错误
+    if (!useRegex) args.push('--fixed-strings');
+
+    // 排除/包含 glob（rg -g 可重复指定）
+    if (excludePattern) {
+      String(excludePattern).split(',').forEach((p) => {
+        const trimmed = p.trim();
+        if (trimmed) args.push('-g', `!${trimmed}`);
+      });
+    }
+    if (includePattern) {
+      String(includePattern).split(',').forEach((p) => {
+        const trimmed = p.trim();
+        if (trimmed) args.push('-g', trimmed);
+      });
+    }
+
+    args.push(query, rootPath);
+
+    let proc;
+    try {
+      proc = spawn(rgPath, args, { cwd: rootPath, stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (err) {
+      if (!sender.isDestroyed()) {
+        sender.send(Channels.FS_SEARCH_DONE, {
+          searchId, results: [], totalMatches: 0, isTruncated: false, error: err.message,
+        });
+      }
+      return { started: false, error: err.message };
+    }
+
+    currentSearch = { proc, cancelled: false, searchId };
+
+    // §结果聚合：按文件路径聚合 matches，避免同一文件被拆成多条推送
+    const results = new Map(); // relativePath -> { filePath, fileName, matches }
+    let totalMatches = 0;
+    let isTruncated = false;
+    let buffer = '';
+
+    // 节流推送：每 80ms 最多一次，避免高频 IPC 淹没渲染进程
+    let flushTimer = null;
+    let dirty = false;
+    const FLUSH_INTERVAL = 80;
+    const flush = () => {
+      flushTimer = null;
+      if (dirty && !sender.isDestroyed() && !currentSearch?.cancelled) {
+        dirty = false;
+        sender.send(Channels.FS_SEARCH_PROGRESS, {
+          searchId,
+          results: Array.from(results.values()),
+          totalMatches,
+          isTruncated: false,
+        });
+      }
+    };
+    const scheduleFlush = () => {
+      dirty = true;
+      if (flushTimer === null) flushTimer = setTimeout(flush, FLUSH_INTERVAL);
+    };
+
+    proc.stdout.on('data', (chunk) => {
+      if (currentSearch?.cancelled) return;
+      buffer += chunk.toString('utf-8');
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || ''; // 保留最后不完整的行
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let msg;
+        try { msg = JSON.parse(line); } catch { continue; }
+        if (msg.type !== 'match') continue;
+
+        const absPath = msg.data.path.text;
+        const relativePath = path.relative(rootPath, absPath) || absPath;
+        const fileName = path.basename(absPath);
+        // §rg 的 lines.text 末尾带换行，需裁剪；submatches 给出本次匹配的起止
+        const lineText = String(msg.data.lines.text).replace(/\r?\n$/, '');
+
+        if (!results.has(relativePath)) {
+          results.set(relativePath, { filePath: relativePath, fileName, matches: [] });
+        }
+        const fileEntry = results.get(relativePath);
+
+        for (const sub of msg.data.submatches || []) {
+          if (totalMatches >= maxResults) {
+            isTruncated = true;
+            break;
+          }
+          fileEntry.matches.push({
+            line: msg.data.line_number,
+            column: sub.start + 1,
+            text: lineText,
+            match: {
+              index: sub.start,
+              length: sub.end - sub.start,
+              matched: sub.match?.text ?? '',
+            },
+          });
+          totalMatches++;
+        }
+
+        if (isTruncated) {
+          scheduleFlush();
+          // 命中上限，主动终止 rg
+          currentSearch.cancelled = true;
+          try { proc.kill('SIGTERM'); } catch { /* 已退出 */ }
+          return;
+        }
+        scheduleFlush();
+      }
+    });
+
+    proc.stderr.on('data', (chunk) => {
+      // rg 在某些非零退出场景（如无匹配、路径不存在）会写 stderr，记录但不中断
+      const text = chunk.toString('utf-8').trim();
+      if (text) console.warn(`[FS_SEARCH] rg stderr: ${text}`);
+    });
+
+    proc.on('error', (err) => {
+      console.error('[FS_SEARCH] rg 进程错误:', err.message);
+      if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+      if (!sender.isDestroyed()) {
+        sender.send(Channels.FS_SEARCH_DONE, {
+          searchId,
+          results: Array.from(results.values()),
+          totalMatches,
+          isTruncated,
+          error: err.message,
+        });
+      }
+      currentSearch = null;
+    });
+
+    proc.on('close', () => {
+      if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+      // 最后一次强制 flush（确保尾部的 dirty 数据被推送）
+      if (dirty && !sender.isDestroyed()) {
+        dirty = false;
+        sender.send(Channels.FS_SEARCH_PROGRESS, {
+          searchId,
+          results: Array.from(results.values()),
+          totalMatches,
+          isTruncated,
+        });
+      }
+      if (!sender.isDestroyed()) {
+        sender.send(Channels.FS_SEARCH_DONE, {
+          searchId,
+          results: Array.from(results.values()),
+          totalMatches,
+          isTruncated,
+        });
+      }
+      currentSearch = null;
+    });
+
+    return { started: true, searchId };
+  });
+
+  ipcMain.handle(Channels.FS_SEARCH_CANCEL, async () => {
+    killCurrentSearch();
+    return { success: true };
   });
 }
 

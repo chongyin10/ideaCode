@@ -161,6 +161,52 @@ export interface ElectronAPI {
     rename: (oldPath: string, newPath: string) => Promise<boolean>;
     copy: (srcPath: string, destPath: string) => Promise<boolean>;
     reveal: (filePath: string) => Promise<boolean>;
+    /** §ripgrep 内容搜索：主进程 spawn rg，结果通过事件流式推送 */
+    search: (params: {
+      rootPath: string;
+      query: string;
+      options: {
+        caseSensitive?: boolean;
+        wholeWord?: boolean;
+        useRegex?: boolean;
+        includePattern?: string;
+        excludePattern?: string;
+        maxResults?: number;
+      };
+      searchId: number;
+    }) => Promise<{ started: boolean; error?: string; searchId?: number }>;
+    searchCancel: () => Promise<{ success: boolean }>;
+    onSearchProgress: (callback: (data: {
+      searchId: number;
+      results: Array<{
+        filePath: string;
+        fileName: string;
+        matches: Array<{
+          line: number;
+          column: number;
+          text: string;
+          match: { index: number; length: number; matched: string };
+        }>;
+      }>;
+      totalMatches: number;
+      isTruncated: boolean;
+    }) => void) => () => void;
+    onSearchDone: (callback: (data: {
+      searchId: number;
+      results: Array<{
+        filePath: string;
+        fileName: string;
+        matches: Array<{
+          line: number;
+          column: number;
+          text: string;
+          match: { index: number; length: number; matched: string };
+        }>;
+      }>;
+      totalMatches: number;
+      isTruncated: boolean;
+      error?: string;
+    }) => void) => () => void;
   };
 
   /** 扩展宿主 - JSON-RPC 通信 */

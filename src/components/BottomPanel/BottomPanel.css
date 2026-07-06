@@ -544,8 +544,16 @@
   color: #cccccc;
 }
 
-.terminal-tab__actions.is-editing {
-  opacity: 1;
+/* ─── 改名编辑状态（独立组件 TabRenameEditor） ─── */
+
+/* 编辑中：禁用 hover 背景闪烁，固定背景 */
+.terminal-tab--editing {
+  background: #2a2d2e;
+  cursor: default;
+}
+
+.terminal-tab--editing:hover {
+  background: #2a2d2e;
 }
 
 .terminal-tab__rename-input {
@@ -563,6 +571,39 @@
 
 .terminal-tab__rename-input:focus {
   border-color: #007acc;
+}
+
+/* 改名时的保存/取消按钮容器 */
+.terminal-tab__rename-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.terminal-tab__save,
+.terminal-tab__cancel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: transparent;
+  color: #858585;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+.terminal-tab__save:hover {
+  background: rgba(115, 201, 145, 0.2);
+  color: #73c991;
+}
+
+.terminal-tab__cancel:hover {
+  background: rgba(248, 81, 73, 0.2);
+  color: #f85149;
 }
 
 /* ─── 侧边栏书签 ─── */

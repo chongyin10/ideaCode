@@ -45,6 +45,10 @@ const Channels = {
   MENU_OPEN_FILE: 'menu:open-file',
   MENU_NEW_WINDOW: 'menu:new-window',
   FS_CHANGE: 'fs:change',
+  FS_SEARCH: 'fs:search',
+  FS_SEARCH_CANCEL: 'fs:searchCancel',
+  FS_SEARCH_PROGRESS: 'fs:searchProgress',
+  FS_SEARCH_DONE: 'fs:searchDone',
   GIT_CLONE: 'git:clone',
   GIT_CLONE_PROGRESS: 'git:cloneProgress',
   EXTENSION_MESSAGE: 'extensionHost:message',
@@ -158,6 +162,11 @@ const electronAPI = {
     rename: (oldPath, newPath) => ipcRenderer.invoke(Channels.FS_RENAME, oldPath, newPath),
     copy: (srcPath, destPath) => ipcRenderer.invoke(Channels.FS_COPY, srcPath, destPath),
     reveal: (filePath) => ipcRenderer.invoke(Channels.FS_REVEAL, filePath),
+    // §ripgrep 内容搜索：主进程 spawn rg，结果通过事件流式推送
+    search: (params) => ipcRenderer.invoke(Channels.FS_SEARCH, params),
+    searchCancel: () => ipcRenderer.invoke(Channels.FS_SEARCH_CANCEL),
+    onSearchProgress: (callback) => onChannel(Channels.FS_SEARCH_PROGRESS, callback),
+    onSearchDone: (callback) => onChannel(Channels.FS_SEARCH_DONE, callback),
   },
 
   extension: {

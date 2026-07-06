@@ -35,11 +35,14 @@ asar: true
 # native 模块必须解包到 app.asar.unpacked，否则：
 #   - .node 二进制无法被 dlopen
 #   - spawn 子进程的 .mjs/.js 无法正确 require 依赖（typescript-language-server）
+#   - rg 二进制无法被 spawn 执行（@vscode/ripgrep 的 bin/rg）
 asarUnpack:
   - node_modules/node-pty/**
   - node_modules/typescript-language-server/**
   # systeminformation 在 macOS 上调用 system_profiler/top，本身纯 JS，但部分平台需要 native binding
   - node_modules/systeminformation/**
+  # §ripgrep 二进制：spawn 无法从 asar 内执行二进制，必须解包到 app.asar.unpacked
+  - node_modules/@vscode/ripgrep/**
 
 # ─── macOS 配置 ───
 mac:

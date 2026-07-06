@@ -220,6 +220,12 @@ function stopServer() {
     try { serverProcess.kill(); } catch {}
     serverProcess = null;
   }
+  // 主动停止时清空 rootUri：避免 ensureServer 在 stop→start 之间检测到
+  // "!serverProcess && rootUri" 而自动重启，与随后的显式 start 叠加导致
+  // tsserver 被启动两次（日志中 "Using Typescript version" 打印两次）。
+  // 崩溃场景由 'close' 事件处理：那里只置 serverProcess=null，保留 rootUri，
+  // 后续 ensureServer 仍可自动恢复。
+  rootUri = null;
   buffer = Buffer.alloc(0);
   pendingRequests.clear();
   msgId = 0;

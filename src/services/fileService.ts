@@ -173,13 +173,20 @@ export async function readFile(fileSource: FileSource): Promise<string> {
     try {
       const stat = await window.electronAPI!.fs.stat(fileSource);
       if (!stat) throw new Error('文件不存在');
+      // §修复 EISDIR 卡顿：fs.stat 对目录也能成功返回，但 fs.readFile 对目录会抛 EISDIR。
+      // 此处提前识别目录并抛错，避免下方 readFile 触发 EISDIR 后被 catch 重复调用，
+      // 导致每个符号链接目录触发 2 次 readFile + 2 次 IPC 错误打印，海量符号链接时雪崩卡顿。
+      if (stat.isDirectory) throw new Error(`EISDIR: 无法读取目录: ${fileSource}`);
       const mtime = new Date(stat.mtime).getTime();
       const cached = getCached(fileSource, mtime);
       if (cached) return cached.content;
       const content = await window.electronAPI!.fs.readFile(fileSource);
       setCached(fileSource, content, mtime);
       return content;
-    } catch {
+    } catch (err) {
+      // 目录或显式抛出的 EISDIR 直接向上抛，避免对目录重复 readFile
+      if (err && typeof err.message === 'string' && err.message.startsWith('EISDIR')) throw err;
+      // stat 不可用（权限/特殊文件）时降级：直接尝试 readFile
       return window.electronAPI!.fs.readFile(fileSource);
     }
   }
@@ -346,4 +353,83 @@ export async function extensionRpc<T = unknown>(
     throw new Error(result.error || '扩展宿主调用失败');
   }
   return result.result as T;
+}
+
+/* ─── 内容搜索（ripgrep，对标 VSCode）───
+ *
+ * §架构差异：旧实现把整文件 readFile 到渲染进程再 JS 搜索，362MB 大文件触发
+ * 128MB 上限报错。此处改为调用主进程 spawn rg，rg 在 Rust 端流式扫描，
+ * 只把匹配行通过 IPC 事件推送给渲染进程，内存压力与文件大小解耦。
+ *
+ * 用法：调用方传入 searchId 用于过滤并发搜索的事件，onProgress 增量更新 UI，
+ * onDone 标记结束。返回 cancel 函数用于中止搜索。
+ */
+export interface SearchContentMatch {
+  line: number;
+  column: number;
+  text: string;
+  match: { index: number; length: number; matched: string };
+}
+
+export interface SearchContentResult {
+  filePath: string;
+  fileName: string;
+  matches: SearchContentMatch[];
+}
+
+export interface SearchContentOptions {
+  caseSensitive?: boolean;
+  wholeWord?: boolean;
+  useRegex?: boolean;
+  includePattern?: string;
+  excludePattern?: string;
+  maxResults?: number;
+}
+
+export interface SearchContentCallbacks {
+  onProgress?: (data: { results: SearchContentResult[]; totalMatches: number; isTruncated: boolean }) => void;
+  onDone?: (data: { results: SearchContentResult[]; totalMatches: number; isTruncated: boolean; error?: string }) => void;
+}
+
+export async function searchContent(
+  rootPath: string,
+  query: string,
+  options: SearchContentOptions,
+  callbacks: SearchContentCallbacks,
+  searchId: number
+): Promise<{ started: boolean; error?: string; cancel: () => void }> {
+  if (!isElectron()) {
+    return { started: false, error: 'ripgrep 搜索仅在 Electron 环境可用', cancel: () => {} };
+  }
+
+  // §事件监听用 searchId 过滤：多个并发搜索（或旧搜索的尾包）不会串扰
+  const onProgressUnsub = window.electronAPI!.fs.onSearchProgress((data: { searchId: number; results: SearchContentResult[]; totalMatches: number; isTruncated: boolean }) => {
+    if (data.searchId !== searchId) return;
+    callbacks.onProgress?.(data);
+  });
+
+  const onDoneUnsub = window.electronAPI!.fs.onSearchDone((data: { searchId: number; results: SearchContentResult[]; totalMatches: number; isTruncated: boolean; error?: string }) => {
+    if (data.searchId !== searchId) return;
+    // 收到 done 后立即解绑，避免监听器堆积
+    onProgressUnsub();
+    onDoneUnsub();
+    callbacks.onDone?.(data);
+  });
+
+  const startResult = await window.electronAPI!.fs.search({ rootPath, query, options, searchId });
+
+  const cancel = () => {
+    onProgressUnsub();
+    onDoneUnsub();
+    void window.electronAPI!.fs.searchCancel();
+  };
+
+  if (!startResult?.started) {
+    // 启动失败：done 事件不会触发，需手动清理监听并回调
+    onProgressUnsub();
+    onDoneUnsub();
+    return { started: false, error: startResult?.error || '启动失败', cancel };
+  }
+
+  return { started: true, cancel };
 }

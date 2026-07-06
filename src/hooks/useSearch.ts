@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { readFile } from '../services/fileService';
+import { readFile, searchContent, isElectron, isRemoteUri } from '../services/fileService';
 import type { FileEntry, FileSource } from '../services/fileService';
 import { InvertedIndex, PIDController, KalmanFilter } from '../utils/algorithms';
 import {
@@ -21,6 +21,11 @@ export interface SearchContext {
   useRegex: boolean;
   fuzzyMode: boolean;
   currentSearchId: number;
+  /** §ripgrep 搜索根路径：本地 Electron 模式下为磁盘绝对路径，远程/非 Electron 为 null */
+  rootPath: string | null;
+  /** 包含/排除 glob，ripgrep 策略转 -g 参数，旧策略在 collectAllFilesIterative 中应用 */
+  includePattern: string;
+  excludePattern: string;
 }
 
 interface SearchStrategy {
@@ -48,11 +53,97 @@ interface SearchStrategyServices {
   computeAdaptiveBatchSize: (prevSize: number, durationMs: number) => number;
 }
 
+/**
+ * ripgrep 搜索策略（本地 Electron 模式，对标 VSCode）
+ *
+ * §核心差异：不在渲染进程读文件内容，而是调用主进程 spawn rg --json。
+ * rg 在 Rust 端流式扫描，自动跳过二进制/大文件/.gitignore，只把匹配行
+ * 通过 IPC 事件推送。362MB 的 minified bundle 也不会触发 OOM 或 128MB 上限。
+ *
+ * 模糊匹配说明：rg 无原生模糊匹配，fuzzyMode 时退回到字面量包含匹配
+ * （rg 默认即子串匹配），由渲染进程的 hitsToResults 复用。
+ */
+class RipgrepSearchStrategy implements SearchStrategy {
+  name = 'ripgrep';
+
+  canHandle(ctx: SearchContext): boolean {
+    // 仅本地 Electron 模式 + 有 rootPath（字符串路径）+ 非模糊模式
+    // 模糊模式交给 IndexedSearchStrategy（倒排索引支持模糊）
+    if (ctx.fuzzyMode) return false;
+    return isElectron() && !!ctx.rootPath && typeof ctx.rootPath === 'string';
+  }
+
+  async execute(
+    ctx: SearchContext,
+    svc: SearchStrategyServices
+  ): Promise<{ results: FileSearchResult[]; hits: number; truncated: boolean }> {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const safeResolve = (v: { results: FileSearchResult[]; hits: number; truncated: boolean }) => {
+        if (!settled) { settled = true; resolve(v); }
+      };
+      const safeReject = (e: Error) => {
+        if (!settled) { settled = true; reject(e); }
+      };
+
+      // §ripgrep 推送的 results 是主进程聚合的全量结果（按文件路径 Map），
+      // 每次 progress 直接替换渲染进程的 results，无需本地合并。
+      const toFileResults = (results: { filePath: string; fileName: string; matches: { line: number; column: number; text: string; match: { index: number; length: number; matched: string } } }[]): FileSearchResult[] =>
+        results.map((r) => ({
+          filePath: r.filePath,
+          fileName: r.fileName,
+          matches: r.matches,
+          expanded: true,
+        }));
+
+      searchContent(
+        ctx.rootPath as string,
+        ctx.searchQuery,
+        {
+          caseSensitive: ctx.caseSensitive,
+          wholeWord: ctx.wholeWord,
+          useRegex: ctx.useRegex,
+          includePattern: ctx.includePattern,
+          excludePattern: ctx.excludePattern,
+          maxResults: MAX_TOTAL_MATCHES,
+        },
+        {
+          onProgress: (data) => {
+            const fileResults = toFileResults(data.results);
+            svc.setResults(fileResults);
+            svc.setSearchedCount(fileResults.length);
+            svc.setTotalFileCount(fileResults.length);
+            if (data.isTruncated) svc.setIsTruncated(true);
+          },
+          onDone: (data) => {
+            if (data.error) {
+              safeReject(new Error(data.error));
+              return;
+            }
+            const fileResults = toFileResults(data.results);
+            svc.setResults(fileResults);
+            svc.setSearchedCount(fileResults.length);
+            svc.setTotalFileCount(fileResults.length);
+            if (data.isTruncated) svc.setIsTruncated(true);
+            safeResolve({ results: fileResults, hits: fileResults.length, truncated: data.isTruncated });
+          },
+        },
+        ctx.currentSearchId
+      ).then(({ started, error }) => {
+        // rg 不可用：抛错让外层 fallback 到 Worker 策略
+        if (!started) safeReject(new Error(error || 'ripgrep 不可用'));
+      }).catch(safeReject);
+    });
+  }
+}
+
 /** 倒排索引搜索策略（简单词搜索） */
 class IndexedSearchStrategy implements SearchStrategy {
   name = 'indexed';
 
   canHandle(ctx: SearchContext): boolean {
+    // §远程/非 Electron 模式才用倒排索引（本地 Electron 优先走 ripgrep）
+    if (ctx.rootPath && isElectron()) return false;
     return !ctx.useRegex && !ctx.caseSensitive && !ctx.wholeWord
       && !hasNonWordChars(ctx.searchQuery);
   }
@@ -165,6 +256,8 @@ class SearchStrategyRegistry {
   private strategies: SearchStrategy[] = [];
 
   constructor() {
+    // §注册顺序即优先级：ripgrep（本地 Electron）> 倒排索引（远程简单词）> Worker（兜底）
+    this.register(new RipgrepSearchStrategy());
     this.register(new IndexedSearchStrategy());
     this.register(new WorkerSearchStrategy());
   }
@@ -230,7 +323,7 @@ function computeAdaptiveBatchSizeKalman(
   return Math.max(2, Math.min(50, Math.round(newSize)));
 }
 
-export function useSearch(entries: FileEntry[], pendingQuery: string | null, onPendingConsumed: () => void): UseSearchReturn {
+export function useSearch(entries: FileEntry[], rootSource: FileSource | null, pendingQuery: string | null, onPendingConsumed: () => void): UseSearchReturn {
   const [query, setQuery] = useState('');
   const [replaceQuery, setReplaceQuery] = useState('');
   const [includePattern, setIncludePattern] = useState('');
@@ -278,6 +371,10 @@ export function useSearch(entries: FileEntry[], pendingQuery: string | null, onP
     if (!query.trim()) {
       setResults([]);
       setIsSearching(false);
+      // §清空查询时取消正在进行的 ripgrep 搜索，释放后台 rg 进程 CPU
+      if (isElectron()) {
+        void window.electronAPI?.fs.searchCancel();
+      }
       return;
     }
 
@@ -390,7 +487,19 @@ export function useSearch(entries: FileEntry[], pendingQuery: string | null, onP
   );
 
   const handleSearchInternal = useCallback(async (searchQuery: string) => {
-    if (!searchQuery.trim() || !entries.length) return;
+    if (!searchQuery.trim()) return;
+
+    // §ripgrep 模式（本地 Electron + 字符串 rootPath + 非远程 URI + 非模糊）：
+    // rg 自己遍历目录树，不需要 collectAllFilesIterative 收集文件列表，
+    // 跳过该步骤可显著加快首次响应（大项目收集文件列表本身就很慢）。
+    // 远程 URI（ssh://）交给旧策略，rg 无法直接搜远程文件系统。
+    const isRipgrepMode = isElectron()
+      && typeof rootSource === 'string'
+      && !!rootSource
+      && !isRemoteUri(rootSource)
+      && !fuzzyMode;
+    if (!isRipgrepMode && !entries.length) return;
+
     const currentSearchId = ++searchIdRef.current;
 
     setIsSearching(true);
@@ -399,21 +508,22 @@ export function useSearch(entries: FileEntry[], pendingQuery: string | null, onP
     setTotalFileCount(0);
     setIsTruncated(false);
 
-    const entriesKey = JSON.stringify(entries.map((e) => `${e.name}:${e.kind}`));
-
-    const cached = fileCacheRef.current;
-    let allFiles: { path: string; source: FileSource }[];
-    if (cached && cached.entriesSrc === entriesKey) {
-      allFiles = cached.files.slice();
-    } else {
-      const collected: { path: string; source: FileSource }[] = [];
-      await collectAllFilesIterative(entries, collected);
-      allFiles = collected;
-      fileCacheRef.current = { entriesSrc: entriesKey, files: allFiles.slice() };
-      indexRef.current = null;
+    let allFiles: { path: string; source: FileSource }[] = [];
+    if (!isRipgrepMode) {
+      const entriesKey = JSON.stringify(entries.map((e) => `${e.name}:${e.kind}`));
+      const cached = fileCacheRef.current;
+      if (cached && cached.entriesSrc === entriesKey) {
+        allFiles = cached.files.slice();
+      } else {
+        const collected: { path: string; source: FileSource }[] = [];
+        await collectAllFilesIterative(entries, collected);
+        allFiles = collected;
+        fileCacheRef.current = { entriesSrc: entriesKey, files: allFiles.slice() };
+        indexRef.current = null;
+      }
+      if (searchIdRef.current !== currentSearchId) { setIsSearching(false); return; }
+      setTotalFileCount(allFiles.length);
     }
-    if (searchIdRef.current !== currentSearchId) { setIsSearching(false); return; }
-    setTotalFileCount(allFiles.length);
 
     const ctx: SearchContext = {
       files: allFiles,
@@ -423,6 +533,9 @@ export function useSearch(entries: FileEntry[], pendingQuery: string | null, onP
       useRegex,
       fuzzyMode,
       currentSearchId,
+      rootPath: isRipgrepMode ? (rootSource as string) : null,
+      includePattern,
+      excludePattern,
     };
 
     const services: SearchStrategyServices = {
@@ -445,7 +558,15 @@ export function useSearch(entries: FileEntry[], pendingQuery: string | null, onP
       await strategy.execute(ctx, services);
     } catch (err) {
       console.warn(`[SearchPanel] 搜索策略 ${strategy.name} 失败:`, err);
-      // 降级到 Worker 策略
+      // §ripgrep 失败 fallback：rg 不可用时降级到 Worker，但 Worker 需要 files。
+      // ripgrep 模式下 allFiles 为空，需先收集文件列表。
+      if (allFiles.length === 0 && entries.length) {
+        const collected: { path: string; source: FileSource }[] = [];
+        await collectAllFilesIterative(entries, collected);
+        allFiles = collected;
+        ctx.files = allFiles;
+        setTotalFileCount(allFiles.length);
+      }
       const fallback = new WorkerSearchStrategy();
       setIsSearching(true);
       setResults([]);
@@ -453,7 +574,7 @@ export function useSearch(entries: FileEntry[], pendingQuery: string | null, onP
     } finally {
       if (searchIdRef.current === currentSearchId) setIsSearching(false);
     }
-  }, [entries, caseSensitive, wholeWord, useRegex, fuzzyMode, collectAllFilesIterative, readBatch, getWorker, buildIndex]);
+  }, [entries, rootSource, caseSensitive, wholeWord, useRegex, fuzzyMode, includePattern, excludePattern, collectAllFilesIterative, readBatch, getWorker, buildIndex]);
 
   const triggerSearch = useCallback((q: string) => {
     setQuery(q);

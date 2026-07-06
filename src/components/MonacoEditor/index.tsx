@@ -1,6 +1,6 @@
 import Editor, { type OnMount } from '@monaco-editor/react';
 import type * as monaco from 'monaco-editor';
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef, useEffect, useLayoutEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import { clearSearchHighlight } from '../../store/slices/workspaceSlice';
@@ -606,6 +606,23 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
   const decodedTokensRef = useRef<DecodedToken[] | null>(null);
   /** 预取：onChange 时立即发起 semanticTokens 请求，Monaco 调用 provider 时直接取结果，消除 IPC 延迟 */
   const semTokensPrefetchRef = useRef<Promise<{ resultId?: string; data: Uint32Array } | null> | null>(null);
+  /** §onMount/切 tab 预取：首次加载和切 tab 时重新发起，存 ref 让 provider 闭包读到最新值 */
+  const semTokensPrefetchMountRef = useRef<Promise<{ resultId?: string; data: Uint32Array } | null> | null>(null);
+  /** 语义 token legend（首次响应保存，后续复用，避免重复 IPC 请求） */
+  const semTokensLegendRef = useRef<{ tokenTypes: string[]; tokenModifiers: string[] } | null>(null);
+  /** 事件驱动重试触发器：tsserver 推送 diagnostics（program 已构建）时立即重试 */
+  const semTokensRetryTriggerRef = useRef<(() => void) | null>(null);
+  /** onMount 已执行标记：区分首次加载（由 onMount 处理）和切 tab（由 useEffect 处理） */
+  const editorMountedRef = useRef(false);
+  /** 最新 value 的 ref，供切 tab useEffect 拿到新文件内容，避免把 value 放进依赖 */
+  const valueRef = useRef(value);
+  valueRef.current = value;
+
+  // §SSH 远程文件的 path 是 ssh:// URI，本地 tsserver 无法处理（主进程会盲目拼接
+  // file:// 生成畸形 URI）。将远程路径等同于"无 tsserver"处理，跳过所有 LSP 调用，
+  // 仅依赖 Monaco 内置 tokenizer 提供基础语法高亮。
+  // §定义前置：initSemTokensForPath / useEffect[path] / onMount 均依赖 isBrowser。
+  const isBrowser = !window.electronAPI?.tsserver || (path ? isRemoteUri(path) : false);
 
   const onSnapshotRef = useRef(onSnapshot);
   onSnapshotRef.current = onSnapshot;
@@ -617,10 +634,75 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
   pathRef.current = path;
 
   // 切换文件时清空语义 token 缓存和预取，避免旧文件的 tokens 被应用到新文件
-  useEffect(() => {
+  // §用 useLayoutEffect 而非 useEffect：在 DOM 变更后、paint 前同步发起 tsserver open + prefetch，
+  // 比 useEffect（paint 后异步）早约一帧，让 prefetch 更早 in-flight，provider 回调命中预取的概率更高。
+  // 内部全是异步 IPC 调用，不会阻塞 paint。
+  useLayoutEffect(() => {
     decodedTokensRef.current = null;
     semTokensPrefetchRef.current = null;
+    // §切 tab 重新 open + prefetch：onMount 不重新执行，tsserver 不认识新文件会导致
+    // semanticTokens 返回空，高亮缺失直到用户编辑。这里主动重新发起，让新 tab 的高亮即时出现。
+    if (editorMountedRef.current && path && !isBrowser) {
+      initSemTokensForPath(path, valueRef.current);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path]);
+
+  /**
+   * §为新文件发起 tsserver open + semantic tokens 预取。
+   *
+   * onMount 首次加载和切 tab 都调用此函数。提取为 useCallback 避免重复代码，
+   * 并把结果存到 ref（而非局部变量），让 provider 闭包和诊断监听能读到最新值。
+   *
+   * 事件驱动重试：首次请求为空（tsserver 还在 handshake/索引）时，等 tsserver
+   * 推送该文件 diagnostics（标志 program 已构建）后立即重试，150ms 兜底超时。
+   */
+  const initSemTokensForPath = useCallback(
+    (targetPath: string, content: string) => {
+      if (isBrowser || !targetPath) return;
+
+      // 清空旧状态：避免旧文件的 prefetch/重试触发器串扰新文件
+      decodedTokensRef.current = null;
+      semTokensPrefetchRef.current = null;
+      semTokensPrefetchMountRef.current = null;
+      semTokensRetryTriggerRef.current = null;
+
+      // 打开文件（tsserver didOpen）：semanticTokens 对未 open 的文件返回空
+      tsService.open(targetPath, content).catch(() => {});
+
+      const fetchSemTokens = (): Promise<TsSemanticTokens | null> =>
+        tsService.semanticTokens(targetPath).then(
+          (tokens) => (tokens && tokens.data && tokens.data.length > 0 ? tokens : null),
+          () => null,
+        );
+      const saveLegendAndDecode = (t: TsSemanticTokens) => {
+        if (t.legend) semTokensLegendRef.current = t.legend;
+        const data = t.data instanceof Uint32Array ? t.data : new Uint32Array(t.data);
+        decodedTokensRef.current = decodeSemTokens(data);
+        return { resultId: t.resultId, data };
+      };
+      semTokensPrefetchMountRef.current = fetchSemTokens().then((first) => {
+        if (first) return saveLegendAndDecode(first);
+        // 首次为空 → 等待 tsserver 推送 diagnostics 后立即重试（事件驱动），
+        // 同时保留 150ms 兜底超时，避免 tsserver 异常时永久挂起
+        return new Promise<{ resultId?: string; data: Uint32Array } | null>((resolve) => {
+          let done = false;
+          const runRetry = () => {
+            if (done) return;
+            done = true;
+            semTokensRetryTriggerRef.current = null;
+            fetchSemTokens().then((retry) => {
+              if (retry) resolve(saveLegendAndDecode(retry));
+              else resolve(null);
+            }).catch(() => resolve(null));
+          };
+          semTokensRetryTriggerRef.current = runRetry;
+          setTimeout(runRetry, 150);
+        });
+      }).catch(() => null);
+    },
+    [isBrowser],
+  );
 
   const onOpenFileByPathRef = useRef(onOpenFileByPath);
   onOpenFileByPathRef.current = onOpenFileByPath;
@@ -645,6 +727,15 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
       tsserverRefCounts.set(currentPath, (tsserverRefCounts.get(currentPath) || 0) + 1);
     }
     return () => {
+      // §macOS IME 兼容：卸载前 blur 当前焦点元素。
+      // Electron + macOS 已知问题：textarea 销毁时若仍持有焦点，IMK（输入法服务）
+      // 会卡死，导致后续所有 input/textarea 无法接收字符输入（表现：焦点在 input 上
+      // 但按键不产生字符，控制台报 TSM/IMK 错误）。
+      // MonacoEditor 重挂（key 变化）会销毁旧 editor 的 textarea，必须在卸载前 blur。
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT')) {
+        active.blur();
+      }
       const snap = onSnapshotRef.current;
       if (editorRef.current && snap) {
         try {
@@ -688,7 +779,7 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
   // §SSH 远程文件的 path 是 ssh:// URI，本地 tsserver 无法处理（主进程会盲目拼接
   // file:// 生成畸形 URI）。将远程路径等同于"无 tsserver"处理，跳过所有 LSP 调用，
   // 仅依赖 Monaco 内置 tokenizer 提供基础语法高亮。
-  const isBrowser = !window.electronAPI?.tsserver || (path ? isRemoteUri(path) : false);
+  // §定义前置：initSemTokensForPath / useEffect[path] 依赖 isBrowser，必须在它们之前。
 
   const applyDiagnostics = useCallback(
     (editor: typeof editorRef.current, monaco: typeof monacoRef.current, diags: Array<{ start: { line: number; column: number }; end: { line: number; column: number }; message: string; category: number; code?: number }>) => {
@@ -819,51 +910,14 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
         }
 
         // ── 预加载 tsserver + 预取 semantic tokens（与后续逻辑并行，消除高亮延迟）──
-        // 在 provider 注册前即发起请求，当 Monaco 首次调用 provideDocumentSemanticTokens 时缓存已就绪
-        let semTokensPrefetch: Promise<{ resultId?: string; data: Uint32Array } | null> | null = null;
-        // 共享 legend：首次 fetch 即返回 legend，直接复用，避免后续单独 IPC 请求
-        let semTokensLegend: { tokenTypes: string[]; tokenModifiers: string[] } | null = null;
-        // 事件驱动重试触发器：tsserver 推送 diagnostics（标志 program 已构建）时立即重试，
-        // 替代原来的 600ms 盲等，让首次高亮在 tsserver 就绪后即时出现
-        let semTokensRetryTrigger: (() => void) | null = null;
+        // §onMount 首次加载调用 initSemTokensForPath；切 tab 时由 useEffect[path] 调用。
+        // 结果存到 ref（semTokensPrefetchMountRef/semTokensLegendRef/semTokensRetryTriggerRef），
+        // 让 provider 闭包和诊断监听能读到最新值，避免切 tab 后旧 prefetch 串扰。
         if (!isBrowser && path) {
-          tsService.open(path, value).catch(() => {});
-
-          // 预取语义 tokens。如果 tsserver 还在 handshake（用户极快地"开文件夹→点文件"
-          // 时可能出现），首次请求会立即返回 null；此时注册事件驱动重试，
-          // 等 tsserver 推送该文件的 diagnostics 后立即重试，同时保留 300ms 兜底超时。
-          const fetchSemTokens = (): Promise<TsSemanticTokens | null> =>
-            tsService.semanticTokens(path).then(
-              (tokens) => (tokens && tokens.data && tokens.data.length > 0 ? tokens : null),
-              () => null,
-            );
-          const saveLegendAndDecode = (t: TsSemanticTokens) => {
-            if (t.legend) semTokensLegend = t.legend;
-            // 主进程已返回 Uint32Array 时直接复用，避免多余拷贝
-            const data = t.data instanceof Uint32Array ? t.data : new Uint32Array(t.data);
-            decodedTokensRef.current = decodeSemTokens(data);
-            return { resultId: t.resultId, data };
-          };
-          semTokensPrefetch = fetchSemTokens().then((first) => {
-            if (first) return saveLegendAndDecode(first);
-            // 首次为空 → 等待 tsserver 推送 diagnostics 后立即重试（事件驱动），
-            // 同时保留 300ms 兜底超时，避免 tsserver 异常时永久挂起
-            return new Promise<{ resultId?: string; data: Uint32Array } | null>((resolve) => {
-              let done = false;
-              const runRetry = () => {
-                if (done) return;
-                done = true;
-                semTokensRetryTrigger = null;
-                fetchSemTokens().then((retry) => {
-                  if (retry) resolve(saveLegendAndDecode(retry));
-                  else resolve(null);
-                }).catch(() => resolve(null));
-              };
-              semTokensRetryTrigger = runRetry;
-              setTimeout(runRetry, 300); // 兜底：300ms 后强制重试（原 600ms）
-            });
-          }).catch(() => null);
+          initSemTokensForPath(path, value);
         }
+        // 标记 onMount 已执行：后续 path 变化由 useEffect[path] 接管切 tab 逻辑
+        editorMountedRef.current = true;
 
         // ── 快照恢复（layout 先行，消除抖动 + 保证位置正确）──
         // 1. 先同步执行 layout，确保 Monaco 已完成内容测量（scrollHeight 已知），
@@ -937,7 +991,16 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
             selectionOrPosition?: monaco.IRange | { lineNumber: number; column: number },
           ) {
             if (!resource) return false;
-            const targetPath = resource.path;
+            let targetPath = resource.path;
+            // §剥离 modelPath 虚拟前缀：modelPath = file:///__ideacode_group/{groupId}/{realPath}
+            // Monaco 内置 TS worker / link detector 用 model URI（含虚拟前缀）作为文件路径，
+            // 返回的定义位置 uri 也带 __ideacode_group/g0/ 前缀。
+            // openCodeEditor 收到的 resource.path 形如 /__ideacode_group/g0/Users/...，
+            // 需还原为真实文件路径 /Users/...，否则 openFile → fs:readFile 报 ENOENT。
+            const virtualPrefix = /^\/__ideacode_group\/[^/]+\//;
+            if (virtualPrefix.test(targetPath)) {
+              targetPath = '/' + targetPath.replace(virtualPrefix, '');
+            }
             const currentPath = pathRef.current;
             const openFile = onOpenFileByPathRef.current;
             if (!targetPath || !openFile) return false;
@@ -982,10 +1045,12 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
               onReadyRef.current?.();
             }
             if ('error' in data) return;
-            if (data.file === path && editorRef.current && monacoRef.current) {
+            // §用 pathRef.current 替代闭包 path：切 tab 后 path 闭包是旧值，
+            // 新文件诊断无法匹配，导致高亮/诊断不应用。pathRef.current 始终是最新路径。
+            if (data.file === pathRef.current && editorRef.current && monacoRef.current) {
               applyDiagnostics(editorRef.current, monacoRef.current, data.diagnostics);
               // tsserver 已处理该文件 → 立即触发 semantic tokens 重试（消除盲等）
-              if (semTokensRetryTrigger) semTokensRetryTrigger();
+              if (semTokensRetryTriggerRef.current) semTokensRetryTriggerRef.current();
             }
           });
 
@@ -1124,7 +1189,7 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
           };
 
           lspDisposablesRef.current.push(monaco.languages.registerDocumentSemanticTokensProvider(language, {
-            getLegend: () => semTokensLegend ?? defaultSemanticTokensLegend,
+            getLegend: () => semTokensLegendRef.current ?? defaultSemanticTokensLegend,
             provideDocumentSemanticTokens: async (model: monaco.editor.ITextModel) => {
               // 只处理 file:// 模型；gitdiff-* 等虚拟模型交给 DiffEditorPanel 注册的 provider
               if (model && model.uri && model.uri.scheme !== 'file') {
@@ -1132,10 +1197,11 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
               }
               const currentPath = pathRef.current;
 
-              // 1. 优先使用 onMount 预取结果（首次加载，大概率已缓存）
-              if (semTokensPrefetch) {
-                const result = await semTokensPrefetch;
-                semTokensPrefetch = null;
+              // 1. 优先使用 onMount/切 tab 预取结果（semTokensPrefetchMountRef）
+              // §用 ref 替代局部变量：切 tab 时 useEffect 更新 ref，provider 闭包读到最新预取
+              if (semTokensPrefetchMountRef.current) {
+                const result = await semTokensPrefetchMountRef.current;
+                semTokensPrefetchMountRef.current = null;
                 if (result) return result;
               }
 

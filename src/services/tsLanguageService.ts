@@ -60,6 +60,17 @@ function api() {
 let startedRootPath: string | null = null;
 let startInFlight: Promise<boolean> | null = null;
 
+/**
+ * 当前已向 tsserver 发送 didOpen 的文件集合。
+ *
+ * 切 tab 回到已 open 过的文件时，若再次发 didOpen（version 重置为 1），
+ * tsserver 会重新解析文件、重建 program 的一部分，导致高亮延迟约 1s。
+ * 维护此集合：已 open 的文件改用 didChange 更新内容，避免重复 didOpen。
+ *
+ * stop 时清空（tsserver 进程已退出，所有文件状态归零）。
+ */
+const openFiles = new Set<string>();
+
 export const tsService = {
   /** 启动 tsserver（幂等：相同 rootPath 不会重复启动） */
   start(rootPath: string): Promise<boolean> {
@@ -97,6 +108,7 @@ export const tsService = {
     if (!a) return Promise.resolve(false);
     const prev = startedRootPath;
     startedRootPath = null;
+    openFiles.clear();
     return Promise.resolve(a.stop()).then(
       () => true,
       (err) => {
@@ -107,19 +119,52 @@ export const tsService = {
     );
   },
 
-  /** 打开文件：tsserver 解析并生成诊断 */
+  /**
+   * 打开文件：tsserver 解析并生成诊断。
+   *
+   * 幂等：已 open 的文件改用 didChange 更新内容，避免重复 didOpen
+   * 导致 tsserver 重新解析文件（version 重置为 1 → program 重建 → ~1s 延迟）。
+   * 切 tab 回到已打开过的文件时收益最大：tsserver 增量更新 program，semanticTokens 立即可用。
+   */
   async open(filePath: string, content: string) {
-    return api()?.open(filePath, content) ?? null;
+    const a = api();
+    if (!a) return null;
+    if (openFiles.has(filePath)) {
+      // 已 open 过：用 didChange 更新内容（version 递增，tsserver 增量更新）
+      return a.change(filePath, content);
+    }
+    openFiles.add(filePath);
+    return a.open(filePath, content);
   },
 
-  /** 关闭文件 */
+  /**
+   * 关闭文件。
+   *
+   * 守卫：仅对已 didOpen 的文件发 didClose。tsserver 进程退出重启后 openFiles 会被
+   * stop() 清空，但 MonacoEditor 卸载 cleanup 仍可能调用 close()，对新 tsserver
+   * 关闭一个它不认识的文件会报 "Trying to close not opened document"。
+   */
   close(filePath: string) {
+    if (!openFiles.has(filePath)) return;
+    openFiles.delete(filePath);
     return api()?.close(filePath);
   },
 
-  /** 通知 tsserver 文件内容已改变 */
+  /**
+   * 通知 tsserver 文件内容已改变。
+   *
+   * 守卫：未 open 的文件先 didOpen 再 didChange。tsserver 重启后 openFiles 被清空，
+   * 此时若直接发 didChange，tsserver 会报 "Unexpected resource"（文件不在 program 中）。
+   * 先 open 让 tsserver 把文件加入 program，再 change 增量更新内容。
+   */
   change(filePath: string, content: string) {
-    return api()?.change(filePath, content);
+    const a = api();
+    if (!a) return;
+    if (openFiles.has(filePath)) {
+      return a.change(filePath, content);
+    }
+    openFiles.add(filePath);
+    return a.open(filePath, content);
   },
 
   /** 获取补全建议 */

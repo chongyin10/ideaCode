@@ -108,12 +108,29 @@ function attemptConnect(id, connConfig, password) {
     });
 
     client.on('error', (err) => {
-      log('error', '[SSH Extension] 连接失败:', connConfig.host, err.message);
+      // §错误诊断：区分常见失败原因，给出可操作的错误信息
+      const rawMsg = err.message || '未知错误';
+      let friendly = rawMsg;
+      const level = err.level || '';
+      if (level === 'client-authentication' || rawMsg.includes('All configured authentication methods failed')) {
+        friendly = `认证失败（用户名或密码错误，或服务器禁止密码/root 登录）。原始错误: ${rawMsg}`;
+      } else if (rawMsg.includes('ECONNREFUSED') || rawMsg.includes('connect ECONNREFUSED')) {
+        friendly = `连接被拒绝（端口未开放或 SSH 服务未运行）。原始错误: ${rawMsg}`;
+      } else if (rawMsg.includes('ETIMEDOUT') || rawMsg.includes('Timed out while waiting for handshake')) {
+        friendly = `连接超时（网络不通或防火墙拦截）。原始错误: ${rawMsg}`;
+      } else if (rawMsg.includes('ENOTFOUND') || rawMsg.includes('getaddrinfo')) {
+        friendly = `主机名解析失败（域名/IP 错误）。原始错误: ${rawMsg}`;
+      } else if (rawMsg.includes('EHOSTUNREACH')) {
+        friendly = `主机不可达。原始错误: ${rawMsg}`;
+      }
+      log('error', '[SSH Extension] 连接失败:', connConfig.host, friendly);
       try { client.end(); } catch { /* ignore */ }
       if (sshClients.get(id) === client) {
         sshClients.delete(id);
       }
-      reject(err);
+      const enhanced = new Error(friendly);
+      enhanced.raw = err;
+      reject(enhanced);
     });
 
     client.on('close', () => {
@@ -139,7 +156,16 @@ function attemptConnect(id, connConfig, password) {
     });
 
     try {
-      client.connect(connConfig);
+      // §debug 回调：输出 ssh2 详细握手日志，便于排查认证/连接问题
+      client.connect({
+        ...connConfig,
+        debug: (msg) => {
+          // 只记录关键握手信息，避免日志过多
+          if (msg.includes('AUTH') || msg.includes('auth') || msg.includes('Error') || msg.includes('error') || msg.includes('reject') || msg.includes('fail')) {
+            console.log(`[SSH Extension] [debug] ${msg}`);
+          }
+        },
+      });
     } catch (err) {
       log('error', '[SSH Extension] 连接异常:', err.message);
       if (sshClients.get(id) === client) {
@@ -162,9 +188,13 @@ function registerSshCommands() {
       host,
       port: port || 22,
       username,
-      readyTimeout: 20000,
+      readyTimeout: 30000,
       keepaliveInterval: 30000,
       keepaliveCountMax: 3,
+      // §tryKeyboard：主动请求 keyboard-interactive 认证。
+      // 阿里云部分镜像 sshd 配置 PasswordAuthentication no + KbdInteractiveAuthentication yes，
+      // 此时纯 password 字段不会被尝试，必须走 keyboard-interactive 回调。
+      tryKeyboard: !!password,
     };
 
     // 1. 显式私钥
