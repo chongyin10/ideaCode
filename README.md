@@ -134,30 +134,30 @@ AI 代码辅助扩展，支持多 LLM Provider 与 Agent 自主编排，默认�
 
 ```mermaid
 flowchart TB
-    subgraph Renderer[渲染进程集群]
-        R1[编辑器窗口]
-        R2[文件树和Git面板]
-        Rn[SSH和AI面板]
+    subgraph Renderer["渲染进程集群"]
+        R1["编辑器窗口"]
+        R2["文件树和Git面板"]
+        Rn["SSH和AI面板"]
     end
-    subgraph Main[主进程]
-        M1[窗口管理]
-        M2[进程管理]
-        M3[消息总线]
-        M4[IPC桥]
-        M5[LSP和终端管理]
+    subgraph Main["主进程"]
+        M1["窗口管理"]
+        M2["进程管理"]
+        M3["消息总线"]
+        M4["IPC桥"]
+        M5["LSP和终端管理"]
     end
-    subgraph ExtensionHost[扩展宿主进程]
-        E1[插件API层]
-        E2[Git/SSH/AI插件]
+    subgraph ExtensionHost["扩展宿主进程"]
+        E1["插件API层"]
+        E2["Git、SSH、AI插件"]
     end
 
-    R1 <-- IPC通道 --> Main
-    R2 <-- IPC通道 --> Main
-    Rn <-- IPC通道 --> Main
-    Main <-- JSON-RPC --> ExtensionHost
-    Main -. spawn .-> T[tsserver子进程]
-    Main -. PTY .-> P[终端shell]
-    Main -. worker_threads .-> W[搜索线程]
+    R1 -->|IPC通道| Main
+    R2 -->|IPC通道| Main
+    Rn -->|IPC通道| Main
+    Main -->|JSON-RPC| ExtensionHost
+    Main -.->|spawn| T["tsserver子进程"]
+    Main -.->|PTY| P["终端shell"]
+    Main -.->|worker| W["搜索线程"]
 ```
 
 > 三层隔离实现安全、故障、资源隔离；主进程拥有系统唯一操作权限，渲染/扩展进程无法直接访问底层系统 API。
@@ -166,13 +166,13 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    A[程序入口main.cjs] --> A1[v8缓存和环境修复]
-    A1 --> A2[五大核心管理器初始化]
-    A2 --> B{IDEACODE_MICROKERNEL开启?}
-    B -- 是 --> C[实例ServiceBus注册服务]
-    C --> D[注入IPC适配器]
-    D --> F[延迟启动扩展宿主]
-    B -- 否或初始化异常 --> E[降级单体IPC模式]
+    A["程序入口main.cjs"] --> A1["v8缓存和环境修复"]
+    A1 --> A2["五大核心管理器初始化"]
+    A2 --> B{"微内核开关开启?"}
+    B -- 是 --> C["ServiceBus注册服务"]
+    C --> D["注入IPC适配器"]
+    D --> F["延迟启动扩展宿主"]
+    B -- 否 --> E["降级单体IPC模式"]
     E --> F
 ```
 
@@ -186,9 +186,9 @@ sequenceDiagram
     participant Main as 主进程管理
     participant Host as 扩展宿主
     participant Ext as 第三方插件
-    Main->>Host: fork创建进程 ELECTRON_RUN_AS_NODE=1
+    Main->>Host: fork创建进程
     Host->>Main: IPC就绪信号
-    Main->>Host: RPC指令扫描全部扩展
+    Main->>Host: RPC扫描全部扩展
     Host->>Ext: 执行activate激活
     Note over UI,Main: 正常业务调用
     UI->>Main: IPC请求插件功能
@@ -198,7 +198,7 @@ sequenceDiagram
     Host-->>Main: RPC响应
     Main-->>UI: 返回数据
     Note over Main,Host: 文件热重启
-    Main->>Host: 发送SIGTERM优雅退出
+    Main->>Host: SIGTERM优雅退出
     Host->>Ext: deactivate释放资源
     Host--x Main: 进程退出事件
     Main->>Main: 新建宿主进程重启插件
@@ -210,18 +210,18 @@ sequenceDiagram
 
 ```mermaid
 flowchart TB
-    Bus[ServiceBus 核心总线]
-    Bus --> R[RPC 请求响应]
-    Bus --> N[Notify 单向通知]
-    Bus --> P[Pub/Sub 发布订阅]
-    Bus --> J[JSON-RPC 跨扩展]
+    Bus["ServiceBus 核心总线"]
+    Bus --> R["RPC 请求响应"]
+    Bus --> N["Notify 单向通知"]
+    Bus --> P["发布订阅"]
+    Bus --> J["JSON-RPC 跨扩展"]
 
-    R --> R1{本地存在处理器}
-    R1 -- 是 --> R2[同进程直接调用]
-    R1 -- 否 --> R3[转发IPC远程]
-    P --> P1[本地订阅回调]
-    P1 --> P2[自动广播所有窗口]
-    J --> J1[IPC桥转发至扩展宿主]
+    R --> R1{"本地存在处理器?"}
+    R1 -- 是 --> R2["同进程直接调用"]
+    R1 -- 否 --> R3["转发IPC远程"]
+    P --> P1["本地订阅回调"]
+    P1 --> P2["自动广播所有窗口"]
+    J --> J1["IPC桥转发至扩展宿主"]
 ```
 
 > 本地优先策略减少 IPC 开销；发布订阅自动同步所有渲染窗口，上层无需关心进程分布。
@@ -235,7 +235,7 @@ sequenceDiagram
     participant TS as tsserver子进程
     UI->>Main: didOpen 打开TS文件
     Main->>TS: stdio下发LSP消息
-    TS-->>Main: publishDiagnostics语法报错
+    TS-->>Main: publishDiagnostics诊断
     Main-->>UI: 渲染编辑器波浪线
     UI->>Main: 光标请求completion
     Main->>TS: LSP补全请求
@@ -243,23 +243,23 @@ sequenceDiagram
     Main-->>UI: 展示补全下拉框
 ```
 
-> 本地文件走外部 tsserver LSP（typescript-language-server）；SSH 远程文件自动切换自建 tsSdk Worker（Web Worker 内运行 ts.LanguageService），绕过本地 tsserver 的 file:// URI 限制。
+> 本地文件走外部 tsserver LSP；SSH 远程文件自动切换自建 tsSdk Worker，绕过 tsserver 的 file URI 限制。
 
 ### 6. node-pty 终端数据流与背压控制
 
 ```mermaid
 flowchart LR
-    User[用户输入] --> UI[xterm前端]
-    UI -- IPC --> Main[终端管理器]
-    Main --> PTY[node-pty伪终端]
-    PTY --> Shell[zsh/bash/ssh]
-    Shell --> PTY[海量输出流]
+    User["用户输入"] --> UI["xterm前端"]
+    UI -->|IPC| Main["终端管理器"]
+    Main --> PTY["node-pty伪终端"]
+    PTY --> Shell["zsh或bash或ssh"]
+    Shell --> PTY["海量输出流"]
     PTY --> Main
-    Main --> W[水位和PID双层流控]
-    W -- 负载正常 --> UI
-    W -- 输出过载 --> W1[暂停PTY输出]
-    UI --> ACK[渲染完成回执]
-    ACK --> W[恢复输出]
+    Main --> W["水位和PID双层流控"]
+    W -->|负载正常| UI
+    W -->|输出过载| W1["暂停PTY输出"]
+    UI --> ACK["渲染完成回执"]
+    ACK --> W["恢复输出"]
 ```
 
 > 高低水位背压机制防止 IPC 队列爆满、页面卡死。
@@ -268,25 +268,25 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-    UI[SSH连接面板] --> Bridge[前端扩展桥]
-    Bridge --> IPC[主进程IPC通道]
-    IPC --> Host[SSH扩展宿主]
-    Host --> SSH2[ssh2客户端]
-    SSH2 --> FS[远程文件读写和树]
-    SSH2 --> Terminal[远程交互式终端]
-    SSH2 --> Git[远程仓库操作]
+    UI["SSH连接面板"] --> Bridge["前端扩展桥"]
+    Bridge --> IPC["主进程IPC通道"]
+    IPC --> Host["SSH扩展宿主"]
+    Host --> SSH2["ssh2客户端"]
+    SSH2 --> FS["远程文件读写和树"]
+    SSH2 --> Terminal["远程交互式终端"]
+    SSH2 --> Git["远程仓库操作"]
 ```
 
 ### 8. Git 命令串行防锁执行流程
 
 ```mermaid
 flowchart LR
-    A[前端Git操作请求] --> B[Git扩展执行器]
-    B --> C{按工作区分队列}
-    C -- 独立队列 --> D[任务串行排队]
-    D --> E[清理30s过期index.lock]
-    E --> F[spawn执行git命令]
-    F --> G[推送状态至SCM面板]
+    A["前端Git操作请求"] --> B["Git扩展执行器"]
+    B --> C{"按工作区分队列?"}
+    C -- 独立队列 --> D["任务串行排队"]
+    D --> E["清理过期index.lock"]
+    E --> F["spawn执行git命令"]
+    F --> G["推送状态至SCM面板"]
 ```
 
 > 同一仓库命令串行执行，杜绝并发产生 `.git/index.lock` 锁文件冲突。
