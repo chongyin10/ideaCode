@@ -7,7 +7,7 @@
 ![Vite](https://img.shields.io/badge/Vite-5.4-646CFF?logo=vite)
 ![Electron](https://img.shields.io/badge/Electron-30-47848F?logo=electron)
 
-> ![整体界面](docs/images/overview-dark.png)
+> **三层进程隔离**：渲染进程（React UI） ↔ 主进程（系统资源管理） ↔ 扩展宿主（Git/SSH/AI 插件），通过 IPC + JSON-RPC 通信，崩溃隔离互不影响。
 
 ---
 
@@ -131,72 +131,83 @@ AI 代码辅助扩展，支持多 LLM Provider 与 Agent 自主编排，默认�
 ## 架构流程图
 
 ### 1. 三层进程隔离整体架构
+
 ```mermaid
 flowchart TB
     subgraph Renderer[渲染进程集群]
         R1[编辑器窗口]
-        R2[文件树/Git面板]
-        Rn[SSH/AI面板]
+        R2[文件树和Git面板]
+        Rn[SSH和AI面板]
     end
     subgraph Main[主进程]
         M1[窗口管理]
         M2[进程管理]
         M3[消息总线]
         M4[IPC桥]
-        M5[LSP/终端管理]
+        M5[LSP和终端管理]
     end
     subgraph ExtensionHost[扩展宿主进程]
         E1[插件API层]
         E2[Git/SSH/AI插件]
     end
 
-    R1 & R2 <-->|IPC通道| Main
-    Rn <-->|IPC通道| Main
-    Main <-->|JSON-RPC| ExtensionHost
-    Main -.->|spawn| T[tsserver子进程]
-    Main -.->|PTY| P[终端shell]
-    Main -.->|worker_threads| W[搜索线程]
+    R1 <-- IPC通道 --> Main
+    R2 <-- IPC通道 --> Main
+    Rn <-- IPC通道 --> Main
+    Main <-- JSON-RPC --> ExtensionHost
+    Main -. spawn .-> T[tsserver子进程]
+    Main -. PTY .-> P[终端shell]
+    Main -. worker_threads .-> W[搜索线程]
 ```
+
 > 三层隔离实现安全、故障、资源隔离；主进程拥有系统唯一操作权限，渲染/扩展进程无法直接访问底层系统 API。
 
 ### 2. 微内核双轨启动流程
+
 ```mermaid
 flowchart LR
-    A[程序入口main.cjs] --> A1[v8缓存+环境修复]
+    A[程序入口main.cjs] --> A1[v8缓存和环境修复]
     A1 --> A2[五大核心管理器初始化]
     A2 --> B{IDEACODE_MICROKERNEL开启?}
     B -- 是 --> C[实例ServiceBus注册服务]
     C --> D[注入IPC适配器]
     D --> F[延迟启动扩展宿主]
-    B -- 否/初始化异常 --> E[降级单体IPC模式]
+    B -- 否或初始化异常 --> E[降级单体IPC模式]
     E --> F
 ```
+
 > 采用灰度开关+自动降级，微内核启动失败不会导致程序崩溃，兼容新旧两套架构。
 
 ### 3. 扩展宿主生命周期时序
+
 ```mermaid
 sequenceDiagram
+    participant UI as 前端UI
     participant Main as 主进程管理
     participant Host as 扩展宿主
     participant Ext as 第三方插件
-    Main->>Host: fork创建进程（ELECTRON_RUN_AS_NODE=1）
+    Main->>Host: fork创建进程 ELECTRON_RUN_AS_NODE=1
     Host->>Main: IPC就绪信号
     Main->>Host: RPC指令扫描全部扩展
     Host->>Ext: 执行activate激活
-    前端UI->>Main: IPC请求插件功能
+    Note over UI,Main: 正常业务调用
+    UI->>Main: IPC请求插件功能
     Main->>Host: JSON-RPC转发
     Host->>Ext: 执行插件逻辑
     Ext-->>Host: 返回结果
     Host-->>Main: RPC响应
-    Main-->>前端UI: 返回数据
+    Main-->>UI: 返回数据
+    Note over Main,Host: 文件热重启
     Main->>Host: 发送SIGTERM优雅退出
     Host->>Ext: deactivate释放资源
     Host--x Main: 进程退出事件
     Main->>Main: 新建宿主进程重启插件
 ```
+
 > 两段式销毁：SIGTERM 优先优雅卸载，2 秒无响应则 SIGKILL 强制杀死；双标记区分热重启/永久关闭。
 
 ### 4. ServiceBus 消息总线四种通信模式
+
 ```mermaid
 flowchart TB
     Bus[ServiceBus 核心总线]
@@ -212,9 +223,11 @@ flowchart TB
     P1 --> P2[自动广播所有窗口]
     J --> J1[IPC桥转发至扩展宿主]
 ```
+
 > 本地优先策略减少 IPC 开销；发布订阅自动同步所有渲染窗口，上层无需关心进程分布。
 
 ### 5. tsserver LSP 语言服务流程
+
 ```mermaid
 sequenceDiagram
     participant UI as 编辑器前端
@@ -229,38 +242,43 @@ sequenceDiagram
     TS-->>Main: CompletionList结果
     Main-->>UI: 展示补全下拉框
 ```
+
 > 本地文件走外部 tsserver LSP（typescript-language-server）；SSH 远程文件自动切换自建 tsSdk Worker（Web Worker 内运行 ts.LanguageService），绕过本地 tsserver 的 file:// URI 限制。
 
 ### 6. node-pty 终端数据流与背压控制
+
 ```mermaid
 flowchart LR
     User[用户输入] --> UI[xterm前端]
-    UI -->|IPC| Main[终端管理器]
+    UI -- IPC --> Main[终端管理器]
     Main --> PTY[node-pty伪终端]
     PTY --> Shell[zsh/bash/ssh]
     Shell --> PTY[海量输出流]
     PTY --> Main
-    Main --> W[水位+PID双层流控]
-    W -->|负载正常| UI
-    W -->|输出过载| W1[暂停PTY输出]
+    Main --> W[水位和PID双层流控]
+    W -- 负载正常 --> UI
+    W -- 输出过载 --> W1[暂停PTY输出]
     UI --> ACK[渲染完成回执]
     ACK --> W[恢复输出]
 ```
+
 > 高低水位背压机制防止 IPC 队列爆满、页面卡死。
 
 ### 7. SSH 远程开发调用链路
+
 ```mermaid
 flowchart TB
     UI[SSH连接面板] --> Bridge[前端扩展桥]
     Bridge --> IPC[主进程IPC通道]
     IPC --> Host[SSH扩展宿主]
     Host --> SSH2[ssh2客户端]
-    SSH2 --> FS[远程文件读写/树]
+    SSH2 --> FS[远程文件读写和树]
     SSH2 --> Terminal[远程交互式终端]
     SSH2 --> Git[远程仓库操作]
 ```
 
 ### 8. Git 命令串行防锁执行流程
+
 ```mermaid
 flowchart LR
     A[前端Git操作请求] --> B[Git扩展执行器]
@@ -270,6 +288,7 @@ flowchart LR
     E --> F[spawn执行git命令]
     F --> G[推送状态至SCM面板]
 ```
+
 > 同一仓库命令串行执行，杜绝并发产生 `.git/index.lock` 锁文件冲突。
 
 ## 环境要求
@@ -359,7 +378,6 @@ ideacode/
 │   ├── ssh/
 │   └── lifeAiCode/
 ├── extensions/                   # 扩展构建产物（gitignored）
-├── docs/images/                  # 截图资源
 ├── package.json
 └── vite.config.ts
 ```
@@ -371,19 +389,6 @@ ideacode/
 1. **Monaco Editor 首次加载**：核心资源较大，首次打开文件可能有短暂等待（已做预加载优化）
 2. **File System Access API 兼容性**：Safari 不支持，建议使用 Electron 桌面端
 3. **无头服务器限制**：Electron 需要图形界面环境
-
----
-
-## 截图贡献
-
-截图清单和截取方法详见 → [docs/images/README.md](docs/images/README.md)
-
-贡献步骤：
-1. `npm run electron:dev` 启动桌面应用
-2. 打开一个 React/TypeScript 示例项目
-3. 按清单截取各功能界面（推荐 PNG / 1920×1080）
-4. 将截图放入 `docs/images/` 目录
-5. 提交 PR
 
 ---
 
