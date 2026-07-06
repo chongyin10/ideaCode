@@ -134,30 +134,28 @@ AI 代码辅助扩展，支持多 LLM Provider 与 Agent 自主编排，默认�
 
 ```mermaid
 flowchart TB
-    subgraph Renderer["渲染进程集群"]
+    subgraph R["渲染进程"]
         R1["编辑器窗口"]
         R2["文件树和Git面板"]
         Rn["SSH和AI面板"]
     end
-    subgraph Main["主进程"]
+    subgraph M["主进程"]
         M1["窗口管理"]
-        M2["进程管理"]
         M3["消息总线"]
-        M4["IPC桥"]
         M5["LSP和终端管理"]
     end
-    subgraph ExtensionHost["扩展宿主进程"]
+    subgraph EH["扩展宿主"]
         E1["插件API层"]
-        E2["Git、SSH、AI插件"]
+        E2["Git和SSH和AI插件"]
     end
 
-    R1 -->|IPC通道| Main
-    R2 -->|IPC通道| Main
-    Rn -->|IPC通道| Main
-    Main -->|JSON-RPC| ExtensionHost
-    Main -.->|spawn| T["tsserver子进程"]
-    Main -.->|PTY| P["终端shell"]
-    Main -.->|worker| W["搜索线程"]
+    R1 --> M3
+    R2 --> M3
+    Rn --> M3
+    M3 -->|JSON-RPC| E1
+    M5 -.->|spawn| T["tsserver子进程"]
+    M5 -.->|PTY| P["终端shell"]
+    M5 -.->|worker| W["搜索线程"]
 ```
 
 > 三层隔离实现安全、故障、资源隔离；主进程拥有系统唯一操作权限，渲染/扩展进程无法直接访问底层系统 API。
@@ -166,13 +164,13 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    A["程序入口main.cjs"] --> A1["v8缓存和环境修复"]
-    A1 --> A2["五大核心管理器初始化"]
-    A2 --> B{"微内核开关开启?"}
-    B -- 是 --> C["ServiceBus注册服务"]
+    A["程序入口"] --> A1["v8缓存和环境修复"]
+    A1 --> A2["管理器初始化"]
+    A2 --> B{微内核开启?}
+    B -- 是 --> C["ServiceBus注册"]
     C --> D["注入IPC适配器"]
-    D --> F["延迟启动扩展宿主"]
-    B -- 否 --> E["降级单体IPC模式"]
+    D --> F["启动扩展宿主"]
+    B -- 否 --> E["降级IPC模式"]
     E --> F
 ```
 
@@ -183,25 +181,23 @@ flowchart LR
 ```mermaid
 sequenceDiagram
     participant UI as 前端UI
-    participant Main as 主进程管理
+    participant Main as 主进程
     participant Host as 扩展宿主
-    participant Ext as 第三方插件
+    participant Ext as 插件
     Main->>Host: fork创建进程
-    Host->>Main: IPC就绪信号
-    Main->>Host: RPC扫描全部扩展
-    Host->>Ext: 执行activate激活
-    Note over UI,Main: 正常业务调用
-    UI->>Main: IPC请求插件功能
+    Host->>Main: IPC就绪
+    Main->>Host: 扫描扩展
+    Host->>Ext: activate激活
+    UI->>Main: 请求插件功能
     Main->>Host: JSON-RPC转发
-    Host->>Ext: 执行插件逻辑
+    Host->>Ext: 执行逻辑
     Ext-->>Host: 返回结果
     Host-->>Main: RPC响应
     Main-->>UI: 返回数据
-    Note over Main,Host: 文件热重启
-    Main->>Host: SIGTERM优雅退出
-    Host->>Ext: deactivate释放资源
-    Host--x Main: 进程退出事件
-    Main->>Main: 新建宿主进程重启插件
+    Main->>Host: SIGTERM退出
+    Host->>Ext: deactivate
+    Host--x Main: 进程退出
+    Main->>Main: 重启宿主
 ```
 
 > 两段式销毁：SIGTERM 优先优雅卸载，2 秒无响应则 SIGKILL 强制杀死；双标记区分热重启/永久关闭。
