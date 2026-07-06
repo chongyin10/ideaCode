@@ -132,158 +132,47 @@ AI 代码辅助扩展，支持多 LLM Provider 与 Agent 自主编排，默认�
 
 ### 1. 三层进程隔离整体架构
 
-```mermaid
-flowchart TB
-    subgraph R["渲染进程"]
-        R1["编辑器窗口"]
-        R2["文件树和Git面板"]
-        Rn["SSH和AI面板"]
-    end
-    subgraph M["主进程"]
-        M1["窗口管理"]
-        M3["消息总线"]
-        M5["LSP和终端管理"]
-    end
-    subgraph EH["扩展宿主"]
-        E1["插件API层"]
-        E2["Git和SSH和AI插件"]
-    end
-
-    R1 --> M3
-    R2 --> M3
-    Rn --> M3
-    M3 -->|JSON-RPC| E1
-    M5 -.->|spawn| T["tsserver子进程"]
-    M5 -.->|PTY| P["终端shell"]
-    M5 -.->|worker| W["搜索线程"]
-```
+![三层进程隔离架构图](./assets/三层进程隔离架构图.png "IDEACODE三层进程隔离架构")
 
 > 三层隔离实现安全、故障、资源隔离；主进程拥有系统唯一操作权限，渲染/扩展进程无法直接访问底层系统 API。
 
 ### 2. 微内核双轨启动流程
 
-```mermaid
-flowchart LR
-    A["程序入口"] --> A1["v8缓存和环境修复"]
-    A1 --> A2["管理器初始化"]
-    A2 --> B{微内核开启?}
-    B -- 是 --> C["ServiceBus注册"]
-    C --> D["注入IPC适配器"]
-    D --> F["启动扩展宿主"]
-    B -- 否 --> E["降级IPC模式"]
-    E --> F
-```
+![微内核双轨启动流程](./assets/微内核双轨启动流程.png "微内核双轨启动流程")
 
 > 采用灰度开关+自动降级，微内核启动失败不会导致程序崩溃，兼容新旧两套架构。
 
 ### 3. 扩展宿主生命周期时序
 
-```mermaid
-sequenceDiagram
-    participant UI as 前端UI
-    participant Main as 主进程
-    participant Host as 扩展宿主
-    participant Ext as 插件
-    Main->>Host: fork创建进程
-    Host->>Main: IPC就绪
-    Main->>Host: 扫描扩展
-    Host->>Ext: activate激活
-    UI->>Main: 请求插件功能
-    Main->>Host: JSON-RPC转发
-    Host->>Ext: 执行逻辑
-    Ext-->>Host: 返回结果
-    Host-->>Main: RPC响应
-    Main-->>UI: 返回数据
-    Main->>Host: SIGTERM退出
-    Host->>Ext: deactivate
-    Host--x Main: 进程退出
-    Main->>Main: 重启宿主
-```
+![扩展宿主生命周期时序](./assets/扩展宿主生命周期时序.png "扩展宿主生命周期时序")
 
 > 两段式销毁：SIGTERM 优先优雅卸载，2 秒无响应则 SIGKILL 强制杀死；双标记区分热重启/永久关闭。
 
 ### 4. ServiceBus 消息总线四种通信模式
 
-```mermaid
-flowchart TB
-    Bus["ServiceBus 核心总线"]
-    Bus --> R["RPC 请求响应"]
-    Bus --> N["Notify 单向通知"]
-    Bus --> P["发布订阅"]
-    Bus --> J["JSON-RPC 跨扩展"]
-
-    R --> R1{"本地存在处理器?"}
-    R1 -- 是 --> R2["同进程直接调用"]
-    R1 -- 否 --> R3["转发IPC远程"]
-    P --> P1["本地订阅回调"]
-    P1 --> P2["自动广播所有窗口"]
-    J --> J1["IPC桥转发至扩展宿主"]
-```
+![ServiceBus消息总线四种通信模式](./assets/ServiceBus%20消息总线四种通信模式.png "ServiceBus消息总线四种通信模式")
 
 > 本地优先策略减少 IPC 开销；发布订阅自动同步所有渲染窗口，上层无需关心进程分布。
 
 ### 5. tsserver LSP 语言服务流程
 
-```mermaid
-sequenceDiagram
-    participant UI as 编辑器前端
-    participant Main as 主进程LSP管理器
-    participant TS as tsserver子进程
-    UI->>Main: didOpen 打开TS文件
-    Main->>TS: stdio下发LSP消息
-    TS-->>Main: publishDiagnostics诊断
-    Main-->>UI: 渲染编辑器波浪线
-    UI->>Main: 光标请求completion
-    Main->>TS: LSP补全请求
-    TS-->>Main: CompletionList结果
-    Main-->>UI: 展示补全下拉框
-```
+![tsserver LSP语言服务流程](./assets/tsserver%20LSP%20语言服务流程.png "tsserver LSP语言服务流程")
 
 > 本地文件走外部 tsserver LSP；SSH 远程文件自动切换自建 tsSdk Worker，绕过 tsserver 的 file URI 限制。
 
 ### 6. node-pty 终端数据流与背压控制
 
-```mermaid
-flowchart LR
-    User["用户输入"] --> UI["xterm前端"]
-    UI -->|IPC| Main["终端管理器"]
-    Main --> PTY["node-pty伪终端"]
-    PTY --> Shell["zsh或bash或ssh"]
-    Shell --> PTY["海量输出流"]
-    PTY --> Main
-    Main --> W["水位和PID双层流控"]
-    W -->|负载正常| UI
-    W -->|输出过载| W1["暂停PTY输出"]
-    UI --> ACK["渲染完成回执"]
-    ACK --> W["恢复输出"]
-```
+![node-pty终端数据流与背压控制](./assets/node-pty%20终端数据流与背压控制.png "node-pty终端数据流与背压控制")
 
 > 高低水位背压机制防止 IPC 队列爆满、页面卡死。
 
 ### 7. SSH 远程开发调用链路
 
-```mermaid
-flowchart TB
-    UI["SSH连接面板"] --> Bridge["前端扩展桥"]
-    Bridge --> IPC["主进程IPC通道"]
-    IPC --> Host["SSH扩展宿主"]
-    Host --> SSH2["ssh2客户端"]
-    SSH2 --> FS["远程文件读写和树"]
-    SSH2 --> Terminal["远程交互式终端"]
-    SSH2 --> Git["远程仓库操作"]
-```
+![SSH远程开发调用链路](./assets/SSH%20远程开发调用链路.png "SSH远程开发调用链路")
 
 ### 8. Git 命令串行防锁执行流程
 
-```mermaid
-flowchart LR
-    A["前端Git操作请求"] --> B["Git扩展执行器"]
-    B --> C{"按工作区分队列?"}
-    C -- 独立队列 --> D["任务串行排队"]
-    D --> E["清理过期index.lock"]
-    E --> F["spawn执行git命令"]
-    F --> G["推送状态至SCM面板"]
-```
+![Git命令串行防锁执行流程](./assets/Git%20命令串行防锁执行流程.png "Git命令串行防锁执行流程")
 
 > 同一仓库命令串行执行，杜绝并发产生 `.git/index.lock` 锁文件冲突。
 
