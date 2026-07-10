@@ -1102,11 +1102,20 @@ async function processMessage(text, context, options = {}) {
       }
       // §继续会话：若 WebView 传入了历史消息，作为多轮对话上下文前置拼接
       // （过滤掉空内容和占位符，最多保留最近 10 轮避免 token 爆炸）
+      // §DeepSeek thinking mode：assistant 消息需保留 reasoning_content，
+      //   否则 API 报 400 "reasoning_content must be passed back"。
+      //   llmClient._buildRequestBody 会根据 provider 决定是否发送给 API。
       const historyMessages = Array.isArray(history) && history.length > 0
         ? history
             .filter((m) => m && m.content && typeof m.content === 'string' && m.content.trim())
             .slice(-20)
-            .map((m) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content }))
+            .map((m) => {
+              const msg = { role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content };
+              if (m.role === 'assistant' && m.reasoning_content) {
+                msg.reasoning_content = m.reasoning_content;
+              }
+              return msg;
+            })
         : [];
       messages = [...historyMessages, { role: 'user', content: userMessage }];
     }

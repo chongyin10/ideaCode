@@ -1,4 +1,5 @@
 import { Outlet } from 'react-router-dom';
+import { lazy, Suspense } from 'react';
 import { useElectronEvents, useTsServerLifecycle } from './hooks';
 import TopBar from './components/TopBar';
 import ActivityBar from './components/ActivityBar';
@@ -6,9 +7,13 @@ import SidePanel from './components/SidePanel';
 import RightPanel from './components/RightPanel';
 import BottomPanel from './components/BottomPanel';
 import StatusBar from './components/StatusBar';
-import ModalWebview from './components/ModalWebview';
-import TerminalModal from './components/TerminalModal';
 import './App.css';
+
+// ─── 按需加载组件（React.lazy + Suspense）───
+// ModalWebview / TerminalModal 仅在用户触发对应操作时才需要，
+// 不在首屏 bundle 中加载，减少首屏体积。
+const ModalWebview = lazy(() => import('./components/ModalWebview'));
+const TerminalModal = lazy(() => import('./components/TerminalModal'));
 
 function App() {
   // 挂载 Electron 系统事件监听（菜单、窗口焦点、文件变更）
@@ -33,8 +38,10 @@ function App() {
         <RightPanel />
       </div>
       <StatusBar />
-      <ModalWebview />
-      <TerminalModal />
+      <Suspense fallback={null}>
+        <ModalWebview />
+        <TerminalModal />
+      </Suspense>
     </div>
   );
 }

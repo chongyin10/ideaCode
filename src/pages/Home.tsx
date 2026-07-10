@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
 import { FolderOpen, Search, Clock, X, Folder, FilePlus, GitBranch, Link2 } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '../store/hooks';
@@ -29,17 +29,8 @@ import { warmupFileCache, openFileDialog } from '../services/fileService';
 import { terminalSDK } from '../services/terminalSDK';
 import TabBar, { type TabType } from '../components/TabBar';
 import MonacoEditor from '../components/MonacoEditor';
-import DiffEditorPanel from '../components/DiffEditorPanel';
-import ExtensionDetail from '../components/ExtensionDetail';
-import SshFileTreePanel from '../components/SshFileTreePanel';
-import TerminalEditorView from '../components/TerminalEditorView';
 import ConfirmDialog, { type ConfirmResult } from '../components/ConfirmDialog';
-import ConnectToModal from '../components/ConnectToModal';
-import CloneRepoModal from '../components/CloneRepoModal';
-import QuickOpen from '../components/QuickOpen';
-import SettingsPanel from '../components/SettingsPanel';
 import ContextMenu, { type MenuItem } from '../components/ContextMenu';
-import FileReferencesModal from '../components/FileReferencesModal';
 import { findFileReferences, type FileSearchResult } from '../services/searchService';
 import { revealInExplorer } from '../services/fileOperations';
 import { notifyPanelResizeStart, notifyPanelResizeEnd } from '../services/panelResizeNotifier';
@@ -47,6 +38,19 @@ import { BCMTabManager } from '../utils/algorithms/neuralTabManager';
 import { EntropyFilePrefetcher } from '../utils/algorithms/filePrediction';
 import { eventBus } from '../utils/eventBus';
 import './Home.css';
+
+// ─── 按需加载组件（React.lazy + Suspense）───
+// 这些组件仅在特定操作时才需要（查看 diff / 扩展详情 / SSH / 终端 / 设置 / 模态框），
+// 不在首屏 bundle 中加载，减少首屏体积。
+const DiffEditorPanel = lazy(() => import('../components/DiffEditorPanel'));
+const ExtensionDetail = lazy(() => import('../components/ExtensionDetail'));
+const SshFileTreePanel = lazy(() => import('../components/SshFileTreePanel'));
+const TerminalEditorView = lazy(() => import('../components/TerminalEditorView'));
+const ConnectToModal = lazy(() => import('../components/ConnectToModal'));
+const CloneRepoModal = lazy(() => import('../components/CloneRepoModal'));
+const QuickOpen = lazy(() => import('../components/QuickOpen'));
+const SettingsPanel = lazy(() => import('../components/SettingsPanel'));
+const FileReferencesModal = lazy(() => import('../components/FileReferencesModal'));
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const pad = (n: number) => n.toString().padStart(2, '0');
@@ -818,6 +822,7 @@ function Home() {
             missingFileIds={missingFileIdsSet}
           />
           <div className="editor-area">
+            <Suspense fallback={<div className="editor-loading" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)' }}>{t('loading')}</div>}>
             {file ? (
               file.language === 'extension' ? (
                 <ExtensionDetail key={`ext-${file.id}-${group.id}`} extensionId={file.id.replace('extension://', '')} />
@@ -856,6 +861,7 @@ function Home() {
                 </button>
               </div>
             )}
+            </Suspense>
           </div>
         </>
       );
@@ -866,7 +872,9 @@ function Home() {
   return (
     <div className="home-page">
       {quickOpenVisible && (
-        <QuickOpen onClose={() => setQuickOpenVisible(false)} files={allFilePaths} />
+        <Suspense fallback={null}>
+          <QuickOpen onClose={() => setQuickOpenVisible(false)} files={allFilePaths} />
+        </Suspense>
       )}
 
       {pendingClose && (
@@ -888,24 +896,36 @@ function Home() {
       )}
 
       {referencesModal && (
-        <FileReferencesModal
-          results={referencesModal.results}
-          onClose={() => setReferencesModal(null)}
-          onOpenResult={(relativePath) => {
-            const source = rootPath ? `${rootPath}/${relativePath}` : relativePath;
-            const name = relativePath.split('/').pop() || relativePath;
-            dispatch(openFile({ name, kind: 'file', source }));
-            setReferencesModal(null);
-          }}
-        />
+        <Suspense fallback={null}>
+          <FileReferencesModal
+            results={referencesModal.results}
+            onClose={() => setReferencesModal(null)}
+            onOpenResult={(relativePath) => {
+              const source = rootPath ? `${rootPath}/${relativePath}` : relativePath;
+              const name = relativePath.split('/').pop() || relativePath;
+              dispatch(openFile({ name, kind: 'file', source }));
+              setReferencesModal(null);
+            }}
+          />
+        </Suspense>
       )}
 
       {/* §需求："连接到..." Modal —— SSH 远程连接 + 目录浏览 + 加载到资源管理器 */}
-      {connectToOpen && <ConnectToModal onClose={() => setConnectToOpen(false)} />}
-      {cloneRepoOpen && <CloneRepoModal onClose={() => setCloneRepoOpen(false)} />}
+      {connectToOpen && (
+        <Suspense fallback={null}>
+          <ConnectToModal onClose={() => setConnectToOpen(false)} />
+        </Suspense>
+      )}
+      {cloneRepoOpen && (
+        <Suspense fallback={null}>
+          <CloneRepoModal onClose={() => setCloneRepoOpen(false)} />
+        </Suspense>
+      )}
 
       {settingsVisible ? (
-        <SettingsPanel />
+        <Suspense fallback={<div className="editor-loading" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)' }}>{t('loading')}</div>}>
+          <SettingsPanel />
+        </Suspense>
       ) : allFileIds.length === 0 ? (
         <div className="welcome-screen">
           <h2>{t('home.welcome.title')}</h2>

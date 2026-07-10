@@ -321,6 +321,8 @@ export function getConnectionStatusText(status?: LlmConfig['connectionStatus'], 
 export interface ChatHistoryMessage {
   role: 'user' | 'assistant';
   content: string;
+  /** DeepSeek thinking mode：assistant 消息需回传 reasoning_content，否则 API 报 400 */
+  reasoning_content?: string;
 }
 
 export type WebViewRequest =

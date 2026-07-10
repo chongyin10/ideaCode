@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import type { ChatMessage, CodeContext, WebViewRequest, ExtensionMessage, LlmConfig, ProviderType, ToolCallInfo, SuggestionChange, FileChangeStatus } from '../types';
+import type { ChatMessage, ChatHistoryMessage, CodeContext, WebViewRequest, ExtensionMessage, LlmConfig, ProviderType, ToolCallInfo, SuggestionChange, FileChangeStatus } from '../types';
 import { PROVIDER_META, getConnectionStatusColor, getModelContextWindow } from '../types';
 import { SuggestionList } from './SuggestionList';
 import { ContentBlocks } from './ContentBlocks';
@@ -1186,10 +1186,28 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
       agentMode,
       // §继续会话：把当前已有对话作为历史上下文传给后端，让 LLM 能理解多轮上下文
       // 排除占位消息和空内容，最多保留最近 20 条避免 token 爆炸
+      // §DeepSeek thinking mode：assistant 消息必须回传 reasoning_content，否则 API 报 400
+      //   "The reasoning_content in the thinking mode must be passed back to the API."
+      //   reasoning 内容存在 ChatMessage.blocks 的 { type: 'reasoning' } 块中，提取后作为
+      //   reasoning_content 字段传给后端；llmClient 会根据 provider 决定是否发送给 API。
       history: messagesRef.current
         .filter((m) => !m.placeholder && m.content.trim())
         .slice(-20)
-        .map((m) => ({ role: m.role === 'assistant' ? 'assistant' as const : 'user' as const, content: m.content })),
+        .map((m) => {
+          const msg: ChatHistoryMessage = {
+            role: m.role === 'assistant' ? 'assistant' : 'user',
+            content: m.content,
+          };
+          if (m.role === 'assistant' && m.blocks) {
+            for (const b of m.blocks) {
+              if (b.type === 'reasoning' && b.content) {
+                msg.reasoning_content = b.content;
+                break;
+              }
+            }
+          }
+          return msg;
+        }),
     } as WebViewRequest);
   };
 

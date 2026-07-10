@@ -361,4 +361,12 @@ JS  侧：fuzzyScore() → FuzzyResult { score, matches[] }  （含匹配位置�
 
 ### Q: WASM 加载失败怎么办？
 
-> **
+> **零侵入降级**：加载器在 `initWasm()` 中 try/catch 包裹，失败则 `wasmInstance = null`。业务代码通过 `getWasmSync()` 检查——返回 null 则走 JS fallback。用户无感知，功能完全正常，只是性能为 JS 水平。
+
+### Q: 如何保证 WASM 和 JS 结果一致？
+
+> Rust 实现完全复刻 JS 算法的逻辑：相同的得分常数（BONUS_PREFIX = 4.0 等）、相同的注意力权重公式、相同的归一化方法。此外，WASM 只负责评分（返回 Float64Array），匹配位置的回溯仍由 JS 版本计算，确保结果结构完全一致。
+
+### Q: 40KB 的 WASM 会不会影响首屏？
+
+> 不会。`initWasm()` 是**异步**的，不阻塞 React 首屏渲染。WASM 模块在应用启动后并行加载（fetch + instantiate 通常 < 50ms），加载完成前模糊搜索用 JS fallback。gzip 后 WASM 仅 ~15KB，对首屏无可感知影响。
