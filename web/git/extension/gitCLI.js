@@ -48,7 +48,9 @@ function _spawnGit(args, options) {
     let stderr = '';
     let settled = false;
 
-    const child = spawn('git', args, {
+    // §中文路径修复：-c core.quotepath=false 禁用 git 对非 ASCII 路径的八进制转义，
+    // 直接输出 UTF-8 中文路径，避免 "技术" → "\346\212\200\346\234\257..." 转码问题。
+    const child = spawn('git', ['-c', 'core.quotepath=false', ...args], {
       cwd,
       env: { ...process.env, ...(env || {}), GIT_TERMINAL_PROMPT: '0' },
       stdio: ['pipe', 'pipe', 'pipe'],

@@ -10,6 +10,7 @@ import { createPluginManager } from './plugin'
 import { createPluginContext } from './plugin'
 import { helloWorldPlugin, lifeAiCodePlugin } from './plugin'
 import { createExtensionBridge } from './plugin/extensionBridge'
+import { initWasm } from './utils/wasmLoader'
 import './i18n'
 import './index.css'
 
@@ -73,6 +74,10 @@ function getEditorWorkerFallback(): Worker {
 
 // 使用本地 monaco 包
 loader.config({ monaco })
+
+// ─── 预加载 WASM 模块（异步非阻塞，加载完成后自动加速模糊搜索）───
+// WASM 未编译时静默降级到 JS 实现，不影响功能可用性
+initWasm();
 
 // ─── 语言语法预置（同步加载，消除首屏高亮延迟）───
 // 核心语言：TypeScript / JavaScript（富语言支持含语义高亮）

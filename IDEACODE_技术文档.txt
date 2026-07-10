@@ -110,6 +110,16 @@
   13.4 算法与数据结构类问题
   13.5 工程实践类问题
 
+第十四篇  功能技术详情（面试版）
+  14.1 工作区加载与文件树
+  14.2 编辑器与语言服务
+  14.3 终端管理
+  14.4 SSH 远程开发
+  14.5 Git 源代码管理
+  14.6 AI 辅助编程
+  14.7 扩展系统与插件系统
+  14.8 功能模块技术速查表（面试卡片）
+
 
 ================================================================================
                   第一篇  项目总览与架构思想
@@ -3295,6 +3305,575 @@ A: koa-connect 的桥接逻辑里，Express 中间件修改的 res.locals /
    实际 koa 上下文还是 404，最终响应状态错误。
    解决：原生 Koa 中间件实现，所有 ctx 操作走 Koa 原生 API，
    不混用 Express 中间件。
+
+Q13: 终端改名 input 为什么无法输入字符？为什么需要"两步 IME 上下文切换"？
+A: 这是 macOS 特有的 IME（输入法）上下文切换问题，完整排查流程如下：
+
+   【现象】
+   底部面板终端 tab 改名 input 焦点显示在 input 上（document.activeElement
+   是 input），但键盘输入字符不进入 input，中英文都失效。用户关键观察：
+   "先点击 Monaco 编辑器文件区域，再点改名按钮，就能正常输入"。
+
+   【排查过程】
+   1. 误判为 onChange 未绑定 → 实际 input 没收到键盘事件，不是 React 问题
+   2. 误判为 MonacoEditor 重挂导致 IMK 服务卡死 → 在 MonacoEditor cleanup
+      中 blur 焦点元素，问题依旧
+   3. 尝试 blur 当前焦点 + rAF 延迟 focus input → 一帧不够，IME 上下文不切换
+   4. 尝试 imeBridge 隐藏 input，在 mousedown 用户手势中 focus 跳板 input →
+      程序性 focus 即使用户手势中也不触发 IME 上下文切换
+   5. 关键突破：用户发现"点击 Monaco 编辑器后能输入"
+
+   【根因】
+   macOS IME 上下文与焦点元素绑定，但程序性 focus() 不一定触发 IME 上下文
+   切换。从 xterm textarea → 普通 input 的直接程序性 focus，IME 上下文
+   仍停留在 xterm textarea，键盘事件到不了 input。真实用户手势（鼠标点击）
+   触发的焦点切换能正确切换 IME 上下文，但程序性 focus 即使包在用户手势
+   事件中也无效。
+
+   【最终方案：两步 IME 上下文切换】
+   利用 "Monaco textarea 中转" 绕过 xterm → input 的直接切换：
+
+   Step 1（用户手势中触发）：编辑按钮 onMouseDown 调用
+     getMonacoEditorActions()?.getEditor()?.focus()
+     → IME 上下文从 xterm textarea 切到 Monaco textarea
+
+   Step 2（程序性 focus）：TabRenameEditor 挂载后 useEffect 中 input.focus()
+     → IME 上下文从 Monaco textarea 切到 input（能正确跟随）
+
+   代码位置：
+   - src/components/BottomPanel/index.tsx（编辑按钮 onMouseDown + TabRenameEditor）
+   - src/services/monacoEditorBridge.ts（getMonacoEditorActions SDK API）
+
+   关键代码：
+     // 编辑按钮 onMouseDown（用户手势）
+     onMouseDown={(e) => {
+       e.preventDefault();
+       e.stopPropagation();
+       getMonacoEditorActions()?.getEditor()?.focus();  // Step 1
+     }}
+     onClick={(e) => { e.stopPropagation(); startRenameTab(tab.id); }}
+
+     // TabRenameEditor useEffect（程序性 focus）
+     useEffect(() => {
+       const input = inputRef.current;
+       if (input) { input.focus(); input.select(); }     // Step 2
+     }, []);
+
+   【为什么 xterm → Monaco → input 两步能工作】
+   推测 Monaco textarea 与普通 input 同属"编辑型控件"，IME 上下文切换
+   路径与 xterm textarea（canvas + 隐藏 textarea）不同。从 Monaco textarea
+   程序性 focus 到 input 时，Chromium 能正确同步 IME 上下文；而从 xterm
+   textarea 程序性 focus 到 input 时，IME 上下文不跟随。
+
+   【防御性代码：MonacoEditor cleanup blur】
+   MonacoEditor 卸载 cleanup 中主动 blur 当前焦点元素（textarea/input），
+   防止持有焦点的 textarea 被销毁后触发 macOS IMK 服务卡死（另一种 IME
+   问题，表现为所有 input/textarea 失效，控制台报 IMKCFRunLoopWakeUpReliable
+   错误）。两种 IME 问题根因不同，需分别防御：
+   - IMK 卡死：textarea 销毁前未 blur → cleanup 中 blur
+   - IME 上下文不切换：xterm → input 直接 focus → Monaco 中转
+
+
+================================================================================
+                  第十四篇  功能技术详情（面试版）
+================================================================================
+
+  本篇从功能模块视角出发，回答三个核心问题：
+    - 用到了什么技术？
+    - 这个技术起了什么作用？
+    - 调用链是怎么串起来的？
+  算法部分仅点到为止，不展开实现细节。
+
+----------------------------------------
+14.1 工作区加载与文件树
+----------------------------------------
+
+【用到技术】
+  - Electron dialog：原生目录选择对话框
+  - Redux Toolkit createAsyncThunk：异步加载目录的状态管理
+  - Node.js fs.readdir（withFileTypes）：主进程目录列举
+  - fs.watch（recursive）：递归文件监听
+  - react-virtualized：文件树虚拟滚动
+  - FileSystemProvider 抽象层：本地/远程文件系统统一访问
+
+【技术作用】
+  - Electron dialog → 原生 OS 文件选择体验，与系统外观一致
+  - createAsyncThunk → 管理 pending/fulfilled/rejected 三态，
+    加载完成后自动重置已打开文件、预热语言服务
+  - fs.readdir withFileTypes → 一次调用获取条目名+类型(NFILE/DIR)，
+    避免对每个条目再 stat 的二次 I/O 开销
+  - fs.watch recursive → 递归监听工作区变更，文件增删改实时推到前端
+  - react-virtualized → 只渲染可视区域节点，支撑万级文件树不卡顿
+  - FileSystemProvider → 按 URI scheme（file:// / ssh://）注册 provider，
+    让文件树 UI 代码不感知本地还是远程，一套代码两种后端
+
+【调用链】
+  ① 用户点击"打开文件夹"
+    → useElectronEvents.ts openDirectory()
+      → window.electronAPI.dialog.openDirectory()        // IPC → 主进程
+        → 主进程 dialog.showOpenDialog({ properties:['openDirectory'] })
+    ← 返回 rootPath
+
+  ② 读取目录树
+    → fileService.ts getFileSystemProvider(rootPath).readDirectory(rootPath)
+      → 本地: window.electronAPI.fs.readDirectory(rootPath)   // IPC
+        → fsHandler.cjs: fs.readdir(dirPath,{ withFileTypes:true })
+      ← 返回 [{ name, isDirectory }] 条目列表
+    → dispatch(loadDirectory({ rootPath, files }))           // Redux thunk
+      → workspaceSlice.ts loadDirectory.fulfilled
+        → 更新 rootSource / files / 重置已打开文件
+
+  ③ 注册文件监听
+    → fileService.ts watchDirectory(rootPath)
+      → window.electronAPI.fs.watch(rootPath)                // IPC
+        → 主进程 fs.watch(rootPath, { recursive:true })
+      ← 变更事件通过 IPC 推送 → 渲染进程更新 Redux → 文件树重渲染
+
+  ④ 文件树渲染
+    → SidePanel/FileTree.tsx 读取 Redux files → 递归渲染 FileTreeNode
+    → react-virtualized 虚拟滚动，只挂载可视区域 ~20 个节点
+
+  ⑤ SSH 远程工作区（与本地复用同一调用链）
+    → ConnectToModal: bridge.invokeExtension('ideacode-ssh','getRemoteFileTree',[path])
+      → SSH 扩展 ssh2.exec('find ...') 获取远程目录树
+    → dispatch(loadDirectory({ rootSource:'ssh://<connId>/<path>', files }))
+      → FileSystemProvider 按 ssh:// scheme 路由到远程 provider
+      → 后续读写通过 SSH 扩展的 readFile/writeFile 命令
+
+
+----------------------------------------
+14.2 编辑器与语言服务
+----------------------------------------
+
+【用到技术】
+  - Monaco Editor 0.55 + @monaco-editor/react：编辑器内核与 React 集成
+  - Monaco Worker 工厂：editor.worker / ts.worker 按需加载
+  - TypeScript Language Server（tsserver LSP）：本地 TS/JS 语言服务
+  - 自建 tsSdk Worker：SSH 远程文件的 TS 语言服务
+  - LSP 协议（didOpen/didChange/didClose/completion/definition/semanticTokens）
+  - Monarch tokenizer + JSX decoration 状态机：语法高亮
+
+【技术作用】
+  - Monaco Editor → VSCode 同款编辑器内核，提供编辑、补全、diff 能力
+  - Worker 工厂 → 语言 worker 在独立线程运行，不阻塞 UI；
+    通过 MonacoEnvironment.getWorker 按语言 ID 路由到对应 worker
+  - 外部 tsserver LSP → 本地文件用 typescript-language-server 子进程，
+    通过 stdio 收发 LSP JSON-RPC，提供补全/定义/诊断/语义 token
+  - 自建 tsSdk Worker → SSH 远程文件不能用本地 tsserver（URI 不兼容），
+    在 Web Worker 中跑 ts.LanguageService，通过 fileService 异步加载文件
+  - LSP 协议 → 标准化编辑器↔语言服务通信，didOpen/didChange 维护文档状态
+  - JSX decoration → Monarch tokenizer 不识别 JSX 标签，
+    自建状态机扫描 model 生成 decoration CSS 类补充高亮
+
+【调用链】
+  ① Monaco Worker 配置
+    → main.tsx loader 预加载 editor.worker / ts.worker
+    → self.MonacoEnvironment.getWorker = (_, language) =>
+        ['typescript','javascript','typescriptreact','javascriptreact']
+          .includes(language) ? tsWorkerFactory() : new editorWorker()
+
+  ② 本地文件 TS 语言服务（外部 tsserver）
+    → MonacoEditor 打开文件
+      → tsLanguageService.ts openFile(uri, content, version)
+        → 维护 openFiles Set，已打开文件用 didChange（避免重复 didOpen
+          导致 tsserver 重新解析，解决 tab 切换 1 秒延迟问题）
+        → IPC → 主进程 tsserverManager.cjs
+          → LSP textDocument/didOpen { uri, content, languageId }
+          → tsserver 子进程接收并解析
+    → tsserver 推送诊断
+      → textDocument/publishDiagnostics → IPC TSSERVER_DIAGNOSTICS → 渲染进程
+    → 用户请求补全/定义
+      → tsLanguageService.ts getCompletions(uri, position)
+        → IPC → tsserverManager: textDocument/completion
+        → tsserver 返回 CompletionList → Monaco 渲染
+    → 语义高亮
+      → monacoSemanticTokens.ts 注册 DocumentSemanticTokensProvider
+        → tsLanguageService.ts getSemanticTokens(uri)
+          → IPC → tsserverManager: textDocument/semanticTokens/full
+          → 转换 LSP token 格式 → Monaco 应用高亮
+
+  ③ SSH 远程文件 TS 语言服务（自建 tsSdk Worker）
+    → tsSdk Worker 在 Web Worker 中运行 ts.LanguageService
+      → LanguageServiceHost.fileExists/readFile 同步接口
+      → 跨文件 import: ts.preProcessFile 解析 → postMessage 异步加载
+        → 主线程 fileService.readFile(ssh://...) → 5s 超时 → fire-and-forget
+    → MonacoEditor 注册 async DocumentSemanticTokensProvider
+      → 调用 tsSdk.semanticTokens → 转换 TS 分类 → LSP 格式
+      → mount 后 500ms/2s/5s 多次触发重请求（worker 异步启动）
+
+  ④ JSX 语法高亮
+    → MonacoEditor buildJsxDecorations(model) 扫描 TS/JS/TSX/JSX
+      → 状态机识别 JSX 标签名和尖括号
+      → 生成 Monaco decoration（CSS 类）补充 Monarch tokenizer 不支持的部分
+    → SSH 远程 tsx 文件：用 typescript/javascript 语言 ID（非 typescriptreact）
+      + buildJsxDecorations + buildDeclarationDecorations 稳定高亮
+
+
+----------------------------------------
+14.3 终端管理
+----------------------------------------
+
+【用到技术】
+  - node-pty 1.1：伪终端（PTY）子进程创建
+  - xterm.js 6.0 + WebGL/Fit/Serialize/Search addon：前端终端模拟器
+  - Electron IPC：PTY 输出 → 渲染进程 → xterm.write 数据流
+  - Shell Profile 自动检测：/etc/shells 读取 + fallback
+
+【技术作用】
+  - node-pty → 创建真正的 PTY 子进程，支持交互式 shell、颜色、vi 等
+    全功能终端（比 child_process exec 更完整）
+  - xterm.js → 在 Canvas/WebGL 上渲染终端，处理键盘输入、转义序列
+  - IPC 数据流 → pty.onData → IPC → onTerminalOutput → xterm.write
+  - Shell Profile 检测 → 自动发现系统可用的 shell（zsh/bash），
+    避免硬编码
+
+【调用链】
+  ① 创建终端
+    → BottomPanel handleCreateTab()
+      → terminalManager.ts createTerminal({ cwd, executable, args })
+        → IPC TERMINAL_CREATE → 主进程 terminalHandler.cjs
+          → createTerminalProcess()
+            → ptyModule.spawn(shell, args, { cwd, env, cols, rows })
+            → 返回 TerminalProcess 实例（封装 pty.write / pty.onData）
+    → dispatch(addTab) → TerminalInstance 组件挂载
+
+  ② 数据流（输入）
+    → 用户键盘输入 → xterm onData
+      → TerminalInstance: sendInput(data)
+        → terminalManager.ts → IPC TERMINAL_WRITE → pty.write(data)
+
+  ③ 数据流（输出）
+    → pty.onData(output)
+      → terminalHandler 输出过滤（密码 prompt 等）
+      → IPC onTerminalOutput({ id, type:'data', data }) → 渲染进程
+        → TerminalInstance terminal.write(data)
+        → 跟踪输出大小，触发 rAF 重绘
+
+  ④ Shell 检测
+    → terminalHandler listProfiles()
+      → Unix: 读取 /etc/shells → 解析 zsh/bash 路径
+      → fallback: 检查 /bin/zsh, /bin/bash 等常见路径
+      → 返回 profiles 列表 + defaultShell
+
+  ⑤ 广播模式
+    → setTerminalBroadcastMode(true)
+      → 同窗口所有终端共享输入：一个 pty.write 广播到所有 tab
+      → 用于同时在多个终端执行相同命令
+
+
+----------------------------------------
+14.4 SSH 远程开发
+----------------------------------------
+
+【用到技术】
+  - ssh2 1.17：Node.js SSH2 客户端库
+  - keyboard-interactive 认证 + tryKeyboard 主动请求
+  - ssh2 shell：远程交互式终端
+  - ssh2 exec：远程命令执行（文件树/Git）
+  - Webview 独立面板：SSH 连接管理 UI
+
+【技术作用】
+  - ssh2 → 纯 Node.js 实现的 SSH2 协议客户端，支持密码/密钥/agent 认证
+  - keyboard-interactive + tryKeyboard → 阿里云等服务器禁用 PasswordAuthentication
+    但启用 KbdInteractiveAuthentication，必须走 keyboard-interactive 回调传密码
+  - ssh2 shell → 打开远程交互式 PTY，接入 xterm.js 渲染
+  - ssh2 exec → 执行远程命令（find/ls/git），获取 stdout 用于文件树/Git
+  - Webview 独立面板 → SSH 连接管理 UI 独立运行，与主界面隔离
+
+【调用链】
+  ① SSH 连接
+    → SSH 面板 webview postMessage({ command:'connect', connectionId })
+      → SSH 扩展 handleWebviewMessage 'connect'
+        → connectConnection(conn)
+          → vscode.commands.executeCommand('ssh.internal.connect', config)
+            → attemptConnect(id, connConfig, password)
+              → new ssh2.Client()
+              → client.connect({ host, port, username, password,
+                  tryKeyboard:!!password, readyTimeout:30000 })
+              → client.on('keyboard-interactive') → finish([password])
+              → client.on('ready') → 连接成功
+          → session.status = 'connected'
+          → globalBroadcast({ type:'sessions' }) → webview 更新 UI
+
+  ② SSH 终端
+    → sshWorkspace.ts buildSshTerminalArgs(conn, remotePath)
+      → 生成 ssh -p <port> -t <user>@<host> "cd <path> && exec $SHELL -l"
+    → terminalSDK.createTab({ executable:'ssh', args })
+      → 走 14.3 的本地终端创建链路（pty spawn ssh 进程）
+      → 检测到 password prompt → 自动输入密码 → 标记 ready
+    → xterm convertEol:true（SSH 终端 \r → \r\n 自动换行）
+    → DEL → Backspace 转换（SSH 终端按键适配）
+
+  ③ SSH 远程文件树
+    → ConnectToModal: bridge.invokeExtension('ideacode-ssh','getRemoteFileTree',[path])
+      → SSH 扩展 ssh2.exec('find <path> -type f ...') 或 ls -R
+      → 解析 stdout → 构建目录树
+    → dispatch(loadDirectory({ rootSource:'ssh://...', files }))
+
+  ④ SSH 远程文件读写
+    → fileService.ts getFileSystemProvider('ssh://...').readFile(path)
+      → bridge.invokeExtension('ideacode-ssh','readFile',[path])
+        → SSH 扩展 ssh2.exec('cat <path>') → 返回内容
+    → writeFile 同理 → ssh2.exec 写入
+
+  ⑤ SSH 远程 Git
+    → Git 扩展识别 ssh:// 路径 → findRemoteRepoRoot (ssh2 exec git rev-parse)
+    → 创建带 remoteExecutor 的 Repository
+    → 所有 git 命令通过 remoteExecutor → ssh2.exec('git ...') 在远程执行
+
+
+----------------------------------------
+14.5 Git 源代码管理
+----------------------------------------
+
+【用到技术】
+  - 独立扩展架构：Git 功能作为 Extension Host 中的扩展运行
+  - git status --porcelain=v2：结构化状态输出解析
+  - Promise 队列序列化：按 cwd 分组的 git 命令串行化
+  - fs.watch + fs.watchFile 双重监听：实时 + 兜底
+  - Monaco DiffEditor：差异对比展示
+  - Webview 独立面板 + zustand-like store：SCM UI
+
+【技术作用】
+  - 独立扩展 → Git 功能隔离在 Extension Host 进程，崩溃不影响主进程；
+    通过 onDidChange → pushState → postMessage 推送状态到 webview
+  - porcelain=v2 → 结构化输出，XY 双字符区分 index/working tree 状态，
+    比 porcelain v1 更精确（支持子模块、rename 检测）
+  - Promise 队列 → 同一仓库的 git 命令串行执行，
+    避免并发写 .git/index.lock 冲突
+  - fs.watch + fs.watchFile → fs.watch 实时但 macOS 对 rename 不可靠，
+    fs.watchFile(2s stat 轮询) 兜底 .git/index mtime 变化
+  - DiffEditor → Monaco 内置差异对比，左右分屏 + 行内 diff
+  - Webview store → useSyncExternalStore 订阅，Object.is 比较触发重渲染
+
+【调用链】
+  ① 仓库打开
+    → Git 扩展 openWorkspace(rootPath)
+      → findGitRoot(rootPath)（本地: git rev-parse；远程: ssh2 exec）
+      → new Repository(gitRoot) → _setupWatcher() + 开始轮询
+      → repository.refresh() → git status → parseStatus → state 更新
+      → onDidChange → pushState() → webview.postMessage({ type:'state', state })
+
+  ② 状态刷新（watcher 触发）
+    → fs.watch 工作区变更 OR fs.watchFile .git/index mtime 变化
+      → _scheduleWatcherRefresh() → 300ms 去抖
+        → refresh() → _doRefresh()
+          → git status --porcelain=v2 --branch --untracked-files=normal
+          → parseStatus(output) → 分类 staged/changes/merge/untracked
+          → 子模块: cd 子模块目录 git status → 合并
+          → _fire() → onDidChange → pushState → webview 更新
+
+  ③ 暂存/取消暂存
+    → webview sendRpc('stage', { paths, repoPath })
+      → Git 扩展 handleWebviewMessage 'stage'
+        → currentRepo.stage(paths, repoPath)
+          → _execGitMutating(['add','--',...paths])  // 先清理 stale lock
+          → refresh() → _fire() → pushState
+          → _fastPoll()（500ms 间隔快速刷新 5s 窗口）
+
+  ④ 提交
+    → sendRpc('commit', { message })
+      → currentRepo.commit(message)
+        → _execGitMutating(['commit','-m',message])
+        → refresh() + _fastPoll()
+
+  ⑤ Diff 对比
+    → 用户点击文件 → 打开 DiffEditorPanel
+      → Monaco DiffEditor.create({ original, modified })
+      → original: git show HEAD:file 的内容（虚拟路径 gitdiff-original://）
+      → modified: 工作区文件内容
+      → 语义高亮: 为 original/modified 分别注册 semanticTokensProvider
+      → 分屏拖拽: notifyPanelResizeStart/End → 暂停 automaticLayout → 拖拽流畅
+
+
+----------------------------------------
+14.6 AI 辅助编程
+----------------------------------------
+
+【用到技术】
+  - 独立扩展（lifeAiCode）：AI 逻辑隔离在 Extension Host
+  - LLM Client（SSE 流式）：支持 OpenAI/Anthropic/Ollama 多后端
+  - Agent Runtime：多轮对话 + tool_call 工具调用循环
+  - monacoEditorBridge：AI 安全操作编辑器（setValue/insertText/replaceRange）
+  - inlineSuggestionService：Monaco decoration 渲染补全建议
+  - Diff 确认机制：pending edit 等待用户接受/拒绝
+
+【技术作用】
+  - 独立扩展 → AI 调用 LLM API 是网络密集型，隔离防止阻塞主进程；
+    只读分析原则：AI 只生成建议，修改需用户确认
+  - LLM Client SSE → 流式输出 token，实时推送到 UI，
+    避免长文本生成时用户等待空白
+  - Agent Runtime → 驱动 LLM 多轮调用，自动执行 tool_call
+    （读文件/写文件/搜索），实现自主编程能力
+  - monacoEditorBridge → 封装安全的编辑器操作 API，
+    AI 扩展通过 getEditor().getValue/setValue/insertText 操作，
+    不直接接触 Monaco 实例
+  - inlineSuggestionService → 将 AI 建议渲染为灰色幽灵文本 decoration，
+    Tab 键接受，Esc 键拒绝
+  - Diff 确认 → AI 生成的修改先注册为 pending edit，
+    UI 展示 diff 让用户确认后才应用到编辑器
+
+【调用链】
+  ① AI 对话（Agent 模式）
+    → 用户在 AI 面板输入任务
+      → bridge.invokeExtension('ideacode-lifeAiCode','chat',{ message })
+        → Agent Runtime agentRuntime.js
+          → 拼接上下文: history + workspace info + 当前文件
+          → llmClient.js chat({ stream:true, tools:[...] })
+            → SSE 流式接收 token → 实时推送到 UI
+          → LLM 返回 tool_call（如 applyEdit/readFile）
+            → 执行 tool: applyEdit.js 读取文件 → 匹配修改位置
+              → 注册 pending edit → 推送 agentEditPending 消息到 UI
+            → UI 展示 diff → 用户确认 → 应用修改到编辑器
+          → tool 结果回传 LLM → 继续多轮直到任务完成
+
+  ② 代码补全（inline）
+    → 用户在编辑器暂停输入
+      → inlineSuggestionService 触发补全请求
+        → bridge.invokeExtension('ideacode-lifeAiCode','complete',{ ... })
+          → LLM 生成建议
+        → inlineSuggestionService 将建议渲染为 Monaco decoration（幽灵文本）
+      → Tab 接受 → monacoEditorBridge.insertText(suggestion)
+      → Esc 拒绝 → 清除 decoration
+
+  ③ AI 操作编辑器（通过 Bridge）
+    → monacoEditorBridge.ts registerMonacoEditor(editor, monaco)
+      → 暴露 getEditor/getValue/setValue/insertText/gotoLine/replaceRange
+    → AI 扩展 getMonacoEditorActions().insertText(text)
+      → editor.executeEdits('ai-insert', selections.map(...))
+      → 同步更新 Monaco buffer + Redux
+
+
+----------------------------------------
+14.7 扩展系统与插件系统
+----------------------------------------
+
+【用到技术】
+  - Extension Host（独立子进程 fork）：扩展隔离运行
+  - JSON-RPC 2.0：主进程 ↔ Extension Host 通信
+  - VSCode API Bridge：模拟 vscode.commands/registerCommand/executeCommand
+  - ExtensionBridge（渲染进程）：渲染进程 ↔ Extension Host RPC 桥
+  - PluginManager（渲染进程内置）：内置插件管理（非扩展）
+  - 扩展热重启：fs.watch + 防抖 + 优雅退出
+  - 跨扩展协作：commands.executeCommand 跨扩展调用
+
+【技术作用】
+  - Extension Host 独立进程 → 扩展代码（Git/SSH/AI）在独立 Node.js 进程
+    运行，崩溃不影响主进程；fork 时设置 ELECTRON_RUN_AS_NODE=1 防止
+    Electron 进入应用模式；macOS 调 app.dock.hide() 隐藏多余 Dock 图标
+  - JSON-RPC → 标准化进程间通信，支持 request/response/notify，
+    Extension Host 通过 rpc.request 调用主进程能力
+  - VSCode API Bridge → 模拟 VSCode 的 vscode.commands API，
+    让扩展代码用熟悉的 registerCommand/executeCommand 注册和调用命令，
+    降低扩展开发门槛
+  - ExtensionBridge → 渲染进程通过 window.electronAPI.extension.rpc
+    调用 Extension Host 的扩展能力（invokeExtension/storage/editor.*）
+  - PluginManager → 管理渲染进程内置插件（非独立进程），
+    提供 storage/subscriptions 上下文，与扩展系统互补
+  - 热重启 → 开发模式下监视 extensions 目录，.js/.cjs 变化时
+    400ms 防抖后重启 Extension Host，旧扩展优雅退出（SIGTERM→SIGKILL）
+  - 跨扩展协作 → SSH 扩展关闭时 executeCommand('git.onSshConnectionClosed')
+    通知 Git 扩展清理远程仓库，实现扩展间松耦合通信
+
+【调用链】
+  ① 启动 Extension Host
+    → ExtensionBridge.initialize()
+      → window.electronAPI.extension.startHost()  // IPC → 主进程
+        → extensionHost.cjs ExtensionHostManager.start()
+          → fork('electron/extension-host/index.cjs', {
+              env: { ELECTRON_RUN_AS_NODE:'1', IDEACODE_APP_ROOT:... }
+            })
+          → 子进程: app.dock.hide() → 加载扩展 → 注册命令
+    → 等待 RPC 'ready' 信号
+
+  ② 加载扩展
+    → Extension Host index.cjs 扫描 extensions/ 目录
+      → 读取每个扩展的 package.json (manifest)
+      → require(path.join(extPath, manifest.main))
+      → 调用 module.activate(context)（注入 vscode API + globalState）
+      → 扩展注册命令: vscode.commands.registerCommand('ssh.internal.connect', fn)
+
+  ③ VSCode API 模拟
+    → api.js 提供 vscode 对象
+      → vscode.commands.registerCommand(cmd, fn)
+        → 存入 Map<command, fn>
+      → vscode.commands.executeCommand(cmd, ...args)
+        → 本进程有命令 → 直接调用 fn
+        → 跨扩展命令 → RPC 'commands.execute' → 目标扩展执行
+
+  ④ 渲染进程调用扩展
+    → extensionBridge.ts invokeExtension('ideacode-ssh','openConnection',[id])
+      → window.electronAPI.extension.rpc('ext.invoke', { extId, method, args })
+        → 主进程转发到 Extension Host
+          → index.cjs rpc.on('ext.invoke') → manager.invokeExtension()
+            → require(ext.main)[method](args)
+      ← 返回结果
+
+  ⑤ 热重启
+    → dev 模式: fs.watch(extensions/, { recursive:true })
+      → 文件变化 (.js/.cjs/.json，排除 node_modules/webview/dist)
+        → 400ms 防抖 → scheduleRestart()
+          → 旧进程: SIGTERM → 等待退出 → SIGKILL（兜底）
+          → 新进程: start() → 重新 fork → 重新加载扩展
+
+  ⑥ 跨扩展协作（SSH → Git）
+    → SSH 扩展连接关闭: client.on('close')
+      → vscode.commands.executeCommand('git.onSshConnectionClosed',
+          { connectionId })
+        → Git 扩展注册了该命令 → 执行清理（dispose 远程 Repository）
+
+
+----------------------------------------
+14.8 功能模块技术速查表（面试卡片）
+----------------------------------------
+
+  ┌──────────────┬────────────────────────┬───────────────────────────────┐
+  │ 功能模块     │ 核心技术               │ 关键文件                      │
+  ├──────────────┼────────────────────────┼───────────────────────────────┤
+  │ 工作区加载   │ Electron dialog + IPC  │ useElectronEvents.ts          │
+  │              │ Redux createAsyncThunk │ workspaceSlice.ts             │
+  │              │ fs.readdir             │ fsHandler.cjs                 │
+  │              │ fs.watch recursive     │ fileService.ts                │
+  │              │ react-virtualized      │ FileTree.tsx                  │
+  │              │ FileSystemProvider     │ fileSystemProvider.ts         │
+  ├──────────────┼────────────────────────┼───────────────────────────────┤
+  │ 编辑器/LSP   │ Monaco + Worker 工厂   │ main.tsx, MonacoEditor/       │
+  │              │ tsserver LSP (stdio)   │ tsLanguageService.ts          │
+  │              │ tsSdk Worker (远程)    │ tsserverManager.cjs           │
+  │              │ JSX decoration 状态机  │ MonacoEditor/index.tsx        │
+  │              │ semanticTokens LSP     │ monacoSemanticTokens.ts       │
+  ├──────────────┼────────────────────────┼───────────────────────────────┤
+  │ 终端         │ node-pty PTY           │ terminalHandler.cjs           │
+  │              │ xterm.js + WebGL       │ TerminalInstance.tsx          │
+  │              │ Shell Profile 检测     │ terminalHandler.cjs           │
+  │              │ 广播模式               │ terminalManager.ts            │
+  ├──────────────┼────────────────────────┼───────────────────────────────┤
+  │ SSH 远程     │ ssh2 (Client/shell/exec)│ extensions/ssh/extension.js  │
+  │              │ keyboard-interactive   │ attemptConnect()              │
+  │              │ tryKeyboard 主动请求   │ ssh.internal.connect          │
+  │              │ SSH 终端 (ssh -t)      │ sshWorkspace.ts               │
+  │              │ 远程文件树 (find/ls)   │ ConnectToModal/               │
+  ├──────────────┼────────────────────────┼───────────────────────────────┤
+  │ Git SCM      │ porcelain v2 解析      │ statusParser.js               │
+  │              │ Promise 队列序列化     │ gitCLI.js                     │
+  │              │ fs.watch + watchFile   │ repository.js                 │
+  │              │ Monaco DiffEditor      │ DiffEditorPanel/              │
+  │              │ Webview + store        │ web/git/src/                  │
+  ├──────────────┼────────────────────────┼───────────────────────────────┤
+  │ AI 编程      │ LLM Client (SSE 流式)  │ llmClient.js                  │
+  │              │ Agent Runtime (多轮)   │ agentRuntime.js               │
+  │              │ tool_call 工具循环     │ agent/tools/                  │
+  │              │ monacoEditorBridge     │ monacoEditorBridge.ts         │
+  │              │ inlineSuggestion       │ inlineSuggestionService.ts    │
+  │              │ Diff 确认 (pending)    │ applyEdit.js, writeFile.js    │
+  ├──────────────┼────────────────────────┼───────────────────────────────┤
+  │ 扩展系统     │ Extension Host (fork)  │ extensionHost.cjs              │
+  │              │ JSON-RPC 2.0           │ extension-host/index.cjs       │
+  │              │ VSCode API Bridge      │ extensions/ssh/api.js          │
+  │              │ ExtensionBridge        │ extensionBridge.ts             │
+  │              │ 热重启 (watch+防抖)    │ extensionHost.cjs              │
+  │              │ 跨扩展协作             │ commands.executeCommand        │
+  └──────────────┴────────────────────────┴───────────────────────────────┘
 
 ================================================================
                           【全篇完】

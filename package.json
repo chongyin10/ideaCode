@@ -7,6 +7,8 @@
   "scripts": {
     "dev": "vite",
     "build": "npm run build:extensions && tsc -b && NODE_OPTIONS=--max-old-space-size=4096 vite build",
+    "build:wasm": "cd src/wasm && wasm-pack build --target web --release",
+    "build:full": "npm run build:wasm && npm run build:extensions && tsc -b && NODE_OPTIONS=--max-old-space-size=4096 vite build",
     "build:extensions": "npm run build:ssh-extension & npm run build:git-extension & wait",
     "build:ssh-extension": "cd web/ssh && npm install && npm run build",
     "build:git-extension": "cd web/git && npm install && npm run build",

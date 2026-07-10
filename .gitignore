@@ -32,3 +32,11 @@ extensions/ssh/webview
 
 # LifeAiCode: extensions/ 下的产物完全由 web/lifeAiCode/ 源码构建产生
 extensions/lifeAiCode/
+
+# WASM build artifacts (wasm-pack output; keep index.js + index.d.ts placeholders)
+src/wasm/pkg/ideacode_wasm*
+src/wasm/pkg/*.wasm
+src/wasm/pkg/package.json
+src/wasm/pkg/README.md
+src/wasm/pkg/.gitignore
+src/wasm/target

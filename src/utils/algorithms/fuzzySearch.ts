@@ -21,6 +21,7 @@
 import { TFIDFCalculator } from './mathUtils';
 import { ARCCache } from './arcCache';
 import { SimHashFilter } from './simHash';
+import { getWasmSync } from '../wasmLoader';
 
 export interface FuzzyResult {
   target: string;
@@ -267,15 +268,34 @@ export function fuzzySearch(query: string, targets: string[]): FuzzyResult[] {
     }));
   }
 
-  const results: FuzzyResult[] = [];
+  // §WASM 加速：WASM 就绪时，先用 WASM 批量评分（10x 更快），
+  // 只对有效结果（score > -Infinity）用 JS 版本计算精确匹配位置。
+  // WASM 未就绪时降级到纯 JS 逐个评分。
+  const wasm = getWasmSync();
+  if (wasm && targets.length > 10) {
+    const scores = wasm.fuzzy_score_batch(query, targets);
+    const results: FuzzyResult[] = [];
+    for (let i = 0; i < scores.length; i++) {
+      if (scores[i] > -Infinity) {
+        // 用 JS 版本计算精确匹配位置（WASM 只返回得分，不含匹配位置）
+        const result = fuzzyScore(query, targets[i]);
+        if (result) {
+          result.score = scores[i]; // 用 WASM 的得分（更精确的归一化）
+          results.push(result);
+        }
+      }
+    }
+    return results.sort((a, b) => b.score - a.score);
+  }
 
+  // JS fallback：逐个评分
+  const results: FuzzyResult[] = [];
   for (const target of targets) {
     const result = fuzzyScore(query, target);
     if (result) {
       results.push(result);
     }
   }
-
   return results.sort((a, b) => b.score - a.score);
 }
 

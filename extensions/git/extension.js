@@ -155,7 +155,6 @@ function resolveActiveFileStaged(path) {
 
 function pushState() {
   const state = currentRepo?.state || null;
-  console.log(`[Git Extension] §诊断 pushState staged=${state?.staged?.length || 0} changes=${state?.changes?.length || 0} webviewPanel=${!!webviewPanel}`);
 
   // 同步 Git 状态映射到主应用，供文件管理器 / Tab 栏着色
   try {
@@ -184,7 +183,6 @@ function pushState() {
   };
   try {
     webviewPanel.webview.postMessage(message);
-    console.log(`[Git Extension] §诊断 postMessage 到 webview 成功`);
   } catch (e) {
     console.error('[Git Extension] postMessage failed:', e.message);
   }

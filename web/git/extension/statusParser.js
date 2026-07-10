@@ -74,6 +74,45 @@ function isDefaultIgnored(p) {
 }
 
 /**
+ * §中文路径解码：还原 git 对非 ASCII 路径的八进制转义。
+ *
+ * 当 core.quotepath=true（git 默认）时，含中文的路径会被双引号包裹，
+ * 中文字符的 UTF-8 字节转为 \nnn 八进制转义。
+ * 例如 "技术" → "\"\\346\\212\\200\\346\\234\\257\\346\\226\\207\\346\\241\\243\""
+ *
+ * 此函数作为 -c core.quotepath=false 的兜底：即使 git 配置未生效，
+ * 也能正确还原中文路径。UTF-8 字节序列通过 Buffer 还原为字符串。
+ *
+ * @param {string} p git 输出的原始路径字段
+ * @returns {string} 解码后的 UTF-8 路径
+ */
+function decodeGitPath(p) {
+  if (!p) return p;
+  if (p.startsWith('"') && p.endsWith('"')) {
+    let inner = p.slice(1, -1);
+    if (inner.includes('\\')) {
+      const bytes = [];
+      let i = 0;
+      while (i < inner.length) {
+        if (inner[i] === '\\' && i + 3 < inner.length + 1) {
+          const oct = inner.slice(i + 1, i + 4);
+          if (/^[0-7]{3}$/.test(oct)) {
+            bytes.push(parseInt(oct, 8));
+            i += 4;
+            continue;
+          }
+        }
+        bytes.push(inner.charCodeAt(i));
+        i++;
+      }
+      return Buffer.from(bytes).toString('utf-8');
+    }
+    return inner.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+  }
+  return p;
+}
+
+/**
  * 把 staged/changes 列表中位于默认忽略目录（node_modules 等）下的多个文件
  * 聚合成单条「目录/ (N 个文件)」条目。
  *
@@ -190,7 +229,7 @@ function parseStatus(output) {
     if (!line || line.startsWith('#')) continue;
 
     if (line.startsWith('? ')) {
-      const untrackedPath = line.slice(2);
+      const untrackedPath = decodeGitPath(line.slice(2));
       // 排除第三方依赖与构建产物目录（node_modules 等），避免几万文件刷爆 UI / 卡死 IDE。
       // 即使项目缺少 .gitignore，也默认不跟踪这些目录。
       if (isDefaultIgnored(untrackedPath)) continue;
@@ -216,7 +255,7 @@ function parseStatus(output) {
       // 用于在 UI 中区分普通文件与子模块条目，子模块条目不可作为文件打开。
       const sub = parseInt(parts[2], 10) || 0;
       const isSubmodule = sub > 0;
-      const path = parts.slice(8).join(' ');
+      const path = decodeGitPath(parts.slice(8).join(' '));
       // porcelain v2 中未修改的状态字符是 '.'，统一归一化为 ' ' 以保持后续判断
       const indexChar = xy[0] === '.' ? ' ' : xy[0];
       const workingChar = xy[1] === '.' ? ' ' : xy[1];
@@ -269,7 +308,7 @@ function parseStatus(output) {
       // porcelain v2 中未修改的状态字符是 '.'，统一归一化为 ' ' 以保持后续判断
       const indexChar = xy[0] === '.' ? ' ' : xy[0];
       const workingChar = xy[1] === '.' ? ' ' : xy[1];
-      const path = parts.slice(9).join(' ');
+      const path = decodeGitPath(parts.slice(9).join(' '));
 
       // 重命名/复制时，origPath 通过 NUL 分隔（v2 格式）
       // 但按行分割后会丢失 NUL 信息；这里用 idx 中的路径字段作为原始路径

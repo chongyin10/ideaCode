@@ -127,11 +127,11 @@ class Repository {
         // git add/commit 等命令会写入 index.lock 再 rename 为 index，FSEvents 可能漏报，
         // 导致终端执行 git 命令后 SCM 面板不刷新。
         // 用 fs.watchFile（基于 stat 轮询）补充监听 index 文件的 mtime 变化，可靠兜底。
-        // 只对单个文件使用，开销可控（默认 ~5s 轮询间隔）。
+        // §间隔设为 5s（而非默认 2s）：配合 --no-optional-locks 避免循环，5s 足够及时且开销低。
         const indexPath = path.join(gitDir, 'index');
         if (fs.existsSync(indexPath)) {
           this._indexWatched = true;
-          fs.watchFile(indexPath, { persistent: false, interval: 2000 }, (curr, prev) => {
+          fs.watchFile(indexPath, { persistent: false, interval: 5000 }, (curr, prev) => {
             if (this._disposed) return;
             if (curr.mtimeMs !== prev.mtimeMs) {
               this._scheduleWatcherRefresh();
@@ -184,9 +184,13 @@ class Repository {
       // §ssh.internal.execute 默认非 PTY 模式，不会触发分页器。
       // 保留 --no-pager 和 GIT_PAGER=cat 作为双重保险。
       // §options.cwd 用于子模块操作：子模块的 git 命令需要在子模块目录下执行。
+      // §options.env 中的变量作为命令前缀传递给远程 SSH 执行（如 GIT_OPTIONAL_LOCKS=0）。
       const cwd = options.cwd || this.rootPath;
       const cmd = ['git', '--no-pager', ...args.map(shellEscapeArg)].join(' ');
-      const result = await this._remoteExecutor(`GIT_PAGER=cat ${cmd}`, cwd);
+      const envPrefix = options.env
+        ? Object.entries(options.env).map(([k, v]) => `${k}=${shellEscapeArg(String(v))}`).join(' ') + ' '
+        : '';
+      const result = await this._remoteExecutor(`${envPrefix}GIT_PAGER=cat ${cmd}`, cwd);
       return result;
     }
     return execGit(args, { cwd: this.rootPath, ...options });
@@ -212,12 +216,19 @@ class Repository {
 
   async _doRefresh() {
     try {
+      // §保存旧状态的快照，用于 refresh 后比较是否有变化。
+      // 状态没变化时不触发 _fire()，避免无意义的 webview 推送和日志输出。
+      const oldStateSnapshot = this._stateSnapshot;
       const output = await this._execGit(
+        // §关键修复：GIT_OPTIONAL_LOCKS=0 阻止 git 获取 index 锁和更新 stat 缓存。
+        // 不加此选项时 git status 会修改 .git/index 的 mtime（更新 stat 缓存），
+        // 导致 fs.watchFile 检测到变化 → 触发 refresh → 再次 git status → 再次修改 index → 无限循环。
+        // 用环境变量而非 --no-optional-locks 命令行选项，兼容 git 2.8+（命令行选项需 2.15+）。
         // --untracked-files=normal：未跟踪目录只报目录级（如 node_modules/），不递归展开其下每个文件。
         // 用 all 会让 node_modules 这类目录刷出几万个 ? 条目，git 子进程慢、状态数据巨大、UI 卡死。
         // 第三方依赖/构建产物目录的进一步过滤见 statusParser.DEFAULT_IGNORE_DIRS。
         ['status', '--porcelain=v2', '--branch', '--untracked-files=normal', '--ignored=no'],
-        { timeout: 10000 }
+        { timeout: 10000, env: { GIT_OPTIONAL_LOCKS: '0' } }
       );
       if (output.code !== 0) {
         // 可能在 repo 失效时（如 .git 被删除）
@@ -247,6 +258,19 @@ class Repository {
       // 子模块内部的文件增删改需要 cd 进子模块目录单独执行 git status。
       await this._refreshSubmodules();
 
+      // §状态变化检测：用 JSON 序列化比较新旧状态。
+      // 如果状态没变化（相同的 staged/changes/untracked/branch），跳过 _fire()，
+      // 避免 watchFile 或 fastPoll 触发的无变化 refresh 导致 UI 闪烁和卡顿。
+      const newSnapshot = JSON.stringify({
+        s: this.state.staged, c: this.state.changes,
+        m: this.state.merge, u: this.state.untracked,
+        b: this.state.branch, u2: this.state.upstream,
+        a: this.state.ahead, d: this.state.behind,
+      });
+      this._stateSnapshot = newSnapshot;
+      if (oldStateSnapshot && oldStateSnapshot === newSnapshot) {
+        return; // 状态无变化，跳过推送
+      }
       this._fire();
     } catch (err) {
       this._lastError = err.message;

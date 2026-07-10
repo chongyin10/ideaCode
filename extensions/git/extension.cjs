@@ -231,7 +231,7 @@ var require_gitCLI = __commonJS({
         let stdout = "";
         let stderr = "";
         let settled = false;
-        const child = spawn("git", args, {
+        const child = spawn("git", ["-c", "core.quotepath=false", ...args], {
           cwd,
           env: { ...process.env, ...env || {}, GIT_TERMINAL_PROMPT: "0" },
           stdio: ["pipe", "pipe", "pipe"]
@@ -374,6 +374,31 @@ var require_statusParser = __commonJS({
       const top = p.split("/")[0];
       return DEFAULT_IGNORE_DIRS.has(top);
     }
+    function decodeGitPath(p) {
+      if (!p) return p;
+      if (p.startsWith('"') && p.endsWith('"')) {
+        let inner = p.slice(1, -1);
+        if (inner.includes("\\")) {
+          const bytes = [];
+          let i = 0;
+          while (i < inner.length) {
+            if (inner[i] === "\\" && i + 3 < inner.length + 1) {
+              const oct = inner.slice(i + 1, i + 4);
+              if (/^[0-7]{3}$/.test(oct)) {
+                bytes.push(parseInt(oct, 8));
+                i += 4;
+                continue;
+              }
+            }
+            bytes.push(inner.charCodeAt(i));
+            i++;
+          }
+          return Buffer.from(bytes).toString("utf-8");
+        }
+        return inner.replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+      }
+      return p;
+    }
     function aggregateIgnored(changes) {
       if (!changes || changes.length === 0) return changes;
       const result = [];
@@ -442,7 +467,7 @@ var require_statusParser = __commonJS({
         const line = lines[i];
         if (!line || line.startsWith("#")) continue;
         if (line.startsWith("? ")) {
-          const untrackedPath = line.slice(2);
+          const untrackedPath = decodeGitPath(line.slice(2));
           if (isDefaultIgnored(untrackedPath)) continue;
           if (untrackedPath.endsWith("/")) continue;
           status.untracked.push({
@@ -460,7 +485,7 @@ var require_statusParser = __commonJS({
           const xy = parts[1];
           const sub = parseInt(parts[2], 10) || 0;
           const isSubmodule = sub > 0;
-          const path2 = parts.slice(8).join(" ");
+          const path2 = decodeGitPath(parts.slice(8).join(" "));
           const indexChar = xy[0] === "." ? " " : xy[0];
           const workingChar = xy[1] === "." ? " " : xy[1];
           let originalPath = null;
@@ -500,7 +525,7 @@ var require_statusParser = __commonJS({
           const isSubmodule = sub > 0;
           const indexChar = xy[0] === "." ? " " : xy[0];
           const workingChar = xy[1] === "." ? " " : xy[1];
-          const path2 = parts.slice(9).join(" ");
+          const path2 = decodeGitPath(parts.slice(9).join(" "));
           const originalPath = null;
           const change = {
             path: path2,
@@ -638,10 +663,9 @@ var require_repository = __commonJS({
             const indexPath = path2.join(gitDir, "index");
             if (fs2.existsSync(indexPath)) {
               this._indexWatched = true;
-              fs2.watchFile(indexPath, { persistent: false, interval: 2e3 }, (curr, prev) => {
+              fs2.watchFile(indexPath, { persistent: false, interval: 5e3 }, (curr, prev) => {
                 if (this._disposed) return;
                 if (curr.mtimeMs !== prev.mtimeMs) {
-                  console.log(`[Repository] \xA7\u8BCA\u65AD index mtime \u53D8\u5316: ${prev.mtimeMs} \u2192 ${curr.mtimeMs}, \u89E6\u53D1 refresh`);
                   this._scheduleWatcherRefresh();
                 }
               });
@@ -690,7 +714,8 @@ var require_repository = __commonJS({
         if (this._remoteExecutor) {
           const cwd = options.cwd || this.rootPath;
           const cmd = ["git", "--no-pager", ...args.map(shellEscapeArg)].join(" ");
-          const result = await this._remoteExecutor(`GIT_PAGER=cat ${cmd}`, cwd);
+          const envPrefix = options.env ? Object.entries(options.env).map(([k, v]) => `${k}=${shellEscapeArg(String(v))}`).join(" ") + " " : "";
+          const result = await this._remoteExecutor(`${envPrefix}GIT_PAGER=cat ${cmd}`, cwd);
           return result;
         }
         return execGit(args, { cwd: this.rootPath, ...options });
@@ -714,17 +739,20 @@ var require_repository = __commonJS({
       }
       async _doRefresh() {
         try {
+          const oldStateSnapshot = this._stateSnapshot;
           const output = await this._execGit(
+            // §关键修复：GIT_OPTIONAL_LOCKS=0 阻止 git 获取 index 锁和更新 stat 缓存。
+            // 不加此选项时 git status 会修改 .git/index 的 mtime（更新 stat 缓存），
+            // 导致 fs.watchFile 检测到变化 → 触发 refresh → 再次 git status → 再次修改 index → 无限循环。
+            // 用环境变量而非 --no-optional-locks 命令行选项，兼容 git 2.8+（命令行选项需 2.15+）。
             // --untracked-files=normal：未跟踪目录只报目录级（如 node_modules/），不递归展开其下每个文件。
             // 用 all 会让 node_modules 这类目录刷出几万个 ? 条目，git 子进程慢、状态数据巨大、UI 卡死。
             // 第三方依赖/构建产物目录的进一步过滤见 statusParser.DEFAULT_IGNORE_DIRS。
             ["status", "--porcelain=v2", "--branch", "--untracked-files=normal", "--ignored=no"],
-            { timeout: 1e4 }
+            { timeout: 1e4, env: { GIT_OPTIONAL_LOCKS: "0" } }
           );
-          console.log(`[Repository] \xA7\u8BCA\u65AD git status exit=${output.code} stdoutLen=${output.stdout.length} stderr=${(output.stderr || "").slice(0, 200)}`);
           if (output.code !== 0) {
             this._lastError = output.stderr || `exit code ${output.code}`;
-            console.log(`[Repository] \xA7\u8BCA\u65AD git status \u5931\u8D25\uFF0C\u4FDD\u7559\u65E7 state\uFF0C\u4E0D fire`);
             return;
           }
           this.state = parseStatus(output.stdout);
@@ -743,11 +771,23 @@ var require_repository = __commonJS({
           this.state.merge.forEach(tagMain);
           this.state.untracked.forEach(tagMain);
           await this._refreshSubmodules();
-          console.log(`[Repository] \xA7\u8BCA\u65AD refresh \u5B8C\u6210 staged=${this.state.staged.length} changes=${this.state.changes.length} merge=${this.state.merge.length} untracked=${this.state.untracked.length} listeners=${this._changeListeners.size}`);
+          const newSnapshot = JSON.stringify({
+            s: this.state.staged,
+            c: this.state.changes,
+            m: this.state.merge,
+            u: this.state.untracked,
+            b: this.state.branch,
+            u2: this.state.upstream,
+            a: this.state.ahead,
+            d: this.state.behind
+          });
+          this._stateSnapshot = newSnapshot;
+          if (oldStateSnapshot && oldStateSnapshot === newSnapshot) {
+            return;
+          }
           this._fire();
         } catch (err) {
           this._lastError = err.message;
-          console.log(`[Repository] \xA7\u8BCA\u65AD _doRefresh \u5F02\u5E38: ${err.message}`);
         }
       }
       /**
@@ -1383,7 +1423,6 @@ function resolveActiveFileStaged(path2) {
 }
 function pushState() {
   const state = currentRepo?.state || null;
-  console.log(`[Git Extension] \xA7\u8BCA\u65AD pushState staged=${state?.staged?.length || 0} changes=${state?.changes?.length || 0} webviewPanel=${!!webviewPanel}`);
   try {
     send("git.statusChanged", { status: buildStatusMap(state) });
   } catch (e) {
@@ -1408,7 +1447,6 @@ function pushState() {
   };
   try {
     webviewPanel.webview.postMessage(message);
-    console.log(`[Git Extension] \xA7\u8BCA\u65AD postMessage \u5230 webview \u6210\u529F`);
   } catch (e) {
     console.error("[Git Extension] postMessage failed:", e.message);
   }
