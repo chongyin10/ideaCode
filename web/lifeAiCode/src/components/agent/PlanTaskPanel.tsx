@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { ListTodo, Loader2, Check, AlertCircle, Circle, MinusCircle, ChevronDown } from 'lucide-react';
 import type { PlanStep, PlanStepStatus } from './PlanChecklist';
 
@@ -38,12 +38,39 @@ function getTaskName(step: PlanStep): string {
 
 export function PlanTaskPanel({ steps }: PlanTaskPanelProps) {
   const [expanded, setExpanded] = useState(true);
+  // §自动隐藏：所有计划任务到达终态（done/error/skipped，无 pending/running）后，
+  // 延迟 3s 让用户看到最终状态，然后淡出隐藏。
+  const [hidden, setHidden] = useState(false);
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  if (!steps || steps.length === 0) return null;
+  const hasSteps = !!(steps && steps.length > 0);
+  const pendingCount = hasSteps ? steps.filter((s) => s.status === 'pending').length : 0;
+  const runningCount = hasSteps ? steps.filter((s) => s.status === 'running').length : 0;
+  // 全部到达终态（无 pending、无 running）
+  const allDone = hasSteps && pendingCount === 0 && runningCount === 0;
+
+  useEffect(() => {
+    if (allDone) {
+      // 全部完成 → 3s 后隐藏
+      if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = setTimeout(() => setHidden(true), 3000);
+    } else {
+      // 有任务重新开始 → 取消隐藏
+      if (hideTimerRef.current) {
+        clearTimeout(hideTimerRef.current);
+        hideTimerRef.current = null;
+      }
+      setHidden(false);
+    }
+    return () => {
+      if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+    };
+  }, [allDone]);
+
+  if (!hasSteps || hidden) return null;
 
   const total = steps.length;
   const doneCount = steps.filter((s) => s.status === 'done').length;
-  const runningCount = steps.filter((s) => s.status === 'running').length;
   const errorCount = steps.filter((s) => s.status === 'error').length;
 
   const isRunning = runningCount > 0;

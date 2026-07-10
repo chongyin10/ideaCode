@@ -363,7 +363,7 @@ export type ExtensionMessage =
   | { type: 'newChat' }
   | { type: 'openConfig' }
   | { type: 'showHistory' }
-  | { type: 'shellUpdate'; id: string; shellCommand: string; output: string; status: 'running' | 'success' | 'error' | 'killed'; exitCode?: number; signal?: string; longRunning?: boolean }
+  | { type: 'shellUpdate'; id: string; shellCommand: string; output: string; status: 'running' | 'success' | 'error' | 'killed' | 'deferred'; exitCode?: number; signal?: string; longRunning?: boolean; deferred?: boolean }
   | { type: 'notice'; level: 'info' | 'success' | 'warning' | 'error'; message: string; suggestionId?: string }
   | { type: 'toolCall'; tool: string; args: Record<string, unknown>; status: 'running' | 'success' | 'error'; duration?: number; summary?: string; result?: Record<string, unknown> }
   | { type: 'agentStatus'; status: 'running' | 'done' | 'error' | 'cancelled'; message: string }
@@ -384,6 +384,14 @@ export type ExtensionMessage =
   | { type: 'systemMessage'; content: string }
   // §shell 命令产生的文件变更（如 npx create-vite）
   | { type: 'shellFileChanges'; cwd: string; created: string[]; modified: string[]; deleted: string[] }
+  // §后台任务管理器：命令执行超阈值后转入后台队列
+  | { type: 'shellDeferred'; id: string; shellCommand: string; message: string }
+  // §后台任务管理器：后台命令执行完成
+  | { type: 'deferredShellDone'; id: string; shellCommand: string; exitCode?: number; success: boolean; deferredDurationMs?: number; output: string }
+  // §后台任务管理器：Agent 主循环结束后开始等待后台任务
+  | { type: 'deferredWaitStart'; pending: number; shells: Array<{ id: string; cmd: string; cwd: string; deferredAt: number; elapsedMs: number }> }
+  // §后台任务管理器：后台任务等待结束（全部完成或超时）
+  | { type: 'deferredWaitDone'; pending: number; shells?: Array<{ id: string; cmd: string; cwd: string; deferredAt: number; elapsedMs: number }>; timedOut?: boolean }
   | { type: 'error'; message: string };
 
 /* ─── VSCode API 类型 ─── */

@@ -115,9 +115,6 @@ export function ToolCallCard({ toolCall, forceExpanded, hideOutputToggle }: Tool
         <span className="tool-call-card__name">{displayName}</span>
         <span className="tool-call-card__duration">{durationText}</span>
         <span className="tool-call-card__actions">
-          <span className={`tool-call-card__status tool-call-card__status--${toolCall.status}`} title={toolCall.status === 'running' ? '执行中' : toolCall.status === 'success' ? '已完成' : '失败'}>
-            {statusIcon}
-          </span>
           {hasBody && (
             <span className={`tool-call-card__chevron ${expanded ? 'tool-call-card__chevron--open' : ''}`}>
               <ChevronDown size={13} strokeWidth={2} />

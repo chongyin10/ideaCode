@@ -83,9 +83,10 @@ async function writeFile(args, context) {
   return {
     success: true,
     pending: true,
+    notApplied: true,
     editId,
     filePath: filePathInput,
-    message: `已生成${fileExists ? '覆盖' : '创建'}文件建议（${(Buffer.byteLength(content, 'utf8') / 1024).toFixed(1)}KB），等待用户在 UI 中确认后才会应用。`,
+    message: `⚠️ 文件尚未写入磁盘！已生成${fileExists ? '覆盖' : '创建'}文件建议（${(Buffer.byteLength(content, 'utf8') / 1024).toFixed(1)}KB），需用户在 UI 中确认后才会真正应用。如果需要文件立即生效（如创建项目），请改用 execute_shell 命令（如 cat > file << 'EOF'...EOF 或 mkdir -p + touch）直接写入磁盘。`,
   };
 }
 

@@ -81,8 +81,15 @@ function extractShellCommand(code: string): string | null {
       continue;
     }
     let cmd = line.replace(/^\$\s*/, '').replace(/^>\s*/, '');
-    if (cmd.endsWith('\\') || cmd.endsWith('&&') || cmd.endsWith('||') || cmd.endsWith('|')) {
-      current += (current ? ' ' : '') + cmd.replace(/[\\&&||]+$/, '');
+    // 反斜杠行继续符：移除 \ 并与下一行拼接（shell 中 \ + newline = 空）
+    if (cmd.endsWith('\\')) {
+      current += (current ? ' ' : '') + cmd.slice(0, -1).trim();
+      continue;
+    }
+    // 命令串联符（&& || |）：必须保留操作符，不能删除！
+    // 删除会导致 `cd /project &&` + `npm install` → `cd /project npm install`（错误）
+    if (cmd.endsWith('&&') || cmd.endsWith('||') || cmd.endsWith('|')) {
+      current += (current ? ' ' : '') + cmd;
       continue;
     }
     current += (current ? ' ' : '') + cmd;
@@ -103,20 +110,23 @@ function getShellState(ctx: CodeBlockSkillContext): { execId?: string; outputCol
 /** 计算执行状态文本与样式 class
  * longRunning: 后端识别为长驻进程（dev server / watch / tail -f 等）时为 true，
  * 已脱离 Agent 同步等待，仅节流推送日志到 UI，不会塞进 LLM 上下文。
+ * deferred: §后台任务管理器，命令执行超阈值后转入后台队列，不阻塞 Agent 主流程。
  */
 function computeStatus(execId: string | undefined, shellOutputs?: ShellOutputsMap) {
   const shellResult = execId && shellOutputs ? shellOutputs[execId] : null;
   const isWaiting = !!execId && !shellResult;
   const isRunning = shellResult?.status === 'running' || isWaiting;
   const isLongRunning = shellResult?.longRunning === true;
+  const isDeferred = shellResult?.deferred === true && shellResult?.status === 'deferred';
   const htmlOutput = shellResult?.output ? ansiToHtml(shellResult.output) : '';
   const statusText = isWaiting ? '连接中…' :
     shellResult?.status === 'running' ? (isLongRunning ? '长驻进程中（不阻塞）' : '执行中…') :
-    shellResult?.status === 'success' ? '完成' :
-    shellResult?.status === 'error' ? '失败' :
+    shellResult?.status === 'deferred' ? '已转入后台…' :
+    shellResult?.status === 'success' ? (shellResult?.deferred ? '后台完成' : '完成') :
+    shellResult?.status === 'error' ? (shellResult?.deferred ? '后台失败' : '失败') :
     shellResult?.status === 'killed' ? '已停止' : '';
   const statusClass = isWaiting ? 'running' : (shellResult?.status || 'running');
-  return { shellResult, isWaiting, isRunning, isLongRunning, htmlOutput, statusText, statusClass };
+  return { shellResult, isWaiting, isRunning, isLongRunning, isDeferred, htmlOutput, statusText, statusClass };
 }
 
 export const ShellSkill: CodeBlockSkill = {
@@ -133,7 +143,7 @@ export const ShellSkill: CodeBlockSkill = {
   renderActions(ctx: CodeBlockSkillContext) {
     const { code, onExecuteShell, onKillShell, shellOutputs, setSkillState } = ctx;
     const { execId } = getShellState(ctx);
-    const { shellResult, isWaiting, isRunning, isLongRunning, statusText, statusClass } = computeStatus(execId, shellOutputs);
+    const { shellResult, isWaiting, isRunning, isLongRunning, isDeferred, statusText, statusClass } = computeStatus(execId, shellOutputs);
 
     const shellCmd = extractShellCommand(code);
     if (!shellCmd || !onExecuteShell) return null;
@@ -149,27 +159,33 @@ export const ShellSkill: CodeBlockSkill = {
 
     const runTitle = isWaiting ? '连接中…' :
       shellResult?.status === 'running' ? (isLongRunning ? '长驻进程中（点击 ◼ 可停止）' : '执行中…') :
-      shellResult?.status === 'success' ? '已完成' :
-      shellResult?.status === 'error' ? '失败' :
+      shellResult?.status === 'deferred' ? '已转入后台执行（不阻塞主流程）' :
+      shellResult?.status === 'success' ? (isDeferred ? '后台任务已完成' : '已完成') :
+      shellResult?.status === 'error' ? (isDeferred ? '后台任务失败' : '失败') :
       shellResult?.status === 'killed' ? '已停止' : '执行';
+
+    // deferred 状态下进程仍在后台运行，允许停止
+    const canKill = (isRunning || shellResult?.status === 'deferred') && onKillShell;
 
     return (
       <>
         <button
-          className={`codeblock-run-btn codeblock-run-btn--icon ${execId ? `codeblock-run-btn--${statusClass}` : ''} ${isLongRunning ? 'codeblock-run-btn--long-running' : ''}`}
+          className={`codeblock-run-btn codeblock-run-btn--icon ${execId ? `codeblock-run-btn--${statusClass}` : ''} ${isLongRunning ? 'codeblock-run-btn--long-running' : ''} ${isDeferred ? 'codeblock-run-btn--deferred' : ''}`}
           onClick={handleRun}
           title={runTitle}
           disabled={isRunning}
           data-long-running={isLongRunning ? 'true' : undefined}
+          data-deferred={isDeferred ? 'true' : undefined}
         >
           {isWaiting ? <Loader2 size={12} className="codeblock-icon-spin" /> :
            shellResult?.status === 'running' ? <Loader2 size={12} className="codeblock-icon-spin" /> :
+           shellResult?.status === 'deferred' ? <Loader2 size={12} className="codeblock-icon-spin" /> :
            shellResult?.status === 'success' ? <Check size={13} strokeWidth={2.5} /> :
            shellResult?.status === 'error' ? <X size={13} strokeWidth={2.5} /> :
            shellResult?.status === 'killed' ? <Square size={11} strokeWidth={2} /> :
            <Play size={12} strokeWidth={2} />}
         </button>
-        {isRunning && onKillShell && (
+        {canKill && (
           <button
             className="codeblock-kill-btn codeblock-kill-btn--icon"
             onClick={handleKill}
@@ -187,13 +203,14 @@ export const ShellSkill: CodeBlockSkill = {
     const { execId, outputCollapsed } = getShellState(ctx);
     if (!execId) return null;
 
-    const { htmlOutput, statusText, statusClass, isLongRunning } = computeStatus(execId, shellOutputs);
+    const { htmlOutput, statusText, statusClass, isLongRunning, isDeferred } = computeStatus(execId, shellOutputs);
 
     return (
       <div
         id={execId}
-        className={`codeblock-shell-output codeblock-shell-output--${statusClass} ${outputCollapsed ? 'codeblock-shell-output--collapsed' : ''} ${isLongRunning ? 'codeblock-shell-output--long-running' : ''}`}
+        className={`codeblock-shell-output codeblock-shell-output--${statusClass} ${outputCollapsed ? 'codeblock-shell-output--collapsed' : ''} ${isLongRunning ? 'codeblock-shell-output--long-running' : ''} ${isDeferred ? 'codeblock-shell-output--deferred' : ''}`}
         data-long-running={isLongRunning ? 'true' : undefined}
+        data-deferred={isDeferred ? 'true' : undefined}
       >
         <button
           className="codeblock-shell-output__header"
@@ -208,6 +225,11 @@ export const ShellSkill: CodeBlockSkill = {
           {isLongRunning && (
             <span className="codeblock-shell-output__badge codeblock-shell-output__badge--long-running" title="长驻进程：spawn 后已脱离 Agent 同步等待，日志节流（5s）推送，不会发送到 LLM">
               长驻进程
+            </span>
+          )}
+          {isDeferred && (
+            <span className="codeblock-shell-output__badge codeblock-shell-output__badge--deferred" title="后台任务：命令执行超过 30s 阈值，已转入后台队列继续执行，不阻塞 Agent 主流程。完成后自动通知。">
+              后台队列
             </span>
           )}
           <span className="codeblock-shell-output__status">{statusText}</span>

@@ -323,12 +323,16 @@ class LlmClient extends EventEmitter {
     const systemPrompt = options.systemPrompt !== undefined ? options.systemPrompt : this.systemPrompt;
     // 当 systemPrompt 为 null 或空字符串时，不附加默认 system 消息（由调用方在 messages 中自行提供）
     const prependSystem = systemPrompt ? [{ role: 'system', content: systemPrompt }] : [];
-    // 仅 DeepSeek 支持 reasoning_content 回传；其他 Provider 需剥离，避免报错
-    const supportsReasoning = this.provider === 'deepseek';
+    // OpenAI 兼容 Provider（除 anthropic/ollama 外）均可能支持 reasoning_content 回传。
+    // DeepSeek thinking mode 要求 assistant 消息始终携带 reasoning_content 字段（即使为空），
+    // 因此用 'reasoning_content' in m 检查字段是否存在，而非 truthy 判断（空字符串会被 falsy 剥离）。
+    const supportsReasoning = !['anthropic', 'ollama'].includes(this.provider);
     const sanitizedMessages = messages.map((m) => {
-      const hasReasoning = supportsReasoning && m.role === 'assistant' && m.reasoning_content;
+      if (supportsReasoning && m.role === 'assistant' && 'reasoning_content' in m) {
+        return m;
+      }
       const { reasoning_content, ...rest } = m;
-      return hasReasoning ? { ...rest, reasoning_content } : rest;
+      return rest;
     });
     const body = {
       model: this.model,

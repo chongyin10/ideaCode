@@ -13,6 +13,7 @@
  */
 
 const { spawn } = require('child_process');
+const os = require('os');
 const path = require('path');
 const vscode = require('../../api');
 const { isShellCommand } = require('../../shellDetect.cjs');
@@ -59,7 +60,7 @@ async function postSystemMessage(context, text) {
 }
 
 async function executeShell(args, context) {
-  const { command, cwd, timeout = 60000 } = args || {};
+  const { command, cwd, timeout = 300000 } = args || {}; // §同步阻塞：5 分钟超时，与 proc 层面一致
   if (!command || typeof command !== 'string') {
     return { success: false, error: '缺少 command 参数' };
   }
@@ -109,7 +110,7 @@ async function executeShell(args, context) {
     return executeRemoteShell(command, cwd, workspaceRoot, timeout, context);
   }
 
-  let workingDir = cwd || workspaceRoot || process.cwd();
+  let workingDir = cwd || workspaceRoot || os.homedir();
   if (!path.isAbsolute(workingDir) && workspaceRoot) {
     workingDir = path.join(workspaceRoot, workingDir);
   }
@@ -140,8 +141,23 @@ async function executeShell(args, context) {
     try {
       // 触发执行（不 await — 走实时流式输出到 webview）
       context.executeShell(shellId, command, workingDir);
-      // 等待完成 + 拿到完整输出
+      // 等待完成 + 拿到完整输出（§同步阻塞：阻塞直到命令完成或超时）
       const result = await context.waitShellCompletion(shellId, timeout);
+      // §长驻进程（dev server）：waitShellCompletion 立即返回 longRunning:true + 空 output。
+      // 必须把 longRunning 字段和 message 传给 LLM，否则 LLM 看到 success:true + 空 output
+      // 会困惑"输出为空，命令是否执行成功"，反复重试浪费时间。
+      if (result.longRunning) {
+        return {
+          success: true,
+          longRunning: true,
+          command,
+          cwd: workingDir,
+          pid: result.pid,
+          output: '',
+          message: result.message || '该命令是长驻进程（dev server / watch 等），已在后台启动。不会阻塞后续步骤。日志会实时推送到 UI。如需停止请通过 UI 的停止按钮。',
+          shellId,
+        };
+      }
       return {
         success: result.success === true,
         command,

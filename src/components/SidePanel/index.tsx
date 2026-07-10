@@ -5,7 +5,6 @@ import {
   setSidePanelWidth,
   setSidePanelVisible,
   MIN_SIDEBAR_WIDTH,
-  MAX_SIDEBAR_WIDTH,
 } from '../../store/slices/layoutSlice';
 import WebViewPanel from '../WebViewPanel';
 import { DockableContent } from '../DockableContent';
@@ -60,7 +59,8 @@ const SidePanel = () => {
           setIsResizing(false);
           cleanup();
         } else {
-          dispatch(setSidePanelWidth(Math.min(MAX_SIDEBAR_WIDTH, newWidth)));
+          // §去除固定最大宽度限制，仅以屏幕宽度减 100px 作为动态上限，防止面板超出窗口
+          dispatch(setSidePanelWidth(Math.min(window.innerWidth - 100, newWidth)));
         }
       };
 

@@ -30,6 +30,11 @@ class Planner {
       /替换.*为/,
       /从\s*\d+.*升级/,
       /\d+\s*步/,
+      // §项目创建/搭建：多步任务（创建 → 配置 → 安装依赖 → 启动）
+      /(创建|新建|初始化|搭建|构建|生成).*项目/,
+      /(create|init|scaffold|setup).*project/i,
+      // §配置类任务：创建 + 修改配置（如"创建项目，端口9091"）
+      /(创建|新建|搭建).* (端口|配置|路由|数据库|接口)/,
     ];
     if (complexPatterns.some((p) => p.test(userInput))) return true;
 

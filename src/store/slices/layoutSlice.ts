@@ -132,10 +132,8 @@ const layoutSlice = createSlice({
       }
     },
     setSidePanelWidth: (state, action) => {
-      state.sidePanelWidth = Math.max(
-        MIN_SIDEBAR_WIDTH,
-        Math.min(MAX_SIDEBAR_WIDTH, action.payload as number),
-      );
+      // §去除固定最大宽度限制（原 MAX_SIDEBAR_WIDTH=600），仅保留下限，允许用户自由拉宽
+      state.sidePanelWidth = Math.max(MIN_SIDEBAR_WIDTH, action.payload as number);
     },
     setSidePanelVisible: (state, action) => {
       state.sidePanelVisible = action.payload as boolean;

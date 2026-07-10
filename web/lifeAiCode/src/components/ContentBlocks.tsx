@@ -172,6 +172,8 @@ function extractTitle(blocks: ContentBlockType[]): string {
       case 'text': {
         const firstLine = block.content.split('\n')[0].trim();
         const clean = firstLine.replace(/^#{1,6}\s+/, '').trim();
+        // 防御：跳过残留的 <think>/<thinking> 标签文本（流式未闭合时 tag parser 可能遗漏）
+        if (/^<(think|thinking)\b/i.test(clean)) break;
         if (clean.length > 0) return clean.slice(0, 80) + (clean.length > 80 ? '…' : '');
         break;
       }
@@ -218,7 +220,7 @@ function stepLabel(stepType: StepType): string {
 interface ContentBlocksProps {
   content: string;
   role?: 'user' | 'assistant' | 'system';
-  shellOutputs?: Record<string, { output: string; status: 'running' | 'success' | 'error' | 'killed'; longRunning?: boolean }>;
+  shellOutputs?: Record<string, { output: string; status: 'running' | 'success' | 'error' | 'killed' | 'deferred'; longRunning?: boolean; deferred?: boolean }>;
   onExecuteShell?: (id: string, command: string) => void;
   onKillShell?: (id: string) => void;
   onOptionClick?: (text: string) => void;
@@ -494,7 +496,7 @@ function MessageCard({
 
 interface BlockRendererProps {
   block: ContentBlockType;
-  shellOutputs: Record<string, { output: string; status: 'running' | 'success' | 'error' | 'killed'; longRunning?: boolean }>;
+  shellOutputs: Record<string, { output: string; status: 'running' | 'success' | 'error' | 'killed' | 'deferred'; longRunning?: boolean; deferred?: boolean }>;
   onExecuteShell?: (id: string, command: string) => void;
   onKillShell?: (id: string) => void;
   onOptionClick?: (text: string) => void;
@@ -596,7 +598,7 @@ function ToolCall({
   command: string;
   output?: string;
   status?: 'running' | 'success' | 'error' | 'killed';
-  shellOutputs: Record<string, { output: string; status: 'running' | 'success' | 'error' | 'killed'; longRunning?: boolean }>;
+  shellOutputs: Record<string, { output: string; status: 'running' | 'success' | 'error' | 'killed' | 'deferred'; longRunning?: boolean; deferred?: boolean }>;
   onExecuteShell?: (id: string, command: string) => void;
   onKillShell?: (id: string) => void;
 }) {

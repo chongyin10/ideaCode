@@ -239,6 +239,29 @@ export function parseProviderTags(text: string, provider: ProviderId): TagParseR
     }
   }
 
+  // 1b. 通用未闭合 <think>/<thinking> 处理器（流式安全）：
+  // 流式输出时 </think> 可能尚未发出，provider 正则（要求闭合标签）匹配不到，
+  // 导致 <think> 内容残留在 cleanedText 中，被 extractTitle 当作标题显示。
+  // 也覆盖 custom/openai/ollama 等没有 thinking 正则的 provider。
+  // 模式同时匹配闭合 <think>...</think> 和未闭合 <think>...（到文本末尾）。
+  // (?![\s\S]) 匹配绝对文本末尾（比 $ 更精确，不受 trailing \n 影响）。
+  const universalThinkRegex = /<(think|thinking)>([\s\S]*?)(?:<\/\1>|(?![\s\S]))/gi;
+  for (const m of text.matchAll(universalThinkRegex)) {
+    const start = m.index!;
+    if (isInsideCodeBlock(start, codeBlocks)) continue;
+    const end = start + m[0].length;
+    // 跳过已被 provider 正则捕获的区间（避免重复）
+    const alreadyCaptured = tags.some((t) => t.start === start && t.end === end);
+    if (alreadyCaptured) continue;
+    tags.push({
+      kind: 'thinking',
+      content: m[2].trim(),
+      raw: m[0],
+      start,
+      end,
+    });
+  }
+
   // 2. 提取 environment 标签
   if (rules.environment) {
     for (const m of text.matchAll(rules.environment)) {

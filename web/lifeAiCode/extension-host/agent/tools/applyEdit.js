@@ -211,10 +211,11 @@ async function applyEdit(args, context) {
   return {
     success: true,
     pending: true,
+    notApplied: true,
     editId,
     filePath: filePathInput,
     matchType, // 'exact' | 'normalized'，用于 UI 提示
-    message: `已生成修改建议（${matchType === 'exact' ? '精确匹配' : '规范化匹配'}），等待用户在 UI 中确认后才会应用。`,
+    message: `⚠️ 修改尚未写入磁盘！已生成修改建议（${matchType === 'exact' ? '精确匹配' : '规范化匹配'}），需用户在 UI 中确认后才会真正应用。如果需要修改立即生效，请改用 execute_shell 命令（如 sed -i 或 cat > file << 'EOF'...EOF）直接写入磁盘。`,
   };
 }
 

@@ -3575,6 +3575,25 @@ body {
   color: #c084fc;
   border: 1px solid rgba(168, 85, 247, 0.35);
 }
+/* §后台任务管理器：deferred 徽标 — 橙色，表示命令已转入后台队列 */
+.codeblock-shell-output__badge--deferred {
+  background: rgba(251, 146, 60, 0.18);
+  color: #fb923c;
+  border: 1px solid rgba(251, 146, 60, 0.35);
+}
+.codeblock-run-btn--deferred {
+  background: rgba(251, 146, 60, 0.15);
+  border-color: rgba(251, 146, 60, 0.4);
+  color: #fb923c;
+}
+.codeblock-run-btn--deferred:hover {
+  background: rgba(251, 146, 60, 0.25);
+  border-color: rgba(251, 146, 60, 0.55);
+}
+.codeblock-shell-output--deferred { border-top-color: rgba(251, 146, 60, 0.45); }
+.codeblock-shell-output--deferred .codeblock-shell-output__body {
+  border-left: 2px solid rgba(251, 146, 60, 0.3);
+}
 @keyframes shellOutputIn {
   from { opacity: 0; max-height: 0; }
   to { opacity: 1; max-height: 400px; }
@@ -3831,139 +3850,8 @@ body {
 /* ════════════════════════════════════════════════════════════════ */
 /*  Input Bar                                                       */
 /* ════════════════════════════════════════════════════════════════ */
-/*  Input plan bar — 输入框上方计划任务条                            */
+/*  Input plan bar — 已删除（功能合并到 PlanTaskPanel）              */
 /* ════════════════════════════════════════════════════════════════ */
-
-.input-plan-bar {
-  flex-shrink: 0;
-  max-width: 880px;
-  margin: 0 auto;
-  padding: 6px 24px 0;
-}
-.input-plan-bar__header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 8px 12px;
-  background: var(--surface-1);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-  color: var(--text-secondary);
-  font-size: 13px;
-  cursor: pointer;
-  text-align: left;
-  transition: background var(--duration-fast), border-color var(--duration-fast);
-}
-.input-plan-bar__header:hover {
-  background: var(--surface-2);
-  border-color: var(--border-strong);
-}
-.input-plan-bar__header--running {
-  border-color: rgba(59, 130, 246, 0.35);
-  background: rgba(59, 130, 246, 0.06);
-}
-.input-plan-bar__header--error {
-  border-color: rgba(239, 68, 68, 0.35);
-  background: rgba(239, 68, 68, 0.05);
-}
-.input-plan-bar__header--done {
-  border-color: rgba(34, 197, 94, 0.35);
-  background: rgba(34, 197, 94, 0.05);
-}
-.input-plan-bar__header-icon {
-  display: flex;
-  align-items: center;
-  color: var(--accent-400);
-  flex-shrink: 0;
-}
-.input-plan-bar__header--running .input-plan-bar__header-icon { color: var(--accent-400); }
-.input-plan-bar__header--error .input-plan-bar__header-icon { color: var(--error-400); }
-.input-plan-bar__header--done .input-plan-bar__header-icon { color: var(--success-400); }
-.input-plan-bar__header-title {
-  font-weight: 500;
-  color: var(--text-primary);
-}
-.input-plan-bar__header-summary {
-  flex: 1;
-  min-width: 0;
-  color: var(--text-tertiary);
-  font-size: 12px;
-  text-align: right;
-}
-.input-plan-bar__header-spinner {
-  animation: spin 0.9s linear infinite;
-}
-.input-plan-bar__chevron {
-  color: var(--text-tertiary);
-  transition: transform var(--duration-base) var(--ease-out);
-  flex-shrink: 0;
-}
-.input-plan-bar__chevron--open { transform: rotate(180deg); }
-
-.input-plan-bar__list {
-  list-style: none;
-  margin: 4px 0 0 0;
-  padding: 6px 8px;
-  background: var(--surface-1);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-}
-.input-plan-bar__item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 6px;
-  border-radius: var(--radius-xs);
-  font-size: 12.5px;
-  color: var(--text-secondary);
-}
-.input-plan-bar__item + .input-plan-bar__item {
-  border-top: 1px solid var(--border-subtle);
-}
-.input-plan-bar__item-icon {
-  display: flex;
-  align-items: center;
-  flex-shrink: 0;
-}
-.input-plan-bar__item--pending .input-plan-bar__item-icon { color: var(--text-muted); }
-.input-plan-bar__item--running .input-plan-bar__item-icon { color: var(--accent-400); }
-.input-plan-bar__item--done .input-plan-bar__item-icon { color: var(--success-400); }
-.input-plan-bar__item--error .input-plan-bar__item-icon { color: var(--error-400); }
-.input-plan-bar__item--skipped .input-plan-bar__item-icon { color: var(--text-muted); }
-.input-plan-bar__item-index {
-  flex-shrink: 0;
-  width: 18px;
-  text-align: center;
-  color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
-}
-.input-plan-bar__item-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-primary);
-}
-.input-plan-bar__item-reason {
-  flex-shrink: 0;
-  max-width: 160px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-tertiary);
-  font-size: 11.5px;
-}
-.input-plan-bar__item-time {
-  flex-shrink: 0;
-  color: var(--text-muted);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-}
-.input-plan-bar__item-spinner {
-  animation: spin 0.9s linear infinite;
-}
 
 .input-bar {
   flex-shrink: 0;
@@ -6196,6 +6084,31 @@ body {
   font-family: var(--font-sans);
   font-size: 12.5px;
   flex: 0 0 auto;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  transition: color 0.2s ease;
+}
+
+/* §波浪模式：运行中 = 脉动波浪下划线 + 蓝色字 */
+.tool-call-card--running .tool-call-card__name {
+  color: var(--accent-400);
+  text-decoration: underline wavy var(--accent-400);
+  animation: tool-call-thinking 1.5s ease-in-out infinite;
+}
+/* 完成 = 绿色字，无波浪 */
+.tool-call-card--success .tool-call-card__name {
+  color: var(--success-400);
+  text-decoration: none;
+}
+/* 失败 = 红色字，无波浪 */
+.tool-call-card--error .tool-call-card__name {
+  color: var(--error-400);
+  text-decoration: none;
+}
+
+@keyframes tool-call-thinking {
+  0%, 100% { text-decoration-color: rgba(59, 130, 246, 0.3); }
+  50% { text-decoration-color: rgba(59, 130, 246, 1); }
 }
 
 .tool-call-card__duration {
@@ -6205,32 +6118,6 @@ body {
   font-size: 11px;
   color: var(--text-tertiary);
   letter-spacing: 0.2px;
-}
-
-.tool-call-card__status {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: var(--radius-full);
-  flex-shrink: 0;
-}
-
-.tool-call-card__status--running {
-  background: rgba(59, 130, 246, 0.12);
-  color: var(--accent-400);
-  border: 1px solid rgba(59, 130, 246, 0.22);
-}
-.tool-call-card__status--success {
-  background: rgba(34, 197, 94, 0.1);
-  color: var(--success-400);
-  border: 1px solid rgba(34, 197, 94, 0.2);
-}
-.tool-call-card__status--error {
-  background: rgba(239, 68, 68, 0.1);
-  color: var(--error-400);
-  border: 1px solid rgba(239, 68, 68, 0.22);
 }
 
 .tool-call-card__spinner {

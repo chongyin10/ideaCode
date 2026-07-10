@@ -196,7 +196,8 @@ const LONG_RUNNING_OUTPUT_TAIL_CHARS = 16 * 1024; // 长驻进程只保留最新
  */
 // 脚手架/初始化命令排除列表：这些是一次性命令（可能交互式），不是长驻进程。
 // 必须在 LONG_RUNNING_COMMAND_PATTERNS 之前检查，避免 create-vite 被 /\bvite\b/ 误判。
-const SCAFFOLD_COMMAND_PATTERN = /\bcreate-(vite|next|nuxt|react|react-app|vue|angular|svelte|solid|remix|astro|preact)\b/i;
+// §覆盖三种形式：npx create-vite / npm create vite / npm init vite
+const SCAFFOLD_COMMAND_PATTERN = /\b(?:(?:npm|yarn|pnpm)\s+(?:create|init)\s|create-(?:vite|next|nuxt|react|react-app|vue|angular|svelte|solid|remix|astro|preact)\b)/i;
 
 function detectLongRunningCommand(command) {
   if (!command || typeof command !== 'string') return false;
@@ -245,6 +246,13 @@ function appendToFullOutput(entry, text) {
 const activeProcs = new Map(); // id -> { proc, finished, cwd }
 // 等待中的 executeShell 调用方（resolve/reject）—— 用于 Agent tool 同步等待输出
 const pendingShellWaits = new Map(); // id -> { resolve, reject }
+
+// §后台任务管理器：执行时间超过 DEFERRED_THRESHOLD_MS 的命令转入此队列，
+// 不阻塞 Agent 主流程。进程继续运行，close 时通知 webview。
+// 与 detectLongRunningCommand（正则预判）互补：正则命中的立即 defer，
+// 这里是时间阈值兜底——覆盖 npm install（网络慢）/ git clone（大仓库）等无法预判的慢命令。
+const DEFERRED_THRESHOLD_MS = 30_000; // 30 秒未完成 → 转入后台队列
+const deferredShells = new Map(); // id -> { entry, cmd, cwd, deferredAt, partialOutput }
 
 // executeShell 消息去重：同一 shellId 在 2 秒内重复到达时忽略，
 // 防止 webview → 渲染进程 → 扩展宿主的消息路由重复转发导致同一命令被 spawn 两次。
@@ -421,7 +429,7 @@ async function executeShellCommand(id, shellCommand, cwd) {
     return;
   }
 
-  let workingDir = cwd || process.cwd();
+  let workingDir = cwd || os.homedir();
   if (!workingDir || !fs.existsSync(workingDir)) {
     workingDir = os.homedir();
   }
@@ -430,20 +438,24 @@ async function executeShellCommand(id, shellCommand, cwd) {
   const effectiveCwd = extractCwdFromCommand(shellCommand, workingDir);
   console.log('[LifeAiCode][executeShellCommand] workingDir:', workingDir, 'effectiveCwd:', effectiveCwd);
 
+  // PTY 路径：若 node-pty 可用且命令被判定为"需要 TTY 交互"（脚手架 / 安装向导等），
+  // 直接走 pty.spawn()，避免先 spawn 普通进程再转 PTY 导致双进程竞争同一目录。
+  // 普通命令（非交互）继续走 spawn 路径，避免 pty 的额外开销。
+  // §提前到 detectShellFileChanges 之前：PTY 路径有自己的快照逻辑，避免大目录重复扫描。
+  if (pty && needsPtyForCommand(shellCommand)) {
+    return executeShellWithPty(id, shellCommand, effectiveCwd, pty);
+  }
+
   // §命令执行前后对 cwd 做快照，用于检测 shell 产生的文件变更（如 create-vite）
-  const getShellChanges = await detectShellFileChanges(effectiveCwd);
+  // 非阻塞：不 await，后台启动"before"快照。proc 立即 spawn 并注册到 activeProcs，
+  // 避免 waitShellCompletion 在大目录扫描期间（可能数秒）找不到 proc 而报"进程不存在"。
+  // 快照 Promise 存到 entry，proc.on('close') 时才 await 获取 diff 函数。
+  const shellChangesPromise = detectShellFileChanges(effectiveCwd);
 
   // 平台相关 shell 选择
   const isWindows = process.platform === 'win32';
   const shell = isWindows ? 'cmd.exe' : '/bin/sh';
   const shellArgs = isWindows ? ['/c', shellCommand] : ['-c', shellCommand];
-
-  // PTY 路径：若 node-pty 可用且命令被判定为"需要 TTY 交互"（脚手架 / 安装向导等），
-  // 直接走 pty.spawn()，避免先 spawn 普通进程再转 PTY 导致双进程竞争同一目录。
-  // 普通命令（非交互）继续走 spawn 路径，避免 pty 的额外开销。
-  if (pty && needsPtyForCommand(shellCommand)) {
-    return executeShellWithPty(id, shellCommand, effectiveCwd, pty);
-  }
 
   let proc;
   try {
@@ -493,11 +505,13 @@ async function executeShellCommand(id, shellCommand, cwd) {
     proc,
     finished: false,
     cwd: effectiveCwd,
+    cmd: shellCommand, // §后台任务管理器：deferred 时需要记录命令名
     buffers: { stdout: '', stderr: '' },
     fullOutput: '',
     outputTruncated: false,
     result: null,
     isLongRunning,
+    shellChangesPromise, // §非阻塞快照 Promise，proc.on('close') 时 await 获取 diff 函数
   };
   activeProcs.set(id, entry);
 
@@ -583,9 +597,15 @@ async function executeShellCommand(id, shellCommand, cwd) {
         console.error('[LifeAiCode][executeShellCommand] error checking cwd:', err);
       }
       // §检测并上报 shell 产生的文件变更
+      // 非阻塞快照：先 await Promise 获取 diff 函数（此时 before 快照应已完成），再执行 after diff
       (async () => {
-        const changes = getShellChanges ? await getShellChanges() : null;
-        postShellFileChanges(effectiveCwd, changes);
+        try {
+          const getShellChanges = await entry.shellChangesPromise;
+          const changes = getShellChanges ? await getShellChanges() : null;
+          postShellFileChanges(effectiveCwd, changes);
+        } catch (e) {
+          console.warn('[LifeAiCode] shell file change detection failed:', e && e.message);
+        }
       })();
     }
     // 唤醒在等结果的人（Agent tool）
@@ -603,6 +623,25 @@ async function executeShellCommand(id, shellCommand, cwd) {
     if (waiter) {
       pendingShellWaits.delete(id);
       waiter.resolve(result);
+    }
+    // §后台任务管理器：如果该 shell 已被 defer（超阈值转入后台），
+    // Agent waiter 已在阈值时拿到 deferred 响应继续主流程了，
+    // 这里进程真正结束 → 通知 webview 后台任务完成，让用户看到最终结果。
+    if (deferredShells.has(id)) {
+      const deferred = deferredShells.get(id);
+      deferredShells.delete(id);
+      const tailOutput = entry.fullOutput.length > 4096
+        ? '…(已截断)…\n' + entry.fullOutput.slice(-4096)
+        : entry.fullOutput;
+      postToWebView({
+        type: 'deferredShellDone',
+        id, shellCommand,
+        exitCode: code ?? undefined,
+        success: code === 0,
+        deferredDurationMs: Date.now() - deferred.deferredAt,
+        output: tailOutput,
+      });
+      console.log('[LifeAiCode][executeShellCommand] deferred shell completed:', id, 'exit:', code);
     }
     activeProcs.delete(id);
   });
@@ -668,7 +707,9 @@ function needsPtyForCommand(shellCommand) {
  * - 退出时清理资源 + 唤醒 Agent waiter
  */
 function extractCwdFromCommand(shellCommand, fallbackCwd) {
-  const match = shellCommand.match(/^cd\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*&&/);
+  // §支持两种 cd 分隔方式：`cd /path && ...` 和 `cd /path\n...`（多行命令）
+  // LLM 常生成多行命令（换行符分隔），原正则只匹配 && 导致 cwd 提取失败
+  const match = shellCommand.match(/^cd\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*(?:&&|\n|$)/);
   if (match) {
     const dir = (match[1] || match[2] || match[3]).trim();
     if (path.isAbsolute(dir)) return dir;
@@ -678,10 +719,26 @@ function extractCwdFromCommand(shellCommand, fallbackCwd) {
 }
 
 function ensureNpxYes(shellCommand) {
-  // 非交互场景下给 npx 加上 --yes，避免“Need to install... Ok to proceed?”卡住。
-  // 只在 npx 作为命令出现时替换（行首或 ; && || | 之后），避免改掉字符串里的 npx。
+  // §非交互场景下给 npx / npm create / npm init 加上 --yes，
+  // 避免 "Need to install... Ok to proceed?" 卡住。
+  // PTY 模式下后续的 `; exit` 会被 npm 的确认提示读作回答（非 y），导致 exit code 1。
+  // 只在命令出现时替换（行首或 ; && || | 之后），避免改掉字符串里的命令名。
+
+  // 1. npx → npx --yes
   if (/\bnpx\s+(?:-y|--yes)\b/.test(shellCommand)) return shellCommand;
-  return shellCommand.replace(/(^|[;&|]\s*)\bnpx\b(\s+)/g, '$1npx --yes$2');
+  let result = shellCommand.replace(/(^|[;&|\n]\s*)\bnpx\b(\s+)/g, '$1npx --yes$2');
+
+  // 2. npm create → npm create --yes（npm create 本质是 npm exec，需要 --yes 跳过包安装确认）
+  if (/\bnpm\s+create\s+(?:-y|--yes)\b/.test(result)) return result;
+  result = result.replace(/(^|[;&|\n]\s*)(npm\s+create)\b(\s+)/g, '$1$2 --yes$3');
+
+  // 3. npm init <pkg> → npm init --yes <pkg>（npm init 初始化项目时也有确认）
+  //    注意：只处理 `npm init <非全 flag>`，不处理 `npm init -y`（已带 yes）
+  if (!/\bnpm\s+init\s+(?:-y|--yes)\b/.test(result)) {
+    result = result.replace(/(^|[;&|\n]\s*)(npm\s+init)\b(\s+(?!-))/g, '$1$2 --yes$3');
+  }
+
+  return result;
 }
 
 async function executeShellWithPty(id, shellCommand, cwd, ptyModule) {
@@ -693,7 +750,9 @@ async function executeShellWithPty(id, shellCommand, cwd, ptyModule) {
   console.log('[LifeAiCode][executeShellWithPty] using pty:', { id, shellCommand: finalCommand, cwd: effectiveCwd });
 
   // §命令执行前后对 cwd 做快照，用于检测 shell 产生的文件变更（如 create-vite）
-  const getShellChanges = await detectShellFileChanges(effectiveCwd);
+  // 非阻塞：不 await，后台启动"before"快照。pty 立即 spawn 并注册到 activeProcs，
+  // 避免 waitShellCompletion 在大目录扫描期间找不到 proc 而报"进程不存在"。
+  const shellChangesPromise = detectShellFileChanges(effectiveCwd);
 
   // 复用现有 activeProcs 注册（用 proc 字段保存 pty 句柄，close 事件用 onExit 代替）
   const isLongRunning = detectLongRunningCommand(finalCommand);
@@ -715,7 +774,7 @@ async function executeShellWithPty(id, shellCommand, cwd, ptyModule) {
       name: 'xterm-256color',
       cols: 120,
       rows: 30,
-      cwd: effectiveCwd || process.cwd(),
+      cwd: effectiveCwd || os.homedir(),
       env: { ...process.env, FORCE_COLOR: '1' },
     });
   } catch (err) {
@@ -737,6 +796,7 @@ async function executeShellWithPty(id, shellCommand, cwd, ptyModule) {
     result: null,
     isLongRunning,
     isPty: true,
+    shellChangesPromise, // §非阻塞快照 Promise，onExit 时 await 获取 diff 函数
   };
   activeProcs.set(id, entry);
 
@@ -834,9 +894,15 @@ async function executeShellWithPty(id, shellCommand, cwd, ptyModule) {
           console.error('[LifeAiCode][executeShellWithPty] error checking cwd:', err);
         }
         // §检测并上报 shell 产生的文件变更
+        // 非阻塞快照：先 await Promise 获取 diff 函数（此时 before 快照应已完成），再执行 after diff
         (async () => {
-          const changes = getShellChanges ? await getShellChanges() : null;
-          postShellFileChanges(notifyCwd, changes);
+          try {
+            const getShellChanges = await entry.shellChangesPromise;
+            const changes = getShellChanges ? await getShellChanges() : null;
+            postShellFileChanges(notifyCwd, changes);
+          } catch (e) {
+            console.warn('[LifeAiCode][pty] shell file change detection failed:', e && e.message);
+          }
         })();
       }
     }
@@ -945,13 +1011,57 @@ function killShellCommand(id) {
  * @param {number} timeoutMs 超时（默认 60s）
  * @returns {Promise<{success, exitCode, output, error?}>}
  */
-function waitShellCompletion(id, timeoutMs = 60_000) {
+function waitShellCompletion(id, timeoutMs = 5 * 60_000) {
   // Bug 11: 进程已结束（含 spawn 失败）且存有 result → 直接返回
   const entry = activeProcs.get(id);
   if (entry && entry.finished && entry.result) {
     activeProcs.delete(id);
     return Promise.resolve(entry.result);
   }
+  // §竞态修复：executeShellCommand 是 async 函数（await detectShellFileChanges），
+  // 调用方 context.executeShell 不 await → waitShellCompletion 可能在 proc 注册前就被调用。
+  // 此时 activeProcs 和 pendingShellWaits 都没有记录，返回 100ms 后重试一次。
+  if (!activeProcs.has(id) && !pendingShellWaits.has(id)) {
+    console.log('[LifeAiCode][waitShellCompletion] proc not found, retrying in 100ms:', id);
+    return new Promise((resolve) => {
+      setTimeout(() => {
+        // 重试：proc 可能已注册
+        const retryEntry = activeProcs.get(id);
+        const retryWaiter = pendingShellWaits.get(id);
+        if (retryEntry && retryEntry.finished && retryEntry.result) {
+          activeProcs.delete(id);
+          resolve(retryEntry.result);
+          return;
+        }
+        if (retryEntry && retryEntry.isLongRunning && !retryEntry.finished && retryEntry.proc && retryEntry.proc.pid) {
+          console.log('[LifeAiCode][waitShellCompletion] long-running detected on retry:', id);
+          resolve({
+            success: true,
+            longRunning: true,
+            message: '长驻进程已在后台启动',
+            output: retryEntry.fullOutput || '',
+          });
+          return;
+        }
+        if (!activeProcs.has(id) && !pendingShellWaits.has(id)) {
+          // 重试后仍然没有 → 真的不存在
+          console.warn('[LifeAiCode][waitShellCompletion] proc still not found after retry:', id);
+          resolve({ success: false, error: 'shell 进程未运行或不存在' });
+          return;
+        }
+        // proc 已注册但未完成 → 走正常等待路径（递归调用）
+        resolve(waitShellCompletionInternal(id, timeoutMs));
+      }, 100);
+    });
+  }
+  return waitShellCompletionInternal(id, timeoutMs);
+}
+
+/**
+ * waitShellCompletion 内部实现：proc 已注册后的等待逻辑
+ */
+function waitShellCompletionInternal(id, timeoutMs = 5 * 60_000) {
+  const entry = activeProcs.get(id);
   // 长驻进程（dev server / watch / tail -f 等）：spawn 后立即返回 success，
   // 让 Agent tool 拿到"已在后台启动"的确认，不阻塞后续步骤。
   // 后续 stdout/stderr 仅节流推送到 webview（5s/次）且不进入 LLM 上下文。
@@ -972,15 +1082,19 @@ function waitShellCompletion(id, timeoutMs = 60_000) {
     return Promise.resolve({ success: false, error: 'shell 进程未运行或不存在' });
   }
   // 已有 waiter 在等 → 复用
+  // §同步阻塞模式：不再有 30s deferred 阈值竞争，命令必须执行完毕才放行。
+  // Agent 主流程在每个 shell 上阻塞等待，完成后继续下一步，类似微任务/宏任务模式：
+  // shell = 同步屏障，主流程被卡住直到 shell 完成，所有 shell 完成后继续渲染主线。
   const existing = pendingShellWaits.get(id);
   if (existing) {
-    return new Promise((resolve, reject) => {
+    // realWait：等待进程真正完成
+    const realWait = new Promise((resolve, reject) => {
       const prev = existing;
       // 包一层：之前已注册的 resolve 也会被这个新 resolve 拿到结果
       const wrappedResolve = (v) => { prev.resolve(v); resolve(v); };
       const wrappedReject = (e) => { prev.reject(e); reject(e); };
       pendingShellWaits.set(id, { resolve: wrappedResolve, reject: wrappedReject });
-      // 设超时
+      // 设超时（默认 60s，由调用方传入；5 分钟兜底超时在 proc 层面已设置）
       setTimeout(() => {
         if (pendingShellWaits.get(id)?.resolve === wrappedResolve) {
           pendingShellWaits.delete(id);
@@ -988,8 +1102,58 @@ function waitShellCompletion(id, timeoutMs = 60_000) {
         }
       }, timeoutMs);
     });
+    return realWait;
   }
   return Promise.resolve({ success: false, error: 'shell 进程未运行' });
+}
+
+/**
+ * §后台任务管理器：获取 deferred 队列状态。
+ * Agent 主循环结束后调用此方法，检查是否有后台 shell 仍在执行。
+ * @returns {{pending: number, shells: Array<{id, cmd, cwd, deferredAt, elapsedMs}>}}
+ */
+function getDeferredShellsStatus() {
+  const shells = [];
+  for (const [id, info] of deferredShells) {
+    const entry = info.entry;
+    if (entry && entry.finished) {
+      // 进程已结束但 deferredShells 尚未清理（proc.on('close') 会清理）
+      continue;
+    }
+    shells.push({
+      id,
+      cmd: info.cmd || '',
+      cwd: info.cwd || '',
+      deferredAt: info.deferredAt,
+      elapsedMs: Date.now() - info.deferredAt,
+    });
+  }
+  return { pending: shells.length, shells };
+}
+
+/**
+ * §后台任务管理器：等待所有 deferred shell 完成（带最大等待时间）。
+ * Agent 主循环结束后调用，轮询直到全部完成或超时。
+ * @param {number} maxWaitMs 最大等待时间（默认 120s）
+ * @param {AbortSignal} signal 取消信号
+ * @returns {Promise<{pending: number, shells: Array, completed: Array}>}
+ */
+async function waitForDeferredShells(maxWaitMs = 120_000, signal) {
+  const completed = [];
+  const start = Date.now();
+  while (Date.now() - start < maxWaitMs) {
+    if (signal && signal.aborted) break;
+    const status = getDeferredShellsStatus();
+    if (status.pending === 0) break;
+    // 每 3 秒检查一次
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+  const finalStatus = getDeferredShellsStatus();
+  return {
+    pending: finalStatus.pending,
+    shells: finalStatus.shells,
+    completed,
+  };
 }
 
 /**
@@ -1643,6 +1807,9 @@ async function activate(context) {
     postToWebView,
     executeShell: executeShellCommand,
     waitShellCompletion,
+    // §后台任务管理器：供 agentRuntime 在主循环结束后检查/等待 deferred shell
+    getDeferredShellsStatus,
+    waitForDeferredShells,
     registerPendingEdit: (editId, edit) => {
       pendingAgentEdits.set(editId, edit);
       // §Agent 自动模式：注册后立即落盘，避免 webview 往返确认产生的 race/丢消息。

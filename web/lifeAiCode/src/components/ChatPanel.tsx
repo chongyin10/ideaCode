@@ -8,11 +8,11 @@ import { ToolCallLog } from './agent/ToolCallLog';
 import { DiffConfirmDialog } from './agent/DiffConfirmDialog';
 import type { PlanStep } from './agent/PlanChecklist';
 import { TodoDropdown } from './agent/TodoDropdown';
+
 import { AgentStatusSummary } from './agent/AgentStatusSummary';
 import { PlanTaskPanel } from './agent/PlanTaskPanel';
 import { TaskSummary } from './agent/TaskSummary';
 import { TodoListBlock } from './agent/TodoListBlock';
-import { InputPlanBar } from './agent/InputPlanBar';
 import { ShieldCheck, Brain, Pencil, ArrowDown, User, Sparkles, Paperclip, Send, MessageSquare, Loader2, Check, Square, ChevronDown, X, GripVertical, Code2, MessageCircleQuestion, FileText, Terminal, RefreshCw, Network, Lightbulb, GitCompare, Trash2, Archive, MapPin, Undo2, Info, Copy } from 'lucide-react';
 
 /** 预处理：检测并补齐未闭合的 markdown 结构（供 chatResponse 处理时使用） */
@@ -199,7 +199,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
   const [currentHistoryId, setCurrentHistoryId] = useState<string | null>(null);
   const [historyDragId, setHistoryDragId] = useState<string | null>(null);
   const [historyDropTarget, setHistoryDropTarget] = useState<{ id: string; after: boolean } | null>(null);
-  const [shellOutputs, setShellOutputs] = useState<Record<string, { output: string; status: 'running' | 'success' | 'error' | 'killed'; longRunning?: boolean }>>({});
+  const [shellOutputs, setShellOutputs] = useState<Record<string, { output: string; status: 'running' | 'success' | 'error' | 'killed' | 'deferred'; longRunning?: boolean; deferred?: boolean }>>({});
   const [notice, setNotice] = useState<{ level: 'info' | 'success' | 'warning' | 'error'; message: string; id: number } | null>(null);
   const [agentStatus, setAgentStatus] = useState<{ status: string; message: string; stepType?: string } | null>(null);
   const [toolCalls, setToolCalls] = useState<ToolCallInfo[]>([]);
@@ -808,6 +808,72 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
                 return next;
               });
             }, 30_000);
+          }
+          break;
+        }
+        // §后台任务管理器：命令执行超阈值后转入后台队列
+        case 'shellDeferred': {
+          console.log('[LifeAiCode WebView] shellDeferred received:', { id: msg.id, shellCommand: msg.shellCommand });
+          setShellOutputs((prev) => {
+            const existing = prev[msg.id];
+            return {
+              ...prev,
+              [msg.id]: {
+                output: (existing?.output || '') + (msg.message ? `\n⏳ ${msg.message}\n` : ''),
+                status: 'deferred',
+                deferred: true,
+                longRunning: existing?.longRunning === true,
+              },
+            };
+          });
+          break;
+        }
+        // §后台任务管理器：后台命令执行完成
+        case 'deferredShellDone': {
+          console.log('[LifeAiCode WebView] deferredShellDone received:', { id: msg.id, success: msg.success, exitCode: msg.exitCode });
+          setShellOutputs((prev) => {
+            const existing = prev[msg.id];
+            if (!existing) return prev;
+            const durationSec = msg.deferredDurationMs ? Math.round(msg.deferredDurationMs / 1000) : 0;
+            const tailOutput = msg.output || '';
+            const statusText = msg.success
+              ? `✅ 后台任务完成（耗时 ${durationSec}s）`
+              : `❌ 后台任务失败（exit code ${msg.exitCode}）`;
+            return {
+              ...prev,
+              [msg.id]: {
+                output: (existing.output || '') + `\n${statusText}\n` + tailOutput,
+                status: msg.success ? 'success' : 'error',
+                deferred: true,
+                longRunning: existing?.longRunning === true,
+              },
+            };
+          });
+          // 延迟清理
+          const shellId = msg.id;
+          setTimeout(() => {
+            setShellOutputs((prev) => {
+              if (!prev[shellId]) return prev;
+              const next = { ...prev };
+              delete next[shellId];
+              return next;
+            });
+          }, 30_000);
+          break;
+        }
+        // §后台任务管理器：Agent 主循环结束后等待后台任务
+        case 'deferredWaitStart': {
+          const shellList = (msg.shells || [])
+            .map((s: { cmd: string }, i: number) => `${i + 1}. \`${s.cmd}\``)
+            .join('  ');
+          setAgentStatus({ status: 'running', message: `等待 ${msg.pending} 个后台任务完成：${shellList}`, stepType: 'deferred' });
+          break;
+        }
+        case 'deferredWaitDone': {
+          if (msg.pending === 0) {
+            setAgentStatus({ status: 'done', message: '所有后台任务已完成', stepType: 'deferred' });
+          } else {
+            setAgentStatus({ status: 'done', message: `${msg.pending} 个后台任务仍在执行中`, stepType: 'deferred' });
           }
           break;
         }
@@ -1777,9 +1843,6 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
           还有 {pendingAgentEdits.length - 1} 个编辑待确认
         </div>
       )}
-
-      {/* 输入框上方计划任务条：有任务时默认展开 */}
-      <InputPlanBar steps={planSteps} />
 
       {/* Input bar */}
       <div className="input-bar">

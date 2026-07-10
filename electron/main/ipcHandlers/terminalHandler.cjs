@@ -293,7 +293,7 @@ async function createTerminalProcess(config, cwd, cols, rows, ownerWindow, owner
       id,
       type: 'ready',
       pid: -1,
-      cwd: cwd || process.cwd(),
+      cwd: cwd || os.homedir(),
     });
     // 发送欢迎信息
     ownerWebContents.send(Channels.TERMINAL_OUTPUT, {
@@ -328,13 +328,13 @@ async function createTerminalProcess(config, cwd, cols, rows, ownerWindow, owner
   }
 
   // 校验工作目录：不存在则回退到进程当前目录
-  let workDir = cwd || config.cwd || process.cwd();
+  let workDir = cwd || config.cwd || os.homedir();
   try {
     if (!fs.statSync(workDir).isDirectory()) {
-      workDir = process.cwd();
+      workDir = os.homedir();
     }
   } catch {
-    workDir = process.cwd();
+    workDir = os.homedir();
   }
 
   const id = nextTerminalId++;
@@ -523,7 +523,7 @@ async function getTerminalCwd(id) {
 
   const platform = os.platform();
   if (platform === 'win32') {
-    return process.cwd(); // Windows 暂不实现
+    return os.homedir(); // Windows 暂不实现
   }
 
   // Unix: 通过 lsof 或 /proc 获取 cwd
@@ -537,7 +537,7 @@ async function getTerminalCwd(id) {
   } catch (e) {
     // fallback
   }
-  return process.cwd();
+  return os.homedir();
 }
 
 /**
@@ -551,7 +551,7 @@ function getLayout() {
         id: term.id,
         pid: term.pty?.pid,
         config: term.config,
-        cwd: process.cwd(),
+        cwd: term.config?.cwd || os.homedir(),
       });
     }
   });

@@ -21,7 +21,10 @@ const { Planner } = require('./planner');
 const { AuditLogger } = require('./auditLogger');
 const { estimateTokens, estimateStringTokens } = require('./modelContextWindow');
 
-const MAX_ROUNDS = 10;
+// §需求：创建项目/多文件任务需要大量 tool_call 轮次（每个文件至少一轮），
+// 10 轮远不够（标准 Vite+React 项目就有 8-10 个文件 + npm install）。
+// 增大到 30，确保复杂任务能完整执行。
+const MAX_ROUNDS = 30;
 const DEFAULT_TIMEOUT = 5 * 60 * 1000; // 5 分钟
 // §需求8-阶段3：自动压缩阈值（占 contextWindow 的比例）
 const AUTO_COMPACT_THRESHOLD = 0.8;
@@ -187,7 +190,7 @@ class AgentRuntime {
           signal,
         });
 
-        // 统一处理返回值：native 返回 { content, toolCalls }，prompt-based 返回字符串
+        // 统一处理返回值：returnRaw=true 时 native 和 prompt-based 均返回 { content, toolCalls, reasoningContent }
         let responseContent = '';
         let responseObject = null;
         if (response && typeof response === 'object') {
@@ -243,6 +246,11 @@ class AgentRuntime {
         finalResponse = (finalResponse || '') + `\n\n[已达到最大轮次 ${MAX_ROUNDS}，任务自动停止。如需继续，请重新发起。]`;
         this._notifyStep('done', `达到最大轮次 ${MAX_ROUNDS}，任务停止`);
       }
+
+      // §同步阻塞模式：shell 命令在主循环中已同步等待完成（waitShellCompletion 阻塞），
+      // 不再有 deferred 后台队列。主循环结束 = 所有 shell 已完成，直接触发 onDone。
+      // 类似微任务/宏任务模式：shell = 同步屏障，主流程被卡住直到 shell 完成，
+      // 所有 shell 完成后继续渲染主线。若主线中再次遇到 shell，同样阻塞等待。
 
       if (typeof onDone === 'function') {
         onDone(finalResponse);

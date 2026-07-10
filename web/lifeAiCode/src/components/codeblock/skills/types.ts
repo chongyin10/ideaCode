@@ -7,8 +7,8 @@
 
 import type { ReactNode } from 'react';
 
-/** 终端输出状态：running 执行中 / success 完成 / error 失败 / killed 已停止 */
-export type ShellStatus = 'running' | 'success' | 'error' | 'killed';
+/** 终端输出状态：running 执行中 / success 完成 / error 失败 / killed 已停止 / deferred 已转入后台 */
+export type ShellStatus = 'running' | 'success' | 'error' | 'killed' | 'deferred';
 
 /** shellOutputs map：以 execId 为 key 存储每个执行实例的输出 */
 export type ShellOutputsMap = Record<
@@ -18,6 +18,8 @@ export type ShellOutputsMap = Record<
     status: ShellStatus;
     /** 长驻进程（dev server / watch / tail -f 等）：spawn 后已脱离 Agent 同步等待，仅节流推送日志 */
     longRunning?: boolean;
+    /** §后台任务管理器：命令执行超阈值后转入后台队列，不阻塞 Agent 主流程 */
+    deferred?: boolean;
   }
 >;
 
