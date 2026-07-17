@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useEffect } from 'react';
+import { useState, useMemo, useRef, useEffect, memo, useDeferredValue } from 'react';
 import {
   Brain, Bot, Pencil, Terminal, FileText, Search, Info,
   ChevronDown, Copy, Check, Loader2, X,
@@ -200,7 +200,7 @@ function extractTitle(blocks: ContentBlockType[]): string {
   if (shellCount > 0) return `执行 ${shellCount} 个命令`;
   if (editCount > 0) return `编辑 ${editCount} 个文件`;
   if (fileStatusCount > 0) return `更新 ${fileStatusCount} 个文件`;
-  return 'AI 回复';
+  return '回复';
 }
 
 function stepLabel(stepType: StepType): string {
@@ -237,7 +237,7 @@ interface ContentBlocksProps {
   agentStatus?: { status: string; message?: string; stepType?: string } | null;
 }
 
-export function ContentBlocks({
+function ContentBlocksBase({
   content,
   role = 'assistant',
   shellOutputs = {},
@@ -253,7 +253,11 @@ export function ContentBlocks({
   provider = 'custom',
   agentStatus,
 }: ContentBlocksProps) {
-  const blocks = useMemo(() => parseContentBlocks(content, provider), [content, provider]);
+  // §useDeferredValue：流式更新时 content 高频变化，markdown 解析（parseContentBlocks）
+  // 是 CPU 密集操作。useDeferredValue 让 React 在空闲时才用新 content 重新解析，
+  // 高优先级更新（如用户滚动、输入）不会被阻塞。已完成的消息不受影响（content 稳定）。
+  const deferredContent = useDeferredValue(content);
+  const blocks = useMemo(() => parseContentBlocks(deferredContent, provider), [deferredContent, provider]);
   const title = useMemo(() => extractTitle(blocks), [blocks]);
   const hasRunning = blocks.some((b) =>
     (b.type === 'step' && b.status === 'running') ||
@@ -320,6 +324,25 @@ export function ContentBlocks({
     </MessageCard>
   );
 }
+
+/**
+ * §性能优化：用 memo 包装 ContentBlocks，避免流式更新最后一条消息时
+ * 所有历史消息都重新解析 markdown（parseContentBlocks 是 CPU 密集操作）。
+ * 回调函数（onExecuteShell 等）不参与比较——它们都是 postMessage 的稳定包装。
+ */
+export const ContentBlocks = memo(ContentBlocksBase, (prev, next) => {
+  return (
+    prev.content === next.content &&
+    prev.role === next.role &&
+    prev.completed === next.completed &&
+    prev.incomplete === next.incomplete &&
+    prev.provider === next.provider &&
+    prev.providerLabel === next.providerLabel &&
+    prev.modelLabel === next.modelLabel &&
+    prev.agentStatus === next.agentStatus &&
+    prev.shellOutputs === next.shellOutputs
+  );
+});
 
 /* ─────────────────────────────────────────────────────────────────── */
 /*  User Bubble (with copy action)                                    */
@@ -624,18 +647,20 @@ function ToolCall({
     } catch { /* ignore */ }
   };
 
+  // §状态徽章：与 ShellGroup 的 .shell-group__status 统一为 22×22 纯图标圆形，
+  // 避免同一界面出现两种风格的状态指示器导致参差不齐。
   const statusBadge =
     status === 'running' ? (
-      <span className="tool-call-status tool-call-status--running">
+      <span className="tool-call-status tool-call-status--running" title="运行中">
         <Loader2 size={11} strokeWidth={2.4} className="tool-call-status__spinner" />
-        运行中
       </span>
     ) : status === 'error' ? (
-      <span className="tool-call-status tool-call-status--error">✕ 失败</span>
+      <span className="tool-call-status tool-call-status--error" title="失败">
+        <X size={11} strokeWidth={2.5} />
+      </span>
     ) : (
-      <span className="tool-call-status tool-call-status--success">
+      <span className="tool-call-status tool-call-status--success" title="完成">
         <Check size={11} strokeWidth={2.5} />
-        完成
       </span>
     );
 

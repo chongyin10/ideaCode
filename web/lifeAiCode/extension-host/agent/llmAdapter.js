@@ -69,6 +69,13 @@ class LlmAdapter {
    execute_shell: command="mkdir -p src && cat > src/App.tsx << 'EOF'\nimport React from 'react'\nexport default function App() { return <div>Hello</div> }\nEOF"
 3. **避免逐个调用 write_file 创建项目文件**——write_file 只生成待确认建议，不会立即落盘，批量调用会导致所有文件都卡在待确认队列，用户需要逐个确认，体验极差。
 4. write_file 适用于：用户明确要求"生成修改建议"的场景，而非需要立即生效的文件创建。
+5. **create-vite 等脚手架命令如果目标目录已存在会自动覆盖**——执行环境已自动追加 \`--force\`，无需手动 \`rmdir\` / \`rm -rf\`。如果确实需要保留旧目录，请选择新的项目名。
+
+## Node.js 版本兼容性（重要）
+当前运行环境可能是 Node.js 18。create-vite@latest（v9+）要求 Node ≥ 20.19，在 Node 18 上会崩溃。
+- **创建 Vite 项目时务必使用 create-vite@5**（而非 @latest），例如：npx create-vite@5 my-app -- --template react-ts
+- create-vite@5 完全兼容 Node 18，生成的项目结构与 @latest 基本一致。
+- 其他脚手架（create-react-app 等）如遇类似 EBADENGINE 错误，同样需要指定兼容版本号。
 
 ## 任务完成判断
 - 只有当所有文件已真正创建（通过 execute_shell）或所有修改建议已生成（通过 write_file/apply_edit）时，才可宣布任务完成。
@@ -118,6 +125,13 @@ class LlmAdapter {
    execute_shell: command="mkdir -p src && cat > src/App.tsx << 'EOF'\nimport React from 'react'\nexport default function App() { return <div>Hello</div> }\nEOF"
 3. **避免逐个调用 write_file 创建项目文件**——write_file 只生成待确认建议，不会立即落盘，批量调用会导致所有文件都卡在待确认队列，用户需要逐个确认，体验极差。
 4. write_file 适用于：用户明确要求"生成修改建议"的场景，而非需要立即生效的文件创建。
+5. **create-vite 等脚手架命令如果目标目录已存在会自动覆盖**——执行环境已自动追加 \`--force\`，无需手动 \`rmdir\` / \`rm -rf\`。如果确实需要保留旧目录，请选择新的项目名。
+
+## Node.js 版本兼容性（重要）
+当前运行环境可能是 Node.js 18。create-vite@latest（v9+）要求 Node ≥ 20.19，在 Node 18 上会崩溃。
+- **创建 Vite 项目时务必使用 create-vite@5**（而非 @latest），例如：npx create-vite@5 my-app -- --template react-ts
+- create-vite@5 完全兼容 Node 18，生成的项目结构与 @latest 基本一致。
+- 其他脚手架（create-react-app 等）如遇类似 EBADENGINE 错误，同样需要指定兼容版本号。
 
 ## 任务完成判断
 - 只有当所有文件已真正创建（通过 execute_shell）或所有修改建议已生成（通过 write_file/apply_edit）时，才可宣布任务完成。

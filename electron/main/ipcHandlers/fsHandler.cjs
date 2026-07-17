@@ -476,7 +476,8 @@ function registerFsHandlers() {
         if (isTruncated) {
           scheduleFlush();
           // 命中上限，主动终止 rg
-          currentSearch.cancelled = true;
+          // §currentSearch 可能已被 cancelCurrentSearch() 置为 null（用户快速切换搜索）
+          if (currentSearch) currentSearch.cancelled = true;
           try { proc.kill('SIGTERM'); } catch { /* 已退出 */ }
           return;
         }

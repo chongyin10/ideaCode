@@ -49,15 +49,27 @@
   top: 0;
   left: 0;
   bottom: 0;
-  width: 4px;
+  width: 8px;
   cursor: ew-resize;
   z-index: 10;
   background: transparent;
   transition: background-color 0.15s ease;
 }
 
-.right-panel__resize-handle:hover {
-  background-color: rgba(0, 122, 204, 0.5);
+.right-panel__resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 3px;
+  bottom: 0;
+  width: 2px;
+  background: transparent;
+  transition: background-color 0.15s ease;
+}
+
+.right-panel__resize-handle:hover::after,
+.right-panel.is-resizing .right-panel__resize-handle::after {
+  background-color: rgba(0, 122, 204, 0.8);
 }
 
 /* ─── tab 栏 ─── */

@@ -200,6 +200,7 @@ const ExplorerContent = () => {
   const startResize = useCallback(
     (section: keyof SectionHeights, e: React.MouseEvent) => {
       e.preventDefault();
+      e.stopPropagation();
       setResizingSection(section);
 
       const handleRect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
@@ -219,16 +220,24 @@ const ExplorerContent = () => {
 
       const handleMouseUp = () => {
         setResizingSection(null);
-        document.removeEventListener('mousemove', handleMouseMove);
-        document.removeEventListener('mouseup', handleMouseUp);
+        window.removeEventListener('mousemove', handleMouseMove);
+        window.removeEventListener('mouseup', handleMouseUp);
         document.body.style.cursor = '';
         document.body.style.userSelect = '';
+        // §移除拖拽遮罩，恢复鼠标事件
+        overlay.remove();
       };
+
+      // §拖拽遮罩：防止鼠标划过 iframe/webview 等元素时丢失 mousemove 事件
+      const overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;cursor:ns-resize;background:transparent;';
+      document.body.appendChild(overlay);
 
       document.body.style.cursor = 'ns-resize';
       document.body.style.userSelect = 'none';
-      document.addEventListener('mousemove', handleMouseMove);
-      document.addEventListener('mouseup', handleMouseUp);
+      // §使用 window 而非 document，在 Electron 中更可靠
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
     },
     []
   );

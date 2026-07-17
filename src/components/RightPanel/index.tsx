@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useRef } from 'react';
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { X, Maximize2, Minimize2 } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
@@ -44,7 +44,18 @@ const RightPanel = () => {
   const isMaximized = rightPanelMaximized;
   const [isResizing, setIsResizing] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
+  const overlayRef = useRef<HTMLDivElement | null>(null);
   const preMaximizeWidthRef = useRef(DEFAULT_WIDTH);
+
+  // 组件卸载时清理可能残留的拖拽遮罩
+  useEffect(() => {
+    return () => {
+      if (overlayRef.current) {
+        overlayRef.current.remove();
+        overlayRef.current = null;
+      }
+    };
+  }, []);
 
   // ── tab 拖拽状态 ──
   const [draggingTabId, setDraggingTabId] = useState<string | null>(null);
@@ -184,6 +195,16 @@ const RightPanel = () => {
       const startWidth = panelRef.current?.offsetWidth ?? panelWidth;
       const maxWidth = window.innerWidth * MAX_WIDTH_RATIO;
 
+      // 创建全屏遮罩，防止拖拽过程中 iframe/webview 窃取鼠标事件导致拖动失效/光标脱离
+      const overlay = document.createElement('div');
+      overlay.style.position = 'fixed';
+      overlay.style.inset = '0';
+      overlay.style.zIndex = '10000';
+      overlay.style.cursor = 'ew-resize';
+      overlay.style.userSelect = 'none';
+      document.body.appendChild(overlay);
+      overlayRef.current = overlay;
+
       const handleMouseMove = (event: MouseEvent) => {
         const delta = startX - event.clientX;
         const nextWidth = Math.max(MIN_WIDTH, Math.min(maxWidth, startWidth + delta));
@@ -200,6 +221,8 @@ const RightPanel = () => {
         document.removeEventListener('mouseup', handleMouseUp);
         document.body.style.cursor = '';
         document.body.style.userSelect = '';
+        overlayRef.current?.remove();
+        overlayRef.current = null;
       };
 
       document.body.style.cursor = 'ew-resize';

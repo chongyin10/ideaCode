@@ -281,6 +281,12 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
   currentHistoryIdRef.current = currentHistoryId;
   const messagesRef = useRef<ChatMessage[]>(messages);
   messagesRef.current = messages;
+  // §流式渲染节流：LLM 每个 token 都会 postToWebView 一次 chatResponse，
+  // 高频 setMessages 会导致 React 渲染队列积压（用户感知为"卡3秒后一下子输出很多"），
+  // 并可能触发样式错乱。用 rAF 合并同一帧内的多次 token 更新，保证渲染与刷新率同步。
+  const streamingUpdateRef = useRef<{ id: string; content: string; incomplete: boolean; incompleteReasons: string[] } | null>(null);
+  const streamingRafRef = useRef<number | null>(null);
+
   // §需求3：中止标志位。点击暂停时立即置 true，chatResponse 等消息回调看到 true
   // 就直接丢弃后续内容（阻断输出），避免后端无响应时 UI 卡死在 isProcessing=true
   const abortedRef = useRef<boolean>(false);
@@ -560,6 +566,12 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
           if (abortedRef.current) {
             // msg.done 时同时清掉占位 + 标记 streaming=false
             if (msg.done) {
+              // 取消 pending 的 rAF，避免中止后还有一次延迟渲染
+              if (streamingRafRef.current != null) {
+                cancelAnimationFrame(streamingRafRef.current);
+                streamingRafRef.current = null;
+              }
+              streamingUpdateRef.current = null;
               setMessages((prev) => {
                 const noPlaceholder = prev.filter((m) => !m.placeholder);
                 return noPlaceholder.map((m) =>
@@ -571,44 +583,83 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
             }
             return;
           }
-          let finalContent = msg.done ? finalizeSteps(msg.content) : msg.content;
-          let incomplete = false;
-          let incompleteReasons: string[] = [];
+
           if (msg.done) {
+            // §done 消息：立即处理，取消 pending 的 rAF 避免延迟渲染最终内容
+            if (streamingRafRef.current != null) {
+              cancelAnimationFrame(streamingRafRef.current);
+              streamingRafRef.current = null;
+            }
+            streamingUpdateRef.current = null;
+
+            let finalContent = finalizeSteps(msg.content);
             const processed = preprocessMarkdown(finalContent);
             finalContent = processed.processed;
-            incomplete = processed.incomplete;
-            incompleteReasons = processed.reasons;
-          }
-          setMessages((prev) => {
-            // AI 真正开始返回时，移除所有占位消息
-            const noPlaceholder = prev.filter((m) => !m.placeholder);
-            const existing = noPlaceholder.find((m) => m.id === msg.id);
-            if (existing) {
-              return noPlaceholder.map((m) =>
-                m.id === msg.id
-                  ? {
-                      ...m,
-                      content: finalContent,
-                      streaming: !msg.done,
-                      incomplete: msg.done ? incomplete : m.incomplete,
-                      incompleteReasons: msg.done ? incompleteReasons : m.incompleteReasons,
-                    }
-                  : m
-              );
-            }
-            return [...noPlaceholder, {
-              id: msg.id, role: 'assistant', content: finalContent,
-              timestamp: Date.now(), streaming: !msg.done,
-              incomplete, incompleteReasons,
-            }];
-          });
-          setIsProcessing(!msg.done);
-          if (msg.done) {
+            const incomplete = processed.incomplete;
+            const incompleteReasons = processed.reasons;
+
+            setMessages((prev) => {
+              const noPlaceholder = prev.filter((m) => !m.placeholder);
+              const existing = noPlaceholder.find((m) => m.id === msg.id);
+              if (existing) {
+                return noPlaceholder.map((m) =>
+                  m.id === msg.id
+                    ? {
+                        ...m,
+                        content: finalContent,
+                        streaming: false,
+                        incomplete,
+                        incompleteReasons,
+                      }
+                    : m
+                );
+              }
+              return [...noPlaceholder, {
+                id: msg.id, role: 'assistant', content: finalContent,
+                timestamp: Date.now(), streaming: false,
+                incomplete, incompleteReasons,
+              }];
+            });
+            setIsProcessing(false);
             // 对话结束：保留状态栏，显示"任务完成"
             setAgentStatus({ status: 'done', message: '任务完成', stepType: 'done' });
             // §需求4：固化最终耗时并停掉动态 tick（chatResponse 是最常见的"完成"路径）
             finalizeResponseTimer();
+          } else {
+            // §流式更新：缓存最新 content 到 ref，用 rAF 合并同一帧内的多次 token。
+            // 这样无论 LLM 每秒推送多少 token，setMessages 最多每帧执行一次（约 60fps），
+            // 避免渲染队列积压导致"卡3秒后一下子输出"和样式错乱。
+            streamingUpdateRef.current = {
+              id: msg.id,
+              content: msg.content,
+              incomplete: false,
+              incompleteReasons: [],
+            };
+            if (streamingRafRef.current == null) {
+              streamingRafRef.current = requestAnimationFrame(() => {
+                streamingRafRef.current = null;
+                const pending = streamingUpdateRef.current;
+                if (!pending) return;
+                streamingUpdateRef.current = null;
+                setMessages((prev) => {
+                  const noPlaceholder = prev.filter((m) => !m.placeholder);
+                  const existing = noPlaceholder.find((m) => m.id === pending.id);
+                  if (existing) {
+                    return noPlaceholder.map((m) =>
+                      m.id === pending.id
+                        ? { ...m, content: pending.content, streaming: true }
+                        : m
+                    );
+                  }
+                  return [...noPlaceholder, {
+                    id: pending.id, role: 'assistant', content: pending.content,
+                    timestamp: Date.now(), streaming: true,
+                    incomplete: false, incompleteReasons: [],
+                  }];
+                });
+              });
+            }
+            setIsProcessing(true);
           }
           break;
         }
@@ -1085,7 +1136,14 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
 
     window.addEventListener('message', handler);
     console.log('[LifeAiCode WebView] message listener attached');
-    return () => window.removeEventListener('message', handler);
+    return () => {
+      window.removeEventListener('message', handler);
+      // §清理 pending 的 rAF，避免组件卸载后仍触发 setMessages
+      if (streamingRafRef.current != null) {
+        cancelAnimationFrame(streamingRafRef.current);
+        streamingRafRef.current = null;
+      }
+    };
     // §4.5: deps 仅保留稳定的 vscode；autoAccept/pendingAgentEdit/onOpenConfig 通过 ref 读取
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vscode]);
@@ -1291,6 +1349,10 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
     setIsProcessing(false);
     setAgentStatus(null);
     setToolCalls((prev) => prev.map((t) => (t.status === 'running' ? { ...t, status: 'error' as const } : t)));
+    // §结束对话时：正在执行的步骤标记为失败，未执行的保持未执行
+    setPlanSteps((prev) => prev.map((s) =>
+      s.status === 'running' ? { ...s, status: 'error' as const } : s
+    ));
     // 把所有 streaming 消息标记为停止，并清掉占位消息
     setMessages((prev) => {
       const noPlaceholder = prev.filter((m) => !m.placeholder);
@@ -1625,6 +1687,12 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
 
             // 占位消息：渲染独立的"准备中"提示（必须在 streaming 过滤之前判断）
             if (msg.placeholder) {
+              // §即使已经切换到 Agent 面板，只要还没有实际内容（planSteps/toolCalls 都为空），
+              // 就继续显示 thinking indicator，避免用户以为界面卡住。
+              const hasAgentContent = planSteps.length > 0 || toolCalls.length > 0;
+              const thinkingText = agentStatus?.message
+                ? `正在处理：${agentStatus.message}`
+                : '正在思考';
               return (
                 <div key={msg.id} className="message-row message-row--assistant">
                   <div className="message-inner">
@@ -1632,11 +1700,21 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
                       <Sparkles size={16} strokeWidth={2} />
                     </div>
                     <div className="message-body">
-                      {showAgentPanel && (
-                        <>
-                          {agentMode && planSteps.length > 0 && <TodoListBlock steps={planSteps} defaultExpanded />}
-                          {agentMode && <ToolCallLog toolCalls={toolCalls} />}
-                        </>
+                      {agentMode && planSteps.length > 0 && <TodoListBlock steps={planSteps} defaultExpanded />}
+                      {agentMode && <ToolCallLog toolCalls={toolCalls} />}
+                      {(!showAgentPanel || !hasAgentContent) && (
+                        // §等待 LLM 首个 token / Agent 计划生成前的视觉反馈
+                        <div className="thinking-indicator">
+                          <span className="thinking-indicator__icon">
+                            <Sparkles size={14} strokeWidth={2} />
+                          </span>
+                          <span className="thinking-indicator__text">{thinkingText}</span>
+                          <span className="thinking-indicator__dots">
+                            <span className="thinking-indicator__dot" />
+                            <span className="thinking-indicator__dot" />
+                            <span className="thinking-indicator__dot" />
+                          </span>
+                        </div>
                       )}
                     </div>
                   </div>

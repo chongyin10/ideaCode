@@ -684,11 +684,15 @@ async function executeShellCommand(id, shellCommand, cwd) {
 function needsPtyForCommand(shellCommand) {
   if (!shellCommand) return false;
   const cmd = shellCommand.trim();
-  // 显式非交互（带 --yes / -y 等）时不强制 PTY
-  if (/\s(?:-y|--yes|--no-interactive)\b/.test(cmd)) return false;
   // 脚手架命令（npm create / yarn create / pnpm create / npx create-*）
+  // 必须优先判断：即使 LLM 已经带了 --yes，也统一走 PTY 路径。
+  // PTY 路径内部会通过 ensureNpxYes 再次追加 --yes/--force，行为一致；
+  // 若先按普通 spawn 执行，npx create-vite 仍可能因终端宽度/交互检测而卡住。
   if (/\b(?:npm|yarn|pnpm)\s+create\b/.test(cmd)) return true;
-  if (/\bnpx\s+create-[a-z-]+/.test(cmd)) return true;
+  // §匹配 npx create-* 以及 npx --yes/-y create-* 两种形式
+  if (/\bnpx(?:\s+(?:-y|--yes))?\s+create-[a-z-]+/.test(cmd)) return true;
+  // 显式非交互（带 --yes / -y 等）的非脚手架命令跳过 PTY
+  if (/\s(?:-y|--yes|--no-interactive)\b/.test(cmd)) return false;
   // 交互式 init
   if (/\binit\s*$/.test(cmd)) return true;
   // 其它典型需要 tty 的命令
@@ -736,6 +740,25 @@ function ensureNpxYes(shellCommand) {
   //    注意：只处理 `npm init <非全 flag>`，不处理 `npm init -y`（已带 yes）
   if (!/\bnpm\s+init\s+(?:-y|--yes)\b/.test(result)) {
     result = result.replace(/(^|[;&|\n]\s*)(npm\s+init)\b(\s+(?!-))/g, '$1$2 --yes$3');
+  }
+
+  // 4. §Node 18 兼容：create-vite@latest（v9+）要求 Node ≥ 20.19，在 Node 18 上
+  //    因缺少 node:util 的 styleText 导出而崩溃（exit code 1）。
+  //    自动降级为 create-vite@5（兼容 Node 18，项目结构基本一致）。
+  const majorNode = parseInt(process.versions.node.split('.')[0], 10);
+  if (majorNode && majorNode < 20) {
+    result = result.replace(/\bcreate-vite@latest\b/g, 'create-vite@5');
+    // npm create vite@latest → npm create vite@5
+    result = result.replace(/\bcreate\s+vite@latest\b/g, 'create vite@5');
+  }
+
+  // 5. §create-vite 自动追加 --force：如果 LLM 要创建的项目目录已存在，
+  //    create-vite 会失败并提示"Target directory already exists"。
+  //    这里在命令末尾追加 --force，让 create-vite 自动覆盖旧目录，
+  //    避免 Agent 因目录已存在而卡住。
+  if (/\bnpx(?:\s+(?:-y|--yes))?\s+create-vite(?:@\S+)?\s+\S+/.test(result) && !/\s--force\b/.test(result)) {
+    result += ' --force';
+    console.log('[LifeAiCode][ensureNpxYes] appended --force for create-vite:', result);
   }
 
   return result;
@@ -1298,12 +1321,23 @@ async function processMessage(text, context, options = {}) {
       // 原代码 fullResponse = continueFromContent + token 会丢失之前所有 delta
       let continuedContent = '';
       let responseTruncated = false;
+      // §流式节流：LLM 每个 SSE data 行都 emit token，高频 postToWebView 会
+      // 压垮 Electron IPC + WebView 渲染（用户感知为"卡3秒后一下子输出很多"）。
+      // 用时间戳节流，30ms 内最多发送一次，从源头减少消息量。
+      let lastStreamPostTime = 0;
+      let streamPostTimer = null;
+      const STREAM_THROTTLE_MS = 30;
+      const flushStreamContent = () => {
+        lastStreamPostTime = Date.now();
+        postToWebView({ type: 'chatResponse', id: msgId, content: fullResponse, done: false });
+      };
       tokenListener = (token) => {
         // 防止 LLM 超长响应（推理模型 + 多次续写）触发 Invalid string length
         if (responseTruncated) return;
         if (fullResponse.length + (token?.length || 0) > MAX_LLM_RESPONSE_CHARS) {
           responseTruncated = true;
           fullResponse += '\n\n> ⚠️ 响应过长，已停止累积（防止超出字符串长度上限）';
+          if (streamPostTimer) { clearTimeout(streamPostTimer); streamPostTimer = null; }
           postToWebView({ type: 'chatResponse', id: msgId, content: fullResponse, done: false });
           return;
         }
@@ -1313,12 +1347,17 @@ async function processMessage(text, context, options = {}) {
         } else {
           fullResponse += token;
         }
-        postToWebView({
-          type: 'chatResponse',
-          id: msgId,
-          content: fullResponse,
-          done: false,
-        });
+        // §节流：超过窗口立即发送，窗口内用定时器兜底确保最终内容不丢
+        const now = Date.now();
+        if (now - lastStreamPostTime >= STREAM_THROTTLE_MS) {
+          if (streamPostTimer) { clearTimeout(streamPostTimer); streamPostTimer = null; }
+          flushStreamContent();
+        } else if (!streamPostTimer) {
+          streamPostTimer = setTimeout(() => {
+            streamPostTimer = null;
+            flushStreamContent();
+          }, STREAM_THROTTLE_MS);
+        }
       };
       // 挂载并保存引用，便于下次请求时清理
       llmClient.on('token', tokenListener);
@@ -1341,6 +1380,15 @@ async function processMessage(text, context, options = {}) {
         try { llmClient.off('token', tokenListener); } catch { /* ignore */ }
         if (processMessage._lastTokenListener === tokenListener) {
           processMessage._lastTokenListener = null;
+        }
+      }
+      // §清理流式节流定时器，确保最后一个节流窗口的内容被发送
+      if (streamPostTimer) {
+        clearTimeout(streamPostTimer);
+        streamPostTimer = null;
+        // 流已结束，兜底发送最终累积内容（done 消息会紧随其后覆盖，但确保不丢内容）
+        if (fullResponse) {
+          postToWebView({ type: 'chatResponse', id: msgId, content: fullResponse, done: false });
         }
       }
     }

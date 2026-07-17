@@ -480,6 +480,53 @@ body {
      layout=隔离布局计算, style=隔离样式重算, paint=隔离绘制。 */
   contain: layout style paint;
 }
+
+/* ─── Thinking Indicator（等待 LLM 首个 token 时的视觉反馈） ─── */
+.thinking-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  width: fit-content;
+}
+.thinking-indicator__icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent-400);
+  animation: thinking-pulse 1.8s ease-in-out infinite;
+}
+.thinking-indicator__text {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--accent-400);
+  white-space: nowrap;
+}
+.thinking-indicator__dots {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+.thinking-indicator__dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent-400);
+  opacity: 0.4;
+  animation: thinking-bounce 1.4s ease-in-out infinite;
+}
+.thinking-indicator__dot:nth-child(2) { animation-delay: 0.18s; }
+.thinking-indicator__dot:nth-child(3) { animation-delay: 0.36s; }
+@keyframes thinking-pulse {
+  0%, 100% { opacity: 0.6; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.1); }
+}
+@keyframes thinking-bounce {
+  0%, 80%, 100% { opacity: 0.3; transform: translateY(0); }
+  40% { opacity: 1; transform: translateY(-4px); }
+}
 .message-row--user .message-body { align-items: flex-end; }
 
 /* Agent 执行面板嵌入消息体时，去掉外部边距 */
@@ -1387,13 +1434,11 @@ body {
 .tool-call-status {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  font-size: 10.5px;
-  font-weight: 600;
-  padding: 3px 9px;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
   border-radius: var(--radius-full);
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
+  flex-shrink: 0;
 }
 .tool-call-status--running {
   color: var(--accent-400);
@@ -1402,8 +1447,8 @@ body {
 }
 .tool-call-status--success {
   color: var(--success-400);
-  background: rgba(34, 197, 94, 0.1);
-  border: 1px solid rgba(34, 197, 94, 0.2);
+  background: rgba(34, 197, 94, 0.08);
+  border: 1px solid rgba(34, 197, 94, 0.18);
 }
 .tool-call-status--error {
   color: var(--error-400);
@@ -5851,6 +5896,7 @@ body {
 }
 .todo-block__item-name {
   flex: 0 1 auto;
+  min-width: 0;
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--accent-400);
@@ -5858,14 +5904,14 @@ body {
   padding: 1px 6px;
   border-radius: var(--radius-xs);
   max-width: 240px;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-  white-space: pre-wrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   line-height: 1.4;
 }
 .todo-block__item-reason {
   flex: 1;
-  min-width: 0;
+  min-width: 80px;
   font-size: 11px;
   color: var(--text-tertiary);
   line-height: 1.5;
@@ -5883,16 +5929,17 @@ body {
 }
 .todo-block__item-summary {
   flex: 0 1 auto;
-  max-width: 100%;
+  min-width: 0;
+  max-width: min(40%, 260px);
   font-size: 10.5px;
   color: var(--text-secondary);
   font-family: var(--font-mono);
   background: var(--surface-3);
   padding: 2px 6px;
   border-radius: var(--radius-xs);
-  overflow-wrap: anywhere;
-  word-break: break-word;
-  white-space: pre-wrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .todo-block__item-spinner {
