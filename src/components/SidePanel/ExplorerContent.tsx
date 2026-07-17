@@ -1279,7 +1279,7 @@ const ExplorerContent = () => {
                       </svg>
                     </div>
                   ) : timelineCommits.length === 0 ? (
-                    <div className="explorer-timeline__empty">暂无提交记录</div>
+                    <div className="explorer-timeline--empty">暂无提交记录</div>
                   ) : (
                     <div className="explorer-timeline__list">
                       {timelineCommits.map((commit) => (

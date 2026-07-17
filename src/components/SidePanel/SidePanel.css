@@ -483,8 +483,9 @@
 
 .explorer-timeline--empty {
   color: #5a5a5a;
+  cursor: default;
   font-style: italic;
-  padding: 8px 8px 8px 26px;
+  padding: 6px 8px 6px 26px;
   font-size: 13px;
 }
 
