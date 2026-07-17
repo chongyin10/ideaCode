@@ -1167,6 +1167,99 @@ var require_repository = __commonJS({
         }
         return commits;
       }
+      /**
+       * §获取指定文件的 commit 历史（时间线功能）。
+       * 使用 --follow 跟踪文件重命名，返回该文件相关的所有提交。
+       */
+      async getFileLog(filePath, count = 50) {
+        const format = "%H%x09%h%x09%s%x09%an%x09%ae%x09%at";
+        const { code, stdout, stderr } = await this._execGit(
+          ["log", `--pretty=format:${format}`, "-n", String(count), "--follow", "--", filePath],
+          {}
+        );
+        if (code !== 0) {
+          if (/does not have any commits/i.test(stderr)) return [];
+          if (/fatal: bad default revision/i.test(stderr)) return [];
+          if (/no such path/i.test(stderr)) return [];
+          throw new GitError2(`file log failed: ${stderr}`);
+        }
+        const commits = [];
+        for (const line of stdout.split("\n")) {
+          if (!line) continue;
+          const [hash, shortHash, subject, authorName, authorEmail, timestamp] = line.split("	");
+          commits.push({ hash, shortHash, subject, authorName, authorEmail, timestamp: parseInt(timestamp, 10) * 1e3 });
+        }
+        return commits;
+      }
+      /**
+       * §获取指定 commit 的文件列表 + 变更统计（时间线点击 commit 后展示）。
+       * 使用 git show --numstat 同时获取 commit 元信息和每文件的 additions/deletions。
+       * numstat 行格式：additions\tdeletions\tpath（二进制文件为 -\t-\tpath）
+       */
+      async getCommitFiles(hash) {
+        const format = "%H%x09%h%x09%s%x09%an%x09%ae%x09%at";
+        const { code, stdout, stderr } = await this._execGit(
+          ["show", "--numstat", `--format=${format}`, hash],
+          {}
+        );
+        if (code !== 0) {
+          if (/bad object/i.test(stderr)) return null;
+          throw new GitError2(`show failed: ${stderr}`);
+        }
+        const lines = stdout.split("\n");
+        if (lines.length === 0) return null;
+        const [fullHash, shortHash, subject, authorName, authorEmail, timestamp] = lines[0].split("	");
+        const commit = {
+          hash: fullHash,
+          shortHash,
+          subject,
+          authorName,
+          authorEmail,
+          timestamp: parseInt(timestamp, 10) * 1e3,
+          files: []
+        };
+        for (let i = 1; i < lines.length; i++) {
+          const line = lines[i];
+          if (!line) continue;
+          const parts = line.split("	");
+          if (parts.length < 3) continue;
+          const addStr = parts[0];
+          const delStr = parts[1];
+          const filePath = parts.slice(2).join("	");
+          const isBinary = addStr === "-" || delStr === "-";
+          const additions = isBinary ? 0 : parseInt(addStr, 10) || 0;
+          const deletions = isBinary ? 0 : parseInt(delStr, 10) || 0;
+          let status2;
+          if (isBinary) {
+            status2 = "modified";
+          } else if (additions > 0 && deletions === 0) {
+            status2 = "added";
+          } else if (additions === 0 && deletions > 0) {
+            status2 = "deleted";
+          } else {
+            status2 = "modified";
+          }
+          const fileName = filePath.split("/").pop() || filePath;
+          commit.files.push({ path: filePath, fileName, status: status2, additions, deletions });
+        }
+        return commit;
+      }
+      /**
+       * §获取指定 commit 中某个文件的新旧版本内容（用于 diff 对比）。
+       * @param {string} hash commit hash
+       * @param {string} filePath 文件相对路径
+       * @returns {Promise<{original: string, modified: string}>}
+       *   original: commit 之前的文件内容（新增文件为空字符串）
+       *   modified: commit 之后的文件内容（删除文件为空字符串）
+       */
+      async getCommitFileDiff(hash, filePath) {
+        const modResult = await this._execGit(["show", `${hash}:${filePath}`], {});
+        const origResult = await this._execGit(["show", `${hash}^:${filePath}`], {});
+        return {
+          original: origResult.code === 0 ? origResult.stdout : "",
+          modified: modResult.code === 0 ? modResult.stdout : "",
+        };
+      }
       async listStashes() {
         const { code, stdout } = await this._execGit(
           ["stash", "list", "--pretty=format:%gd%x09%s%x09%ct"],
@@ -2027,6 +2120,40 @@ module.exports = {
   async getBranches() {
     if (!currentRepo) return [];
     return await currentRepo.listBranches();
+  },
+  /**
+   * §获取 commit 历史（时间线功能）。
+   * @param {object} opts
+   * @param {string} [opts.filePath] 相对路径。传入时只返回该文件的提交历史（--follow）
+   * @param {number} [opts.count=50] 最大条数
+   * @returns {Promise<Array<{hash,shortHash,subject,authorName,authorEmail,timestamp}>>}
+   */
+  async getLog({ filePath, count } = {}) {
+    if (!currentRepo) return [];
+    const n = count || 50;
+    if (filePath) {
+      return await currentRepo.getFileLog(filePath, n);
+    }
+    return await currentRepo.getLog(n);
+  },
+  /**
+   * §获取指定 commit 的文件列表 + 变更统计（时间线点击 commit 后展示）。
+   * @param {string} hash commit hash
+   * @returns {Promise<{hash,shortHash,subject,authorName,authorEmail,timestamp,files:Array<{path,fileName,status,additions,deletions}>}|null>}
+   */
+  async getCommitFiles({ hash } = {}) {
+    if (!currentRepo || !hash) return null;
+    return await currentRepo.getCommitFiles(hash);
+  },
+  /**
+   * §获取指定 commit 中某个文件的新旧版本内容（用于 diff 对比）。
+   * @param {string} hash commit hash
+   * @param {string} filePath 文件相对路径
+   * @returns {Promise<{original: string, modified: string}|null>}
+   */
+  async getCommitFileDiff({ hash, filePath } = {}) {
+    if (!currentRepo || !hash || !filePath) return null;
+    return await currentRepo.getCommitFileDiff(hash, filePath);
   },
   async checkoutBranch({ name }) {
     if (!currentRepo) throw new Error("\u6CA1\u6709\u6253\u5F00\u7684\u4ED3\u5E93");

@@ -26,11 +26,14 @@ import {
   setPendingSearchQuery,
   refreshAllFilePaths,
   clearExpandPaths,
+  collapseAllDirs,
   toggleExpandDir,
   activateFile,
   removeWorkspaceFolder,
   closeFile,
+  openCommitDetail,
 } from '../../store/slices/workspaceSlice';
+import type { CommitDetailData } from '../../store/slices/workspaceSlice';
 import { switchPanel } from '../../store/slices/layoutSlice';
 import { openDirectory } from '../../services/fileService';
 import type { FileEntry, FileSource } from '../../services/fileService';
@@ -126,6 +129,34 @@ interface ContextMenuState {
   targetParentSource: FileSource | null;
 }
 
+/** §时间线 commit 项（与 Git 扩展 getLog 返回格式一致） */
+interface TimelineCommit {
+  hash: string;
+  shortHash: string;
+  subject: string;
+  authorName: string;
+  authorEmail: string;
+  timestamp: number;
+}
+
+/** §相对时间格式化：刚刚 / x 分钟前 / x 小时前 / x 天前 / x 周 / x 个月 / 日期 */
+function formatRelativeTime(timestamp: number): string {
+  const diff = Date.now() - timestamp;
+  const seconds = Math.floor(diff / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+  const weeks = Math.floor(days / 7);
+  const months = Math.floor(days / 30);
+  if (seconds < 60) return '刚刚';
+  if (minutes < 60) return `${minutes} 分钟前`;
+  if (hours < 24) return `${hours} 小时前`;
+  if (days < 7) return `${days} 天前`;
+  if (weeks < 4) return `${weeks} 周`;
+  if (months < 12) return `${months} 个月`;
+  return new Date(timestamp).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
+}
+
 /** 简易闭合文件夹图标 */
 const FolderIcon = () => (
   <svg
@@ -172,6 +203,9 @@ const ExplorerContent = () => {
   const [projectExpanded, setProjectExpanded] = useState(true);
   const [cloneRepoOpen, setCloneRepoOpen] = useState(false);
   const [timelineExpanded, setTimelineExpanded] = useState(false);
+  // §时间线 commit 列表 + 加载状态
+  const [timelineCommits, setTimelineCommits] = useState<TimelineCommit[]>([]);
+  const [timelineLoading, setTimelineLoading] = useState(false);
 
   // §打开的编辑器：当从空状态首次打开文件时自动展开，方便查看；
   // 当所有文件关闭后（列表为空）自动收起，避免空区域占用空间
@@ -254,6 +288,66 @@ const ExplorerContent = () => {
       return () => clearTimeout(timer);
     }
   }, [expandPaths, dispatch]);
+
+  // §时间线：监听选中文件 + 项目根变化，自动加载 commit 历史。
+  //   - 选中文件时：显示该文件的提交历史（git log --follow <file>）
+  //   - 未选中文件时：显示全部提交历史（git log）
+  //   §防闪烁：延迟 150ms 才显示 loading，快速完成的请求不闪 loading icon
+  useEffect(() => {
+    let cancelled = false;
+    let loadingTimer: ReturnType<typeof setTimeout> | null = null;
+
+    async function loadTimeline() {
+      if (!rootSource || typeof rootSource !== 'string') {
+        setTimelineCommits([]);
+        setTimelineLoading(false);
+        return;
+      }
+
+      // 计算选中文件的相对路径（相对于项目根）
+      let filePath: string | undefined;
+      if (activeFileSource && typeof activeFileSource === 'string') {
+        if (activeFileSource.startsWith(rootSource + '/')) {
+          filePath = activeFileSource.slice(rootSource.length + 1);
+        }
+      }
+
+      // §延迟显示 loading：150ms 内完成的请求不触发 loading 状态，避免快速切换时闪烁
+      loadingTimer = setTimeout(() => {
+        if (!cancelled) setTimelineLoading(true);
+      }, 150);
+
+      try {
+        const api = window.electronAPI;
+        if (!api?.extension?.rpc) return;
+        const res = (await api.extension.rpc('ext.invoke', {
+          extId: 'ideacode-git',
+          method: 'getLog',
+          args: [{ filePath, count: 50 }],
+        })) as { success?: boolean; result?: TimelineCommit[] } | undefined;
+
+        if (cancelled) return;
+        if (loadingTimer) { clearTimeout(loadingTimer); loadingTimer = null; }
+        if (res?.success && Array.isArray(res.result)) {
+          setTimelineCommits(res.result);
+        } else {
+          setTimelineCommits([]);
+        }
+        setTimelineLoading(false);
+      } catch {
+        if (cancelled) return;
+        if (loadingTimer) { clearTimeout(loadingTimer); loadingTimer = null; }
+        setTimelineCommits([]);
+        setTimelineLoading(false);
+      }
+    }
+
+    loadTimeline();
+    return () => {
+      cancelled = true;
+      if (loadingTimer) clearTimeout(loadingTimer);
+    };
+  }, [activeFileSource, rootSource]);
 
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     visible: false,
@@ -357,6 +451,25 @@ const ExplorerContent = () => {
   const handleFindInFiles = useCallback((name: string) => {
     dispatch(switchPanel('search'));
     dispatch(setPendingSearchQuery(name));
+  }, [dispatch]);
+
+  // §时间线 commit 点击：获取该 commit 的文件列表，在编辑区创建 tab 展示
+  const handleTimelineClick = useCallback(async (commit: TimelineCommit) => {
+    try {
+      const api = window.electronAPI;
+      if (!api?.extension?.rpc) return;
+      const res = (await api.extension.rpc('ext.invoke', {
+        extId: 'ideacode-git',
+        method: 'getCommitFiles',
+        args: [{ hash: commit.hash }],
+      })) as { success?: boolean; result?: CommitDetailData | null } | undefined;
+
+      if (res?.success && res.result) {
+        dispatch(openCommitDetail(res.result));
+      }
+    } catch (e) {
+      console.error('[Timeline] 获取 commit 文件列表失败:', e);
+    }
   }, [dispatch]);
 
   // §"在终端中打开"：右键条目时触发
@@ -1018,7 +1131,7 @@ const ExplorerContent = () => {
                   <button
                     className="explorer-header__icon"
                     title={t('explorer.header.collapseAll')}
-                    onClick={(e) => { e.stopPropagation(); dispatch(clearExpandPaths()); }}
+                    onClick={(e) => { e.stopPropagation(); dispatch(collapseAllDirs()); }}
                   >
                     <ChevronsDownUp size={14} strokeWidth={1.5} />
                   </button>
@@ -1158,8 +1271,35 @@ const ExplorerContent = () => {
                 <span className="explorer-section__title">{t('explorer.sections.timeline')}</span>
               </div>
               {timelineExpanded && (
-                <div className="explorer-section__content" style={{ height: heights.timeline }}>
-                  <div className="explorer-timeline--empty">{t('explorer.empty.timelineComingSoon')}</div>
+                <div className="explorer-section__content explorer-timeline" style={{ height: heights.timeline }}>
+                  {timelineLoading ? (
+                    <div className="explorer-timeline__loading">
+                      <svg className="explorer-timeline__spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                        <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                      </svg>
+                    </div>
+                  ) : timelineCommits.length === 0 ? (
+                    <div className="explorer-timeline__empty">暂无提交记录</div>
+                  ) : (
+                    <div className="explorer-timeline__list">
+                      {timelineCommits.map((commit) => (
+                        <div
+                          key={commit.hash}
+                          className="explorer-timeline__item"
+                          style={{ cursor: 'pointer' }}
+                          title={commit.subject}
+                          onClick={() => handleTimelineClick(commit)}
+                        >
+                          <span className="explorer-timeline__dot" />
+                          <div className="explorer-timeline__main">
+                            <span className="explorer-timeline__message">{commit.subject}</span>
+                            <span className="explorer-timeline__author">{commit.authorName}</span>
+                          </div>
+                          <span className="explorer-timeline__time">{formatRelativeTime(commit.timestamp)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

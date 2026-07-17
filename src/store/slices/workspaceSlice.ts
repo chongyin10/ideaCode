@@ -17,6 +17,8 @@ export interface OpenedFile {
   isDiff?: boolean;
   /** Diff 视图数据（仅当 isDiff 为 true 时有效） */
   diffData?: DiffView;
+  /** §Commit 详情数据（language='commit-detail' 时有效，时间线点击 commit 后展示） */
+  commitDetailData?: CommitDetailData;
 }
 
 export interface SearchHighlight {
@@ -74,6 +76,23 @@ export interface DiffView {
   original: string;
   modified: string;
   language: string;
+}
+
+/** §Commit 详情数据（时间线点击 commit 后展示的文件列表） */
+export interface CommitDetailData {
+  hash: string;
+  shortHash: string;
+  subject: string;
+  authorName: string;
+  authorEmail: string;
+  timestamp: number;
+  files: Array<{
+    path: string;
+    fileName: string;
+    status: 'added' | 'modified' | 'deleted' | 'renamed';
+    additions: number;
+    deletions: number;
+  }>;
 }
 
 interface WorkspaceState {
@@ -794,7 +813,14 @@ const workspaceSlice = createSlice({
       state.expandPaths = paths;
     },
 
+    /** §只清空 expandPaths 触发标记（不影响已展开的目录）。
+     *  用于 expandToFile 触发后的自动清理，避免把刚展开的目录折叠回去。 */
     clearExpandPaths: (state) => {
+      state.expandPaths = [];
+    },
+
+    /** §折叠所有目录（"全部折叠"按钮使用） */
+    collapseAllDirs: (state) => {
       state.expandPaths = [];
       state.expandedDirs = [];
     },
@@ -911,6 +937,41 @@ const workspaceSlice = createSlice({
       const newToIdx = group.fileIds.indexOf(toId);
       const insertIdx = position === 'after' ? newToIdx + 1 : newToIdx;
       group.fileIds.splice(insertIdx, 0, fromId);
+    },
+
+    /** §打开 Commit 详情视图（时间线点击 commit 后展示文件列表） */
+    openCommitDetail: (state, action) => {
+      const data = action.payload as CommitDetailData;
+      const tabId = `commit-detail://${data.hash}`;
+      const tabName = `${data.shortHash} · ${data.subject}`;
+
+      const existingFile = state.openedFiles.find((f) => f.id === tabId);
+      if (existingFile) {
+        existingFile.commitDetailData = data;
+      } else {
+        state.openedFiles.push({
+          id: tabId,
+          name: tabName.length > 40 ? `${data.shortHash} · ${data.subject.slice(0, 30)}…` : tabName,
+          source: tabId as FileSource,
+          content: '',
+          language: 'commit-detail',
+          isDirty: false,
+          isPreview: true,
+          commitDetailData: data,
+        });
+      }
+
+      const group = activeGroup(state);
+      if (group.fileIds.includes(tabId)) {
+        group.activeFileId = tabId;
+        group.tabHistory = pushToHistory(group.tabHistory, tabId);
+        syncGlobalActive(state);
+        return;
+      }
+      group.fileIds.push(tabId);
+      group.activeFileId = tabId;
+      group.tabHistory = pushToHistory(group.tabHistory, tabId);
+      syncGlobalActive(state);
     },
 
     /** 打开 Git Diff 视图 */
@@ -1210,9 +1271,9 @@ const workspaceSlice = createSlice({
 export const {
   closeFile, activateFile, navigateTabHistory, setFileContent, setMirrorFileContent, markFileSaved,
   pinPreviewFile, setSearchHighlight, clearSearchHighlight, setClipboard,
-  clearClipboard, setPendingSearchQuery, expandToFile, clearExpandPaths,
+  clearClipboard, setPendingSearchQuery, expandToFile, clearExpandPaths, collapseAllDirs,
   toggleExpandDir, toggleSplitView, collapseAllGroups, setActiveGroup, saveEditorSnapshot, setGroupRatio, equalizeGroupRatios, reorderTab,
-  openDiffView, closeDiffView, updateDiffView, setFileLanguage,
+  openDiffView, closeDiffView, updateDiffView, openCommitDetail, setFileLanguage,
   setSettingsVisible, closeSettings, setMissingFileIds, openVirtualFile,
   addWorkspaceFolder, removeWorkspaceFolder, toggleFileReadOnly, toggleAiEditMode,
   setGitStatus,

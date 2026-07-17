@@ -488,6 +488,87 @@
   font-size: 13px;
 }
 
+.explorer-timeline {
+  overflow-y: auto;
+}
+
+.explorer-timeline__loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #6a6a6a;
+}
+
+.explorer-timeline__spinner {
+  animation: timeline-spin 0.8s linear infinite;
+}
+
+@keyframes timeline-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.explorer-timeline__list {
+  padding: 4px 0;
+}
+
+.explorer-timeline__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  cursor: default;
+  border-left: 2px solid transparent;
+  transition: background-color 0.1s;
+}
+
+.explorer-timeline__item:hover {
+  background-color: rgba(255, 255, 255, 0.05);
+  border-left-color: var(--accent-color, #007acc);
+}
+
+.explorer-timeline__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: #569cd6;
+  flex-shrink: 0;
+}
+
+.explorer-timeline__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.explorer-timeline__message {
+  color: #cccccc;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.explorer-timeline__author {
+  color: #808080;
+  font-size: 12px;
+  flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 80px;
+}
+
+.explorer-timeline__time {
+  color: #6a6a6a;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
 /* 树形缩进引导线 */
 .tree-row {
   position: relative;

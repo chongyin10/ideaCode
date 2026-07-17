@@ -43,6 +43,7 @@ import './Home.css';
 // 这些组件仅在特定操作时才需要（查看 diff / 扩展详情 / SSH / 终端 / 设置 / 模态框），
 // 不在首屏 bundle 中加载，减少首屏体积。
 const DiffEditorPanel = lazy(() => import('../components/DiffEditorPanel'));
+const CommitDetailPanel = lazy(() => import('../components/CommitDetailPanel'));
 const ExtensionDetail = lazy(() => import('../components/ExtensionDetail'));
 const SshFileTreePanel = lazy(() => import('../components/SshFileTreePanel'));
 const TerminalEditorView = lazy(() => import('../components/TerminalEditorView'));
@@ -835,6 +836,8 @@ function Home() {
                   title={file.name}
                   active={focused && group.activeFileId === file.id}
                 />
+              ) : file.language === 'commit-detail' && file.commitDetailData ? (
+                <CommitDetailPanel key={`commit-${file.id}-${group.id}`} data={file.commitDetailData} />
               ) : file.isDiff && file.diffData ? (
                 <DiffEditorPanel key={`diff-${file.id}-${group.id}`} diffData={file.diffData} groupId={group.id} />
               ) : (

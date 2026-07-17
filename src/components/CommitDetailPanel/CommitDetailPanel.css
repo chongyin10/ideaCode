@@ -1,0 +1,163 @@
+/* ─── Commit 详情面板（时间线点击 commit 后展示） ─── */
+
+.commit-detail-panel {
+  height: 100%;
+  overflow-y: auto;
+  background: var(--bg-color, #1e1e1e);
+  color: #cccccc;
+  font-size: 13px;
+}
+
+/* ─── 顶部 commit 元信息 ─── */
+.commit-detail__header {
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.commit-detail__header-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.commit-detail__hash {
+  color: #569cd6;
+  font-family: var(--monospace-font, 'SF Mono', Monaco, Menlo, Consolas, monospace);
+  font-size: 12px;
+  background: rgba(86, 156, 214, 0.12);
+  padding: 2px 8px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.commit-detail__subject {
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.commit-detail__header-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #808080;
+  font-size: 12px;
+}
+
+.commit-detail__author {
+  color: #9a9a9a;
+}
+
+.commit-detail__sep {
+  color: #555;
+}
+
+.commit-detail__time {
+  color: #9a9a9a;
+}
+
+.commit-detail__additions {
+  color: #73c991;
+  font-family: var(--monospace-font, 'SF Mono', Monaco, Menlo, Consolas, monospace);
+}
+
+.commit-detail__deletions {
+  color: #f48771;
+  font-family: var(--monospace-font, 'SF Mono', Monaco, Menlo, Consolas, monospace);
+}
+
+/* ─── 文件列表 ─── */
+.commit-detail__file-list {
+  padding: 4px 0;
+}
+
+.commit-detail__file-list-header,
+.commit-detail__file-item {
+  display: grid;
+  grid-template-columns: 50px 1fr 100px 100px 80px;
+  align-items: center;
+  gap: 8px;
+  padding: 0px 20px;
+}
+
+.commit-detail__file-list-header {
+  color: #6a6a6a;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  position: sticky;
+  top: 0;
+  background: var(--bg-color, #1e1e1e);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  z-index: 1;
+}
+
+.commit-detail__file-item {
+  cursor: default;
+  transition: background-color 0.1s;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+}
+
+.commit-detail__file-item:hover {
+  background-color: rgba(255, 255, 255, 0.04);
+}
+
+/* ─── 状态标签 ─── */
+.commit-detail__status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--monospace-font, 'SF Mono', Monaco, Menlo, Consolas, monospace);
+}
+
+/* ─── 文件名列 ─── */
+.commit-detail__col-name {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.commit-detail__file-name {
+  color: #cccccc;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.commit-detail__file-path {
+  color: #6a6a6a;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ─── 修改者 / 修改时间列 ─── */
+.commit-detail__col-author,
+.commit-detail__col-time {
+  color: #9a9a9a;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ─── 变更统计列 ─── */
+.commit-detail__col-diff {
+  font-family: var(--monospace-font, 'SF Mono', Monaco, Menlo, Consolas, monospace);
+  font-size: 12px;
+  text-align: right;
+  white-space: nowrap;
+}
