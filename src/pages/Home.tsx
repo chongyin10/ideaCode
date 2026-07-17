@@ -837,7 +837,7 @@ function Home() {
                   active={focused && group.activeFileId === file.id}
                 />
               ) : file.language === 'commit-detail' && file.commitDetailData ? (
-                <CommitDetailPanel key={`commit-${file.id}-${group.id}`} data={file.commitDetailData} />
+                <CommitDetailPanel key={`commit-${file.id}-${group.id}`} data={file.commitDetailData} fileId={file.id} />
               ) : file.isDiff && file.diffData ? (
                 <DiffEditorPanel key={`diff-${file.id}-${group.id}`} diffData={file.diffData} groupId={group.id} />
               ) : (

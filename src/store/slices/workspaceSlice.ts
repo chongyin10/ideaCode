@@ -19,6 +19,8 @@ export interface OpenedFile {
   diffData?: DiffView;
   /** §Commit 详情数据（language='commit-detail' 时有效，时间线点击 commit 后展示） */
   commitDetailData?: CommitDetailData;
+  /** §Commit 详情面板的搜索值（持久化到 store，切换 tab 不丢失） */
+  commitDetailSearchQuery?: string;
 }
 
 export interface SearchHighlight {
@@ -974,6 +976,15 @@ const workspaceSlice = createSlice({
       syncGlobalActive(state);
     },
 
+    /** §设置 Commit 详情面板的搜索值（持久化，切换 tab 不丢失） */
+    setCommitDetailSearch: (state, action) => {
+      const { fileId, query } = action.payload as { fileId: string; query: string };
+      const file = state.openedFiles.find((f) => f.id === fileId);
+      if (file) {
+        file.commitDetailSearchQuery = query;
+      }
+    },
+
     /** 打开 Git Diff 视图 */
     openDiffView: (state, action) => {
       const diffData = action.payload as DiffView;
@@ -1273,7 +1284,7 @@ export const {
   pinPreviewFile, setSearchHighlight, clearSearchHighlight, setClipboard,
   clearClipboard, setPendingSearchQuery, expandToFile, clearExpandPaths, collapseAllDirs,
   toggleExpandDir, toggleSplitView, collapseAllGroups, setActiveGroup, saveEditorSnapshot, setGroupRatio, equalizeGroupRatios, reorderTab,
-  openDiffView, closeDiffView, updateDiffView, openCommitDetail, setFileLanguage,
+  openDiffView, closeDiffView, updateDiffView, openCommitDetail, setCommitDetailSearch, setFileLanguage,
   setSettingsVisible, closeSettings, setMissingFileIds, openVirtualFile,
   addWorkspaceFolder, removeWorkspaceFolder, toggleFileReadOnly, toggleAiEditMode,
   setGitStatus,

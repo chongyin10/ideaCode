@@ -7,9 +7,9 @@
  *   - 点击文件行：创建 diff 对比 tab + 在资源管理器中定位文件
  */
 
-import { memo, useCallback } from 'react';
-import { useAppDispatch } from '../../store/hooks';
-import { openDiffView, expandToFile, type CommitDetailData } from '../../store/slices/workspaceSlice';
+import { memo, useCallback, useMemo } from 'react';
+import { useAppDispatch, useAppSelector } from '../../store/hooks';
+import { openDiffView, expandToFile, setCommitDetailSearch, type CommitDetailData } from '../../store/slices/workspaceSlice';
 import { getLanguageFromPath } from '../../utils/languageFromPath';
 import './CommitDetailPanel.css';
 
@@ -48,13 +48,35 @@ const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }
 
 interface CommitDetailPanelProps {
   data: CommitDetailData;
+  /** §当前 tab 的 fileId，用于持久化搜索值到 store（切换 tab 不丢失） */
+  fileId: string;
 }
 
-function CommitDetailPanel({ data }: CommitDetailPanelProps) {
+function CommitDetailPanel({ data, fileId }: CommitDetailPanelProps) {
   const dispatch = useAppDispatch();
+  // §搜索值持久化到 store（OpenedFile.commitDetailSearchQuery），切换 tab 回来后不丢失
+  const searchQuery = useAppSelector(
+    (state) => {
+      const f = state.workspace.openedFiles.find((of) => of.id === fileId);
+      return f?.commitDetailSearchQuery ?? '';
+    },
+  );
+  const setSearchQuery = useCallback(
+    (q: string) => dispatch(setCommitDetailSearch({ fileId, query: q })),
+    [dispatch, fileId],
+  );
 
   const totalAdditions = data.files.reduce((sum, f) => sum + f.additions, 0);
   const totalDeletions = data.files.reduce((sum, f) => sum + f.deletions, 0);
+
+  // §过滤后的文件列表
+  const filteredFiles = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return data.files;
+    return data.files.filter(
+      (f) => f.path.toLowerCase().includes(q) || f.fileName.toLowerCase().includes(q),
+    );
+  }, [data.files, searchQuery]);
 
   // §点击文件行：获取该 commit 中该文件的新旧内容，创建 diff tab，
   //   同时在 IDE 资源管理器结构树中展开到该文件所在目录（不打开文件本身）
@@ -120,6 +142,36 @@ function CommitDetailPanel({ data }: CommitDetailPanelProps) {
 
       {/* ─── 文件列表 ─── */}
       <div className="commit-detail__file-list">
+        {/* §搜索框：sticky 跟随滚动，输入值实时过滤文件列表 */}
+        <div className="commit-detail__search">
+          <svg className="commit-detail__search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="11" cy="11" r="8" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+          <input
+            type="text"
+            className="commit-detail__search-input"
+            placeholder="筛选文件（支持文件名或路径）"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            spellCheck={false}
+          />
+          {searchQuery && (
+            <button
+              className="commit-detail__search-clear"
+              title="清除"
+              onClick={() => setSearchQuery('')}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          )}
+          <span className="commit-detail__search-count">
+            {searchQuery ? `${filteredFiles.length}/${data.files.length}` : `${data.files.length}`}
+          </span>
+        </div>
         <div className="commit-detail__file-list-header">
           <span className="commit-detail__col-status">状态</span>
           <span className="commit-detail__col-name">文件</span>
@@ -127,7 +179,12 @@ function CommitDetailPanel({ data }: CommitDetailPanelProps) {
           <span className="commit-detail__col-time">修改时间</span>
           <span className="commit-detail__col-diff">变更</span>
         </div>
-        {data.files.map((file, idx) => {
+        {filteredFiles.length === 0 ? (
+          <div className="commit-detail__empty">
+            {searchQuery ? `没有匹配 "${searchQuery}" 的文件` : '该 commit 没有文件变更'}
+          </div>
+        ) : (
+          filteredFiles.map((file, idx) => {
           const cfg = STATUS_CONFIG[file.status] || STATUS_CONFIG.modified;
           return (
             <div
@@ -159,7 +216,8 @@ function CommitDetailPanel({ data }: CommitDetailPanelProps) {
               </span>
             </div>
           );
-        })}
+          })
+        )}
       </div>
     </div>
   );

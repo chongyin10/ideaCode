@@ -76,6 +76,84 @@
   padding: 4px 0;
 }
 
+/* §搜索框：sticky 跟随滚动 */
+.commit-detail__search {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 20px;
+  background: var(--bg-color, #1e1e1e);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.commit-detail__search-icon {
+  color: #6a6a6a;
+  flex-shrink: 0;
+}
+
+.commit-detail__search-input {
+  flex: 1;
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  color: #cccccc;
+  font-size: 12px;
+  padding: 4px 8px;
+  outline: none;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+
+.commit-detail__search-input::placeholder {
+  color: #6a6a6a;
+}
+
+.commit-detail__search-input:focus {
+  border-color: #569cd6;
+  background: rgba(86, 156, 214, 0.06);
+}
+
+.commit-detail__search-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #6a6a6a;
+  cursor: pointer;
+  border-radius: 3px;
+  flex-shrink: 0;
+  transition: background-color 0.1s, color 0.1s;
+}
+
+.commit-detail__search-clear:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #cccccc;
+}
+
+.commit-detail__search-count {
+  color: #6a6a6a;
+  font-size: 11px;
+  font-family: var(--monospace-font, 'SF Mono', Monaco, Menlo, Consolas, monospace);
+  flex-shrink: 0;
+  min-width: 48px;
+  text-align: right;
+}
+
+/* §空状态 */
+.commit-detail__empty {
+  padding: 32px 20px;
+  text-align: center;
+  color: #6a6a6a;
+  font-size: 12px;
+}
+
 .commit-detail__file-list-header,
 .commit-detail__file-item {
   display: grid;
@@ -91,7 +169,8 @@
   text-transform: uppercase;
   letter-spacing: 0.5px;
   position: sticky;
-  top: 0;
+  /* §搜索框高度约 37px，列表头跟随在搜索框下方 */
+  top: 37px;
   background: var(--bg-color, #1e1e1e);
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   z-index: 1;
