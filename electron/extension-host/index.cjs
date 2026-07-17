@@ -778,6 +778,13 @@ rpc.on('commands.execute', async (params) => {
         const result = await manager.invokeExtension('ideacode-ssh', 'callFileSystemProvider', ['ssh', method, args]);
         return { executed: true, result };
       }
+      // §新增：ssh.getConnection 获取完整连接凭据（含密码/密钥），供终端通道认证自动化使用。
+      //   必须在 executeRemote 转发之前处理，否则会被错误转发为远程命令执行。
+      if (command === 'ssh.getConnection') {
+        const [connectionId] = args;
+        const result = await manager.invokeExtension('ideacode-ssh', 'getConnection', [connectionId]);
+        return { executed: true, result };
+      }
       const result = await manager.invokeExtension('ideacode-ssh', 'executeRemote',
         extractSshArgs(command, args));
       return { executed: true, result };

@@ -85,6 +85,11 @@ export default function ChangesSection({
   const [open, setOpen] = useState(isEmpty ? false : defaultOpen);
   const [optimisticActive, setOptimisticActive] = useState<{ path: string; staged: boolean } | null>(null);
 
+  // 没有数据时自动合上，有数据时自动展开
+  useEffect(() => {
+    setOpen(!isEmpty);
+  }, [isEmpty]);
+
   useEffect(() => {
     setOptimisticActive(null);
   }, [activeFile?.path, activeFile?.staged]);

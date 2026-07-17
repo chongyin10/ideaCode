@@ -77,6 +77,21 @@ export interface TerminalCreateConfig {
   cwd?: string;
   cols?: number;
   rows?: number;
+  /** §终端通道：'local'（默认）或 'ssh'，主进程根据通道分流 */
+  channel?: 'local' | 'ssh';
+  /** §SSH 通道配置，channel='ssh' 时由主进程处理认证自动化 */
+  sshConfig?: SshChannelConfig;
+}
+
+/** §SSH 通道配置：凭据在主进程使用，不经过渲染进程 */
+export interface SshChannelConfig {
+  host: string;
+  port?: number;
+  username: string;
+  password?: string;
+  privateKey?: string;
+  passphrase?: string;
+  remotePath?: string;
 }
 
 export interface TerminalCreateResult {
@@ -87,12 +102,14 @@ export interface TerminalCreateResult {
 
 export interface TerminalOutputEvent {
   id: number;
-  type: 'data' | 'ready' | 'exit';
+  type: 'data' | 'ready' | 'exit' | 'auth';
   data?: string;
   pid?: number;
   cwd?: string;
   exitCode?: number;
   signal?: number;
+  /** §auth 类型：通知渲染进程 SSH 认证状态 */
+  authStatus?: 'success' | 'failed' | 'password-sent' | 'passphrase-sent' | 'host-verified';
 }
 
 export interface TerminalProfilesResult {

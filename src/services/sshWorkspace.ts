@@ -25,6 +25,7 @@
 
 import { store } from '../store';
 import type { SshConnectionInfo } from '../store/slices/workspaceSlice';
+import type { SshChannelConfig } from '../types/electron';
 import { parseRemoteUri } from './fileSystemProvider';
 import { isRemoteUri, type FileSource } from './fileService';
 
@@ -40,10 +41,12 @@ export function isSshSource(source: FileSource): boolean {
 
 /**
  * 当前工作区的 rootSource 是否为 SSH 远程工作区。
- * 直接从 Redux store 读取 rootSource 判断。
+ * §优先读 Redux 中显式存储的 projectType 字段（loadDirectory 时自动判断写入），
+ * 避免每次解析 rootSource URI；projectType 为 null 时 fallback 到 URI 解析。
  */
 export function isSshWorkspace(): boolean {
-  const { rootSource } = store.getState().workspace;
+  const { projectType, rootSource } = store.getState().workspace;
+  if (projectType) return projectType === 'ssh';
   return typeof rootSource === 'string' && isSshSource(rootSource);
 }
 
@@ -164,4 +167,108 @@ export function buildSshUri(connectionId: string, remotePath: string, basePath?:
     fullPath = remotePath.startsWith('/') ? remotePath : '/' + remotePath;
   }
   return `ssh://${connectionId}${fullPath}`;
+}
+
+/**
+ * §从指定 SSH 连接获取完整凭据（含密码/密钥），供 ExplorerContent 等场景使用。
+ * 凭据不缓存在 Redux 中，每次实时从 SSH 扩展查询。
+ */
+export async function getSshCredentials(connectionId: string): Promise<{
+  password?: string;
+  privateKey?: string;
+  passphrase?: string;
+}> {
+  try {
+    const api = window.electronAPI;
+    if (!api?.extension?.rpc) return {};
+    const res = (await api.extension.rpc('commands.execute', {
+      command: 'ssh.getConnection',
+      args: [connectionId],
+    })) as
+      | { success?: boolean; result?: { executed?: boolean; result?: SshConnectionInfo & { password?: string; privateKey?: string; passphrase?: string } } }
+      | undefined;
+
+    if (res?.success && res.result?.executed && res.result.result) {
+      return {
+        password: res.result.result.password,
+        privateKey: res.result.result.privateKey,
+        passphrase: res.result.result.passphrase,
+      };
+    }
+  } catch (e) {
+    console.error('[sshWorkspace] 获取 SSH 凭据失败:', e);
+  }
+  return {};
+}
+
+/**
+ * §终端通道解析：统一检测当前工作区环境，返回通道配置。
+ *
+ * - SSH 远程项目：返回 channel='ssh' + sshConfig（含凭据），主进程自动处理认证
+ * - 本地项目：返回 channel='local' + cwd
+ *
+ * 凭据（密码/密钥）通过 SSH 扩展 RPC 实时获取，不缓存在 Redux 中。
+ * 通道配置传递给主进程后，认证自动化在主进程完成，不经过渲染进程。
+ */
+export async function resolveTerminalChannel(): Promise<{
+  channel: 'local' | 'ssh';
+  sshConfig?: SshChannelConfig;
+  tabName?: string;
+  cwd?: string;
+}> {
+  // §优先读显式存储的 projectType，本地项目快速分流，跳过 SSH 配置检测
+  const { projectType, rootSource } = store.getState().workspace;
+  if (projectType === 'local') {
+    const cwd = typeof rootSource === 'string' ? rootSource : undefined;
+    return { channel: 'local', cwd };
+  }
+
+  // projectType === 'ssh' 或 null（fallback）：尝试获取 SSH 配置
+  const sshConfig = getCurrentSshConfig();
+
+  if (sshConfig) {
+    // §异步从 SSH 扩展获取完整凭据（含密码/密钥），不在渲染进程缓存
+    let password: string | undefined;
+    let privateKey: string | undefined;
+    let passphrase: string | undefined;
+
+    try {
+      const api = window.electronAPI;
+      if (api?.extension?.rpc) {
+        const res = (await api.extension.rpc('commands.execute', {
+          command: 'ssh.getConnection',
+          args: [sshConfig.connectionId],
+        })) as
+          | { success?: boolean; result?: { executed?: boolean; result?: SshConnectionInfo & { password?: string; privateKey?: string; passphrase?: string } } }
+          | undefined;
+
+        if (res?.success && res.result?.executed && res.result.result) {
+          password = res.result.result.password;
+          privateKey = res.result.result.privateKey;
+          passphrase = res.result.result.passphrase;
+        }
+      }
+    } catch (e) {
+      console.error('[sshWorkspace] 获取 SSH 凭据失败:', e);
+    }
+
+    return {
+      channel: 'ssh',
+      sshConfig: {
+        host: sshConfig.conn.host,
+        port: sshConfig.conn.port,
+        username: sshConfig.conn.username,
+        password,
+        privateKey,
+        passphrase,
+        remotePath: sshConfig.remotePath,
+      },
+      tabName: `${sshConfig.conn.name} · ${sshConfig.conn.username}@${sshConfig.conn.host}`,
+    };
+  }
+
+  // §fallback 本地通道：projectType 为 null 且无 SSH 配置时走到这里
+  // rootSource 已在函数开头解构，直接复用
+  const cwd = typeof rootSource === 'string' ? rootSource : undefined;
+  return { channel: 'local', cwd };
 }

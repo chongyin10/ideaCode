@@ -20511,21 +20511,7 @@ function attemptConnect(id, connConfig, password) {
       resolve({ success: true });
     });
     client.on("error", (err) => {
-      const rawMsg = err.message || "\u672A\u77E5\u9519\u8BEF";
-      let friendly = rawMsg;
-      const level = err.level || "";
-      if (level === "client-authentication" || rawMsg.includes("All configured authentication methods failed")) {
-        friendly = `\u8BA4\u8BC1\u5931\u8D25\uFF08\u7528\u6237\u540D\u6216\u5BC6\u7801\u9519\u8BEF\uFF0C\u6216\u670D\u52A1\u5668\u7981\u6B62\u5BC6\u7801/root \u767B\u5F55\uFF09\u3002\u539F\u59CB\u9519\u8BEF: ${rawMsg}`;
-      } else if (rawMsg.includes("ECONNREFUSED") || rawMsg.includes("connect ECONNREFUSED")) {
-        friendly = `\u8FDE\u63A5\u88AB\u62D2\u7EDD\uFF08\u7AEF\u53E3\u672A\u5F00\u653E\u6216 SSH \u670D\u52A1\u672A\u8FD0\u884C\uFF09\u3002\u539F\u59CB\u9519\u8BEF: ${rawMsg}`;
-      } else if (rawMsg.includes("ETIMEDOUT") || rawMsg.includes("Timed out while waiting for handshake")) {
-        friendly = `\u8FDE\u63A5\u8D85\u65F6\uFF08\u7F51\u7EDC\u4E0D\u901A\u6216\u9632\u706B\u5899\u62E6\u622A\uFF09\u3002\u539F\u59CB\u9519\u8BEF: ${rawMsg}`;
-      } else if (rawMsg.includes("ENOTFOUND") || rawMsg.includes("getaddrinfo")) {
-        friendly = `\u4E3B\u673A\u540D\u89E3\u6790\u5931\u8D25\uFF08\u57DF\u540D/IP \u9519\u8BEF\uFF09\u3002\u539F\u59CB\u9519\u8BEF: ${rawMsg}`;
-      } else if (rawMsg.includes("EHOSTUNREACH")) {
-        friendly = `\u4E3B\u673A\u4E0D\u53EF\u8FBE\u3002\u539F\u59CB\u9519\u8BEF: ${rawMsg}`;
-      }
-      log("error", "[SSH Extension] \u8FDE\u63A5\u5931\u8D25:", connConfig.host, friendly);
+      log("error", "[SSH Extension] \u8FDE\u63A5\u5931\u8D25:", connConfig.host, err.message);
       try {
         client.end();
       } catch {
@@ -20533,9 +20519,7 @@ function attemptConnect(id, connConfig, password) {
       if (sshClients.get(id) === client) {
         sshClients.delete(id);
       }
-      const enhanced = new Error(friendly);
-      enhanced.raw = err;
-      reject(enhanced);
+      reject(err);
     });
     client.on("close", () => {
       log("log", "[SSH Extension] \u8FDE\u63A5\u5173\u95ED:", connConfig.host, "session:", id);
@@ -20556,14 +20540,7 @@ function attemptConnect(id, connConfig, password) {
       }
     });
     try {
-      client.connect({
-        ...connConfig,
-        debug: (msg) => {
-          if (msg.includes("AUTH") || msg.includes("auth") || msg.includes("Error") || msg.includes("error") || msg.includes("reject") || msg.includes("fail")) {
-            console.log(`[SSH Extension] [debug] ${msg}`);
-          }
-        }
-      });
+      client.connect(connConfig);
     } catch (err) {
       log("error", "[SSH Extension] \u8FDE\u63A5\u5F02\u5E38:", err.message);
       if (sshClients.get(id) === client) {
@@ -20581,13 +20558,9 @@ function registerSshCommands() {
       host,
       port: port || 22,
       username,
-      readyTimeout: 3e4,
+      readyTimeout: 2e4,
       keepaliveInterval: 3e4,
-      keepaliveCountMax: 3,
-      // §tryKeyboard：主动请求 keyboard-interactive 认证。
-      // 阿里云部分镜像 sshd 配置 PasswordAuthentication no + KbdInteractiveAuthentication yes，
-      // 此时纯 password 字段不会被尝试，必须走 keyboard-interactive 回调。
-      tryKeyboard: !!password
+      keepaliveCountMax: 3
     };
     if (privateKey) {
       try {
@@ -21348,4 +21321,33 @@ function listConnections() {
     };
   });
 }
-module.exports = { activate, deactivate, getRemoteFileTree, handleFileOperation, callFileSystemProvider, executeRemote, listConnections, openConnection };
+/**
+ * §获取指定连接的完整凭据（含密码/密钥），供终端通道认证自动化使用。
+ *
+ * 与 listConnections 不同，这里返回敏感字段（password/privateKey/passphrase）。
+ * 凭据仅在主进程内存中流转（渲染进程获取后通过 IPC 直接传给主进程），不持久化。
+ *
+ * 认证类型判断：
+ *   - 密钥认证（privateKey 存在）：SSH 扩展的 connection.password 字段实际存储的是密钥 passphrase
+ *     （见 attemptConnect(id, { privateKey }, password) 中 password 参数的用法）
+ *   - 密码认证（无 privateKey）：connection.password 是 SSH 登录密码
+ *
+ * @param {string} connectionId 连接 ID
+ * @returns {{ success: boolean, password?: string, privateKey?: string, passphrase?: string, error?: string }}
+ */
+function getConnection(connectionId) {
+  const conn = findConnection(connectionId);
+  if (!conn) return { success: false, error: "\u8FDE\u63A5\u4E0D\u5B58\u5728" };
+  if (conn.privateKey) {
+    return {
+      success: true,
+      privateKey: conn.privateKey,
+      passphrase: conn.password
+    };
+  }
+  return {
+    success: true,
+    password: conn.password
+  };
+}
+module.exports = { activate, deactivate, getRemoteFileTree, handleFileOperation, callFileSystemProvider, executeRemote, listConnections, openConnection, getConnection };

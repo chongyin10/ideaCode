@@ -274,6 +274,87 @@ function getDefaultShell() {
 // ============ PTY 创建与销毁 ============
 
 /**
+ * §SSH 通道认证自动化
+ * 在主进程中监听 PTY 输出，检测 SSH 认证提示并自动注入凭据。
+ * 密码/密钥短语不经过渲染进程，提升安全性。
+ */
+function createSshAuthHelper(sshConfig, ptyProcess, terminalId, ownerWebContents) {
+  return {
+    password: sshConfig.password || '',
+    passphrase: sshConfig.passphrase || '',
+    sentPassword: false,
+    sentPassphrase: false,
+    verifiedHost: false,
+    authDone: false,
+    authBuffer: '',
+
+    /** 处理 PTY 输出，返回过滤后的 data（去掉认证提示行） */
+    processData(data) {
+      if (this.authDone) return data;
+
+      this.authBuffer += data;
+      if (this.authBuffer.length > 2048) {
+        this.authBuffer = this.authBuffer.slice(-2048);
+      }
+
+      let filtered = data;
+
+      // 1. host key 验证：Are you sure you want to continue connecting
+      if (!this.verifiedHost && /are you sure.*continue.*connecting/i.test(this.authBuffer)) {
+        this.verifiedHost = true;
+        ptyProcess.write('yes\n');
+        ownerWebContents.send(Channels.TERMINAL_OUTPUT, {
+          id: terminalId, type: 'auth', authStatus: 'host-verified',
+        });
+        filtered = filtered.replace(/Are you sure.*connecting.*\(yes\/no.*?\)?\s*/gi, '');
+      }
+
+      // 2. 密码提示
+      if (!this.sentPassword && this.password && /password\s*:/i.test(this.authBuffer)) {
+        this.sentPassword = true;
+        ptyProcess.write(this.password + '\n');
+        ownerWebContents.send(Channels.TERMINAL_OUTPUT, {
+          id: terminalId, type: 'auth', authStatus: 'password-sent',
+        });
+        filtered = filtered.replace(/.*password\s*:?.*/gi, '');
+      }
+
+      // 3. 密钥 passphrase 提示
+      if (!this.sentPassphrase && this.passphrase && /passphrase.*key/i.test(this.authBuffer)) {
+        this.sentPassphrase = true;
+        ptyProcess.write(this.passphrase + '\n');
+        ownerWebContents.send(Channels.TERMINAL_OUTPUT, {
+          id: terminalId, type: 'auth', authStatus: 'passphrase-sent',
+        });
+        filtered = filtered.replace(/.*passphrase.*key.*/gi, '');
+      }
+
+      // 4. 认证失败
+      if (/permission denied|authentication failed/i.test(this.authBuffer)) {
+        ownerWebContents.send(Channels.TERMINAL_OUTPUT, {
+          id: terminalId, type: 'auth', authStatus: 'failed',
+        });
+        this.authDone = true;
+        return filtered;
+      }
+
+      // 5. 认证成功（检测到 shell prompt / Last login / 远程路径）
+      //    仅在已发送凭据或无需凭据时判定
+      const authSent = this.sentPassword || this.sentPassphrase;
+      const noCredNeeded = !this.password && !this.passphrase;
+      if ((authSent || noCredNeeded) && /last login|\$ $|# $|>\s*$|Processing\.\.\./i.test(this.authBuffer)) {
+        ownerWebContents.send(Channels.TERMINAL_OUTPUT, {
+          id: terminalId, type: 'auth', authStatus: 'success',
+        });
+        this.authDone = true;
+      }
+
+      return filtered;
+    },
+  };
+}
+
+/**
  * 创建终端进程
  * @param {object} config
  * @param {string} cwd - 工作目录
@@ -306,6 +387,33 @@ async function createTerminalProcess(config, cwd, cols, rows, ownerWindow, owner
             '  \x1b[33mnpx electron-rebuild\x1b[0m\r\n\r\n',
     });
     return id;
+  }
+
+  // §通道分流：SSH 通道由主进程构造 ssh 命令，认证自动化在主进程完成
+  let sshAuthHelper = null;
+  let tempKeyFile = null; // §SSH 密钥临时文件路径，终端退出时清理
+  if (config.channel === 'ssh' && config.sshConfig) {
+    const ssh = config.sshConfig;
+    const remotePath = ssh.remotePath || '/';
+    const escapedDir = `'${remotePath.replace(/'/g, "'\\''")}'`;
+    const sshArgs = [
+      '-p', String(ssh.port || 22),
+      '-o', 'StrictHostKeyChecking=accept-new', // §自动接受新 host key，避免交互阻塞
+    ];
+    // §密钥认证：privateKey 是字符串内容（来自 SSH 扩展），写入临时文件供 ssh -i 使用。
+    //   系统 ssh 命令只接受文件路径，不接受密钥字符串。临时文件权限 0600，终端退出时删除。
+    if (ssh.privateKey) {
+      try {
+        tempKeyFile = path.join(os.tmpdir(), `ssh-key-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+        fs.writeFileSync(tempKeyFile, ssh.privateKey, { mode: 0o600 });
+        sshArgs.push('-i', tempKeyFile);
+      } catch (e) {
+        console.warn('[TerminalHandler] 写入 SSH 密钥临时文件失败:', e.message);
+      }
+    }
+    sshArgs.push('-t', `${ssh.username}@${ssh.host}`, `cd ${escapedDir} && exec $SHELL -l`);
+    config.executable = 'ssh';
+    config.args = sshArgs;
   }
 
   const shellConfig = config.shellConfig || getDefaultShell();
@@ -379,9 +487,20 @@ async function createTerminalProcess(config, cwd, cols, rows, ownerWindow, owner
       // PID 流控初始化
       pidControllers.set(id, new PIDControl(0.5, 0.1, 0.05, HIGH_WATERMARK * 0.6));
 
+      // §SSH 通道：创建认证助手，在主进程自动注入密码/密钥短语
+      if (config.channel === 'ssh' && config.sshConfig) {
+        sshAuthHelper = createSshAuthHelper(config.sshConfig, ptyProcess, id, ownerWebContents);
+      }
+
       // --- PTY 数据事件 → 转发到对应 BrowserView ---
       ptyProcess.onData((data) => {
         if (termProcess.exited) return;
+
+        // §SSH 认证自动化：检测提示并自动注入凭据，过滤提示行
+        if (sshAuthHelper) {
+          data = sshAuthHelper.processData(data);
+          if (!data) return; // 认证提示行已过滤，不需要转发
+        }
 
         termProcess.unackedChars += data.length;
 
@@ -415,6 +534,11 @@ async function createTerminalProcess(config, cwd, cols, rows, ownerWindow, owner
           exitCode,
           signal,
         });
+        // §清理 SSH 密钥临时文件（密钥认证场景），避免敏感信息残留
+        if (tempKeyFile) {
+          try { fs.unlinkSync(tempKeyFile); } catch { /* 忽略清理失败 */ }
+          tempKeyFile = null;
+        }
       });
 
       // 发送就绪事件（主窗口 UI 更新用）

@@ -88,10 +88,8 @@ function isDefaultIgnored(p) {
  */
 function decodeGitPath(p) {
   if (!p) return p;
-  // git 用双引号包裹含特殊字符的路径
   if (p.startsWith('"') && p.endsWith('"')) {
     let inner = p.slice(1, -1);
-    // 含八进制转义序列时，逐字节还原为 UTF-8
     if (inner.includes('\\')) {
       const bytes = [];
       let i = 0;
@@ -109,7 +107,6 @@ function decodeGitPath(p) {
       }
       return Buffer.from(bytes).toString('utf-8');
     }
-    // 仅含 \" 或 \\ 转义
     return inner.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
   }
   return p;

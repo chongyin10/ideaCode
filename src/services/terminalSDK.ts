@@ -18,7 +18,7 @@ import {
   setActiveGroup,
   setActivePane,
 } from '../store/slices/terminalSlice';
-import type { TerminalProfile } from '../types/electron';
+import type { TerminalProfile, SshChannelConfig } from '../types/electron';
 import type { TerminalTab } from '../store/slices/terminalSlice';
 import { createTerminal, sendInput, disposeTerminal, onTerminalOutput } from './terminalManager';
 import { clearTerminalSnapshot } from './terminalSnapshot';
@@ -48,6 +48,10 @@ export interface TerminalCreateOptions {
   input?: string;
   /** 输出过滤正则字符串，用于隐藏密码提示等不美观内容 */
   outputFilter?: string;
+  /** §终端通道：'local'（默认）或 'ssh'。channel='ssh' 时由主进程处理认证自动化 */
+  channel?: 'local' | 'ssh';
+  /** §SSH 通道配置，channel='ssh' 时使用。凭据在主进程使用，不经过渲染进程 */
+  sshConfig?: SshChannelConfig;
 }
 
 export interface TerminalCreateResult {
@@ -78,7 +82,7 @@ export const terminalSDK = {
    * 创建一个新的终端 Tab
    */
   async createTab(options: TerminalCreateOptions): Promise<TerminalCreateResult> {
-    const { name, cwd, executable, args, env, profile, autoFocus = true, isModal, isSSH, input, outputFilter } = options;
+    const { name, cwd, executable, args, env, profile, autoFocus = true, isModal, isSSH, input, outputFilter, channel, sshConfig } = options;
 
     if (autoFocus && !isModal) {
       this.showPanel();
@@ -92,6 +96,9 @@ export const terminalSDK = {
       executable,
       args,
       env,
+      // §透传通道配置：主进程根据 channel 分流，SSH 认证在主进程完成
+      channel,
+      sshConfig,
     };
 
     try {

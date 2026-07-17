@@ -57,7 +57,7 @@ import {
   clearFileClipboard,
 } from '../../services/fileClipboard';
 import { terminalSDK } from '../../services/terminalSDK';
-import { getSshConnection, getSshRemotePath, buildSshTerminalArgs } from '../../services/sshWorkspace';
+import { getSshConnection, getSshRemotePath, getSshConnectionId, getSshCredentials } from '../../services/sshWorkspace';
 import FileTree, { type PendingCreate, type PendingRename, type LastOperation, getCurrentDrag, currentDragExists, clearCurrentDrag } from './FileTree';
 import ContextMenu, { type MenuItem } from '../ContextMenu';
 import InlineInput from '../InlineInput';
@@ -366,7 +366,7 @@ const ExplorerContent = () => {
   const handleOpenInTerminal = useCallback(async (entry: FileEntry) => {
     const source = entry.source;
     if (!isPath(source)) return;
-    // SSH 远程条目：通过 sshWorkspace 工具获取连接信息并构造 ssh 命令
+    // SSH 远程条目：通过通道传递连接信息，主进程自动处理认证
     if (isRemoteUri(source)) {
       const conn = getSshConnection(source);
       if (!conn) {
@@ -379,11 +379,21 @@ const ExplorerContent = () => {
         ? remotePath
         : remotePath.replace(/\/[^/]*$/, '') || '/';
       try {
-        const sshArgs = buildSshTerminalArgs(conn, targetDir);
+        // §获取 SSH 凭据，通过通道传递给主进程，认证自动化在主进程完成
+        const connectionId = getSshConnectionId(source);
+        const credentials = connectionId ? await getSshCredentials(connectionId) : {};
         await terminalSDK.createTab({
-          name: sshArgs.name,
-          executable: sshArgs.executable,
-          args: sshArgs.args,
+          name: `${conn.name} · ${conn.username}@${conn.host}`,
+          channel: 'ssh',
+          sshConfig: {
+            host: conn.host,
+            port: conn.port,
+            username: conn.username,
+            password: credentials.password,
+            privateKey: credentials.privateKey,
+            passphrase: credentials.passphrase,
+            remotePath: targetDir,
+          },
         });
       } catch (err) {
         alert(`打开 SSH 终端失败: ${err instanceof Error ? err.message : String(err)}`);

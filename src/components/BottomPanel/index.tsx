@@ -27,7 +27,7 @@ import {
   TerminalTab,
 } from '../../store/slices/terminalSlice';
 import { useTerminalFileTreeSync } from '../../services/terminalFileTreeSync';
-import { getCurrentSshConfig, buildSshTerminalArgs } from '../../services/sshWorkspace';
+import { getCurrentSshConfig, buildSshTerminalArgs, resolveTerminalChannel } from '../../services/sshWorkspace';
 import {
   createTerminal, disposeTerminal,
   listProfiles, onTerminalOutput,
@@ -319,17 +319,15 @@ const BottomPanel = () => {
     const profileToUse = profile || state.defaultProfile;
     const tabId = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
-    // §需求：当前工作区为 SSH 远程项目时，底部终端应连接到远程主机。
-    // 通过 sshWorkspace 工具统一检测 SSH 连接状态，避免散落的正则匹配和重复代码。
-    const sshConfig = getCurrentSshConfig();
+    // §通道解析：自动检测 SSH/本地环境，SSH 认证由主进程处理
+    const { channel, sshConfig, tabName: sshTabName, cwd: sshCwd } = await resolveTerminalChannel();
 
     let tabName: string;
-    let createConfig: { cwd?: string; executable?: string; args?: string[] };
+    let createConfig: import('../../types/electron').TerminalCreateConfig;
 
-    if (sshConfig) {
-      const sshArgs = buildSshTerminalArgs(sshConfig.conn, sshConfig.remotePath);
-      tabName = sshArgs.name;
-      createConfig = { executable: sshArgs.executable, args: sshArgs.args };
+    if (channel === 'ssh') {
+      tabName = sshTabName || 'SSH Terminal';
+      createConfig = { channel, sshConfig };
     } else {
       tabName = profileToUse?.name || 'Terminal';
       const root = rootSourceRef.current;
@@ -344,7 +342,7 @@ const BottomPanel = () => {
 
     if (result.success && result.id) {
       dispatch(setTabProcessId({ id: tabId, processId: result.id }));
-      dispatch(setTabReady({ id: tabId, pid: result.id, cwd: createConfig.cwd || '' }));
+      dispatch(setTabReady({ id: tabId, pid: result.id, cwd: createConfig.cwd || sshCwd || '' }));
     } else {
       dispatch(setTabExited({ id: tabId, exitCode: -1 }));
     }
@@ -438,6 +436,9 @@ const BottomPanel = () => {
     if (!groupId) return;
     dispatch(splitPane({ groupId }));
 
+    // §通道解析：与 handleCreateTab 一致，SSH 认证由主进程处理
+    const { channel, sshConfig, cwd: sshCwd } = await resolveTerminalChannel();
+
     requestAnimationFrame(() => {
       const nextState = terminalStateRef.current;
       const group = nextState.panelLayout.groups.find(g => g.id === groupId);
@@ -446,14 +447,9 @@ const BottomPanel = () => {
         const tab = nextState.tabs[newPane.terminalId];
         const profile = tab?.profile || nextState.defaultProfile;
 
-        // §需求：SSH 项目分屏终端也需连接远程主机（与 handleCreateTab 一致）
-        // 通过 sshWorkspace 工具统一检测，消除与 handleCreateTab 的重复代码
-        const sshConfig = getCurrentSshConfig();
-
-        let createConfig: { cwd?: string; executable?: string; args?: string[] };
-        if (sshConfig) {
-          const sshArgs = buildSshTerminalArgs(sshConfig.conn, sshConfig.remotePath);
-          createConfig = { executable: sshArgs.executable, args: sshArgs.args };
+        let createConfig: import('../../types/electron').TerminalCreateConfig;
+        if (channel === 'ssh') {
+          createConfig = { channel, sshConfig };
         } else {
           const root = rootSourceRef.current;
           const cwd = typeof root === 'string' ? root : undefined;
@@ -463,7 +459,7 @@ const BottomPanel = () => {
         createTerminal(createConfig).then((result) => {
           if (result.success && result.id) {
             dispatch(setTabProcessId({ id: newPane.terminalId, processId: result.id }));
-            dispatch(setTabReady({ id: newPane.terminalId, pid: result.id, cwd: createConfig.cwd || '' }));
+            dispatch(setTabReady({ id: newPane.terminalId, pid: result.id, cwd: createConfig.cwd || sshCwd || '' }));
           }
         });
       }

@@ -79,6 +79,10 @@ export interface DiffView {
 interface WorkspaceState {
   rootSource: FileSource | null;
   rootName: string;
+  /** §项目环境类型：'local'（本地项目）或 'ssh'（SSH 远程项目）或 null（未加载）。
+   *  在 loadDirectory.fulfilled 中根据 source 自动判断写入，作为终端、搜索等
+   *  功能判断当前执行环境的单一数据源，避免每次解析 rootSource URI。 */
+  projectType: 'local' | 'ssh' | null;
   entries: FileEntry[];
   openedFiles: OpenedFile[];
   /** 当前焦点组的 activeFileId 镜像 */
@@ -125,6 +129,7 @@ interface WorkspaceState {
 const initialState: WorkspaceState = {
   rootSource: null,
   rootName: '',
+  projectType: null,
   entries: [],
   openedFiles: [],
   activeFileId: null,
@@ -616,6 +621,8 @@ const workspaceSlice = createSlice({
       state.gitBranch = null;
       // §同时清空 SSH 连接缓存，避免内存泄漏（旧连接仍指向已关闭的 SSH 会话）
       state.sshConnections = {};
+      // §重置项目环境类型，避免清除工作区后残留旧环境标识
+      state.projectType = null;
     },
     closeFile: (state, action) => {
       const payload = action.payload;
@@ -1044,6 +1051,15 @@ const workspaceSlice = createSlice({
       .addCase(loadDirectory.fulfilled, (state, action) => {
         state.rootSource = action.payload.source;
         state.rootName = action.payload.name;
+        // §根据 source 自动判断项目环境类型并存储：
+        //   - source 为 'ssh://' 前缀的 URI → 'ssh'（远程项目）
+        //   - 其他（本地路径 / FileSystemHandle）→ 'local'（本地项目）
+        // 终端、搜索等功能读取 projectType 作为执行环境的单一数据源，
+        // 不再需要每次解析 rootSource URI 判断环境。
+        state.projectType =
+          typeof action.payload.source === 'string' && action.payload.source.startsWith('ssh://')
+            ? 'ssh'
+            : 'local';
         state.entries = action.payload.entries;
         // 打开新文件夹/工程时，重置所有编辑会话状态
         state.openedFiles = [];
