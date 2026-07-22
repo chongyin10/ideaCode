@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ToolCallInfo } from '../../types';
 import {
   FileText, ChevronDown, Check, Loader2, X, Search, List, Layers,
@@ -7,6 +7,8 @@ import {
 
 interface ReadFileGroupProps {
   calls: ToolCallInfo[];
+  /** 当前 group 处于活跃输出态：展开并跟随流程 */
+  isActive?: boolean;
 }
 
 function getFileName(call: ToolCallInfo) {
@@ -106,12 +108,27 @@ function getStatusClass(call: ToolCallInfo): string {
   return 'read-file-group__status-icon--success';
 }
 
-export function ReadFileGroup({ calls }: ReadFileGroupProps) {
+export function ReadFileGroup({ calls, isActive }: ReadFileGroupProps) {
   const [expanded, setExpanded] = useState(false);
+  const autoOpenedRef = useRef(false);
 
   if (calls.length === 0) return null;
 
   const runningCount = calls.filter((c) => c.status === 'running').length;
+  const shouldExpand = isActive || runningCount > 0;
+
+  useEffect(() => {
+    if (shouldExpand) {
+      if (!expanded) {
+        setExpanded(true);
+        autoOpenedRef.current = true;
+      }
+    } else if (expanded && autoOpenedRef.current) {
+      setExpanded(false);
+      autoOpenedRef.current = false;
+    }
+  }, [shouldExpand, expanded]);
+
   const errorCount = calls.filter((c) => c.status === 'error').length;
   const pendingCount = calls.filter((c) => {
     return c.status === 'success' && c.result && typeof c.result === 'object' &&

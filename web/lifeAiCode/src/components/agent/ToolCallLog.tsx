@@ -83,7 +83,8 @@ export function ToolCallLog({ toolCalls }: ToolCallLogProps) {
       <div className="tool-call-log__header">Tool 调用记录</div>
       {rows.map((row, index) => {
         if (row.type === 'readGroup') {
-          return <ReadFileGroup key={`read-${index}`} calls={row.calls} />;
+          const isGroupActive = row.calls.some((c) => c.status === 'running');
+          return <ReadFileGroup key={`read-${index}`} calls={row.calls} isActive={isGroupActive} />;
         }
         if (row.type === 'shellGroup') {
           return <ShellGroup key={`shell-${index}`} calls={row.calls} merged={row.merged} />;

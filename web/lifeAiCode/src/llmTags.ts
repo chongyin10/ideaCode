@@ -245,7 +245,9 @@ export function parseProviderTags(text: string, provider: ProviderId): TagParseR
   // 也覆盖 custom/openai/ollama 等没有 thinking 正则的 provider。
   // 模式同时匹配闭合 <think>...</think> 和未闭合 <think>...（到文本末尾）。
   // (?![\s\S]) 匹配绝对文本末尾（比 $ 更精确，不受 trailing \n 影响）。
-  const universalThinkRegex = /<(think|thinking)>([\s\S]*?)(?:<\/\1>|(?![\s\S]))/gi;
+  // 闭合标签宽松匹配 </think> 或 </thinking>，容忍开闭标签不对称（如 <think>...</thinking>），
+  // 避免闭标签不匹配时懒惰匹配一路吞到文本末尾、把后续正文（如最终总结）误吞进推理块。
+  const universalThinkRegex = /<(think|thinking)>([\s\S]*?)(?:<\/think(?:ing)?>|(?![\s\S]))/gi;
   for (const m of text.matchAll(universalThinkRegex)) {
     const start = m.index!;
     if (isInsideCodeBlock(start, codeBlocks)) continue;

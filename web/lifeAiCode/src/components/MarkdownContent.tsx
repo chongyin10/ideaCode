@@ -46,12 +46,15 @@ interface MarkdownContentProps {
    * 渲染端优先用 fileHint 后缀推断语言，从而拿到正确的高亮。
    */
   fileHint?: string;
+  /** §流式打字机：额外附加在 md-content 容器上的 className */
+  className?: string;
 }
 
 export function MarkdownContent({
   content, onOptionClick, enableOptions = true,
   onExecuteShell, onKillShell, shellOutputs,
   fileHint,
+  className,
 }: MarkdownContentProps) {
   // §需求：LLM 经常在中文/英文混排中产生多余空格（如 "用了  node:module  等"），
   //   渲染后表现为生硬的额外空白 / 偶发换行。统一压缩相邻空白为单空格，
@@ -148,7 +151,7 @@ export function MarkdownContent({
   }, [rendered, processed]);
 
   return (
-    <div className="md-content">
+    <div className={`md-content${className ? ` ${className}` : ''}`}>
       {rendered.ok ? (
         <ShellContext.Provider value={ctxValue}>
           {/* hast-util-to-jsx-runtime 返回的是 React 元素（Root 级别），

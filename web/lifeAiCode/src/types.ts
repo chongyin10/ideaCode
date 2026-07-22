@@ -343,6 +343,8 @@ export type WebViewRequest =
   | { command: 'toggleEditMode' }
   | { command: 'executeShell'; id: string; shellCommand: string; cwd?: string }
   | { command: 'killShell'; id: string }
+  // §向 PTY 进程发送用户输入（如 create-vite 交互式选择的上下键、回车等）
+  | { command: 'shellInput'; id: string; input: string }
   | { command: 'cancelAgent' }
   | { command: 'abortGeneration' }
   | { command: 'confirmAgentEdit'; editId: string }
@@ -376,6 +378,8 @@ export type ExtensionMessage =
   | { type: 'historyCompacted'; summary: string; beforeTokens: number; afterTokens: number }
   // §需求9：任务拆解 — Planner 生成计划后下发，前端渲染 checklist
   | { type: 'planGenerated'; steps: Array<{ step: number; tool: string; args: Record<string, unknown>; reason: string }> }
+  // §流式计划：计划生成过程中实时推送 token，token=null 表示流结束
+  | { type: 'planStreamToken'; token: string | null }
   // §需求9：计划步骤状态变更（pending/running/done/error/skipped）
   | { type: 'planStepUpdate'; index: number; status: 'pending' | 'running' | 'done' | 'error' | 'skipped'; summary?: string; startTime?: number; endTime?: number }
   // §撤销修改：文件恢复完成通知

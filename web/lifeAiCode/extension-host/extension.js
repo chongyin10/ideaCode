@@ -661,15 +661,12 @@ async function executeShellCommand(id, shellCommand, cwd) {
   // 返回 Promise 给在等的调用方（Agent tool）
   // 注意：首次调用时这个 Promise 还没人等，所以 pendingShellWaits 里没记录
   // 后续如果有 waitShellCompletion(id) 调用，会被 addShellWaiter 添加到 map
-  // 这里我们返回 Promise 主动挂入；如果 60 秒内没人 wait，仅从 map 中清理自身
-  // （不主动 resolve 错误，避免和 proc.on('close') 的成功 resolve 冲突——之前
-  //  60s 后 resolve 一个 "无调用方" 错误，会覆盖 proc 实际完成的真实结果）。
+  // §不设 60 秒清理：之前 60s 后 delete waiter 但不 resolve，导致命令超过 60s 时
+  //   proc.on('close') 找不到 waiter 永远不 resolve，Agent 一直阻塞。
+  //   waiter 的清理由 proc.on('close') / proc.onExit 在 resolve 时负责；
+  //   proc 兜底超时（5分钟）会 kill 进程触发 close，保证 waiter 一定会被 resolve。
   return new Promise((resolve, reject) => {
     pendingShellWaits.set(id, { resolve, reject });
-    // 仅清理 map 条目，不 resolve。proc.on('close') 仍然会 resolve 真实结果。
-    setTimeout(() => {
-      pendingShellWaits.delete(id);
-    }, 60_000);
   });
 }
 
@@ -789,23 +786,41 @@ async function executeShellWithPty(id, shellCommand, cwd, ptyModule) {
   });
 
   let proc;
+  let useWriteMode = false;
+  const isWindows = process.platform === 'win32';
+  const shellPath = isWindows ? (process.env.COMSPEC || 'cmd.exe') : (process.env.SHELL || '/bin/zsh');
+  const ptyOpts = {
+    name: 'xterm-256color',
+    cols: 120,
+    rows: 30,
+    cwd: effectiveCwd || os.homedir(),
+    env: { ...process.env, FORCE_COLOR: '1' },
+  };
+
+  // §首选 -c 模式：shell 非交互式执行命令，执行完自动退出，onExit 一定触发。
+  //   之前用交互式 shell + setImmediate(write) 有三个隐患：
+  //   1) zsh 启动读 .zshrc，若有交互提示会卡住，永远不执行 write 的命令
+  //   2) setImmediate 时 shell 可能未就绪，write 的命令丢失
+  //   3) `; exit` 可能因前一个命令的副作用没执行，shell 卡在 prompt
   try {
-    const isWindows = process.platform === 'win32';
-    const shellPath = isWindows ? (process.env.COMSPEC || 'cmd.exe') : (process.env.SHELL || '/bin/zsh');
-    const shellArgs = [];
-    proc = ptyModule.spawn(shellPath, shellArgs, {
-      name: 'xterm-256color',
-      cols: 120,
-      rows: 30,
-      cwd: effectiveCwd || os.homedir(),
-      env: { ...process.env, FORCE_COLOR: '1' },
-    });
+    const shellArgs = isWindows ? ['/c', finalCommand] : ['-c', finalCommand];
+    proc = ptyModule.spawn(shellPath, shellArgs, ptyOpts);
+    console.log('[LifeAiCode][executeShellWithPty] pty spawned (-c):', { id, pid: proc.pid });
   } catch (err) {
-    console.error('[LifeAiCode][executeShellWithPty] pty.spawn failed:', err);
-    const errorMsg = `[PTY 启动失败] ${err.message}\n回退普通模式请重试`;
-    postToWebView({ type: 'shellUpdate', id, shellCommand, output: errorMsg, status: 'error' });
-    activeProcs.set(id, { proc: null, finished: true, cwd, buffers: { stdout: '', stderr: '' }, fullOutput: errorMsg, result: { success: false, error: errorMsg, output: errorMsg } });
-    return;
+    // §降级：-c 模式 spawn 失败（如 shell 不支持 -c、命令含特殊字符导致 spawn 异常），
+    //   回退到交互式 shell + write 模式。
+    console.warn('[LifeAiCode][executeShellWithPty] -c 模式 spawn 失败，降级为 write 模式:', err.message);
+    try {
+      proc = ptyModule.spawn(shellPath, [], ptyOpts);
+      useWriteMode = true;
+      console.log('[LifeAiCode][executeShellWithPty] pty spawned (write fallback):', { id, pid: proc.pid });
+    } catch (err2) {
+      console.error('[LifeAiCode][executeShellWithPty] write 模式 spawn 也失败:', err2);
+      const errorMsg = `[PTY 启动失败] ${err2.message}\n回退普通模式请重试`;
+      postToWebView({ type: 'shellUpdate', id, shellCommand, output: errorMsg, status: 'error' });
+      activeProcs.set(id, { proc: null, finished: true, cwd, buffers: { stdout: '', stderr: '' }, fullOutput: errorMsg, result: { success: false, error: errorMsg, output: errorMsg } });
+      return;
+    }
   }
 
   // 注册到 activeProcs（用 proc 字段保存 pty 句柄）
@@ -823,15 +838,18 @@ async function executeShellWithPty(id, shellCommand, cwd, ptyModule) {
   };
   activeProcs.set(id, entry);
 
-  // 把 shellCommand 喂入 pty stdin（确保 shell 启动后立即执行）
-  // 追加 `; exit` 让命令结束后 shell 自动退出，避免登录 shell 卡在 prompt 导致 onExit 不触发。
-  setImmediate(() => {
-    try {
-      proc.write(`${finalCommand}; exit\r`);
-    } catch (err) {
-      console.error('[LifeAiCode][executeShellWithPty] write failed:', err);
-    }
-  });
+  // §降级模式：交互式 shell 启动后，通过 write 把命令喂入 stdin，追加 `; exit` 让 shell 退出。
+  //   -c 模式下命令已通过 shellArgs 传入，无需 write。
+  //   保留 killShellCommand 中的 proc.write 能力，供 long-running 命令接收 Ctrl+C 信号。
+  if (useWriteMode) {
+    setImmediate(() => {
+      try {
+        proc.write(`${finalCommand}; exit\r`);
+      } catch (err) {
+        console.error('[LifeAiCode][executeShellWithPty] write failed:', err);
+      }
+    });
+  }
 
   // 实时输出
   let outputBuffer = '';
@@ -941,12 +959,12 @@ async function executeShellWithPty(id, shellCommand, cwd, ptyModule) {
   entry.timeoutTimer = timeoutTimer;
 
   // 返回 waiter Promise（与 spawn 版本一致）
-  // 仅清理 map 条目，不主动 resolve 错误——proc.onExit 仍然会 resolve 真实结果。
+  // §不设 60 秒清理：之前 60s 后 delete waiter 但不 resolve，导致命令超过 60s 时
+  //   proc.onExit 找不到 waiter 永远不 resolve，Agent 一直阻塞。
+  //   waiter 的清理由 proc.onExit 在 resolve 时负责；
+  //   5 分钟兜底超时会 kill 进程触发 onExit，保证 waiter 一定会被 resolve。
   return new Promise((resolve, reject) => {
     pendingShellWaits.set(id, { resolve, reject });
-    setTimeout(() => {
-      pendingShellWaits.delete(id);
-    }, 60_000);
   });
 }
 
@@ -1483,6 +1501,20 @@ async function runAgentTask(text, context, options = {}) {
 
     let streamedContent = '';
     let agentStreamTruncated = false;
+    // §流式节流（与 processMessage 一致）：LLM 每个 SSE delta 都 emit token，
+    // 高频 postToWebView 会压垮 Electron IPC + WebView 渲染，用户感知为
+    // "卡几秒后突然加载很多内容"。用 30ms 节流窗口从源头减少消息量。
+    // cleanToolCallTags 对全量内容做正则，放在 flush 里执行避免每个 token 都跑正则。
+    let agentLastStreamPostTime = 0;
+    let agentStreamPostTimer = null;
+    const AGENT_STREAM_THROTTLE_MS = 30;
+    const flushAgentStream = () => {
+      agentLastStreamPostTime = Date.now();
+      const displayContent = cleanToolCallTags(streamedContent);
+      if (displayContent) {
+        postToWebView({ type: 'chatResponse', id: msgId, content: displayContent, done: false });
+      }
+    };
     const finalResponse = await agentRuntime.run(text, context, {
       history,
       onToken: (token) => {
@@ -1492,21 +1524,21 @@ async function runAgentTask(text, context, options = {}) {
         if (streamedContent.length + (token?.length || 0) > MAX_LLM_RESPONSE_CHARS) {
           agentStreamTruncated = true;
           streamedContent += '\n\n> ⚠️ 响应过长，已停止累积（防止超出字符串长度上限）';
-          const displayContent = cleanToolCallTags(streamedContent);
-          if (displayContent) {
-            postToWebView({ type: 'chatResponse', id: msgId, content: displayContent, done: false });
-          }
+          if (agentStreamPostTimer) { clearTimeout(agentStreamPostTimer); agentStreamPostTimer = null; }
+          flushAgentStream();
           return;
         }
         streamedContent += token;
-        const displayContent = cleanToolCallTags(streamedContent);
-        if (displayContent) {
-          postToWebView({
-            type: 'chatResponse',
-            id: msgId,
-            content: displayContent,
-            done: false,
-          });
+        // §节流：超过窗口立即发送，窗口内用定时器兜底确保最终内容不丢
+        const now = Date.now();
+        if (now - agentLastStreamPostTime >= AGENT_STREAM_THROTTLE_MS) {
+          if (agentStreamPostTimer) { clearTimeout(agentStreamPostTimer); agentStreamPostTimer = null; }
+          flushAgentStream();
+        } else if (!agentStreamPostTimer) {
+          agentStreamPostTimer = setTimeout(() => {
+            agentStreamPostTimer = null;
+            flushAgentStream();
+          }, AGENT_STREAM_THROTTLE_MS);
         }
       },
       onToolCall: (toolCall) => {
@@ -1534,6 +1566,9 @@ async function runAgentTask(text, context, options = {}) {
       },
     });
 
+    // §清理节流定时器：最后一个窗口的累积内容由下方 done:true 消息统一发送
+    if (agentStreamPostTimer) { clearTimeout(agentStreamPostTimer); agentStreamPostTimer = null; }
+
     const displayContent = cleanToolCallTags(streamedContent || finalResponse || '');
     postToWebView({
       type: 'chatResponse',
@@ -1542,11 +1577,19 @@ async function runAgentTask(text, context, options = {}) {
       done: true,
     });
   } catch (err) {
+    // §清理节流定时器（异常/中断路径，防止泄漏）
+    if (agentStreamPostTimer) { clearTimeout(agentStreamPostTimer); agentStreamPostTimer = null; }
     if (err.isAbort) {
+      // §保留已渲染的流式内容作为兜底（与普通对话 processMessage 一致）。
+      //   前端 abortedRef 分支会优先用 m.content，若 m.content 为空（rAF 竞态）
+      //   会用这里的 msg.content 兜底，避免内容"被清空"变成纯提示文案。
+      const abortContent = streamedContent
+        ? `${cleanToolCallTags(streamedContent)}\n\n> ⏹ Agent 任务已停止`
+        : '> ⏹ Agent 任务已停止';
       postToWebView({
         type: 'chatResponse',
         id: msgId,
-        content: '> ⏹ Agent 任务已停止',
+        content: abortContent,
         done: true,
       });
       postToWebView({
@@ -1630,7 +1673,8 @@ async function compactHistory() {
 
   try {
     postToWebView({ type: 'agentStatus', status: 'running', message: '正在压缩上下文…' });
-    const summary = await llmClient.chat(summaryPrompt);
+    // §改为流式请求，与非流式保持一致，避免出现"非流式请求"日志
+    const summary = await llmClient.chatStream(summaryPrompt);
     const cleanSummary = String(summary || '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
     const afterTokens = estimateStringTokens(cleanSummary);
 
@@ -2328,6 +2372,26 @@ async function activate(context) {
             console.log('[LifeAiCode][killShell] result:', killed, 'id:', shellId);
           } catch (err) {
             console.error('[LifeAiCode][killShell] error:', err);
+          }
+          break;
+        }
+        case 'shellInput': {
+          // §向 PTY 进程发送用户输入（如 create-vite 交互式选择的上下键、回车等）
+          const shellId = message.id;
+          const input = message.input || '';
+          if (!shellId) {
+            console.warn('[LifeAiCode][shellInput] missing id');
+            break;
+          }
+          try {
+            const entry = activeProcs.get(shellId);
+            if (entry && entry.proc && typeof entry.proc.write === 'function') {
+              entry.proc.write(input);
+            } else {
+              console.warn('[LifeAiCode][shellInput] proc not found or not writable:', shellId);
+            }
+          } catch (err) {
+            console.error('[LifeAiCode][shellInput] error:', err);
           }
           break;
         }

@@ -8,6 +8,7 @@ import {
 import type { ContentBlock as ContentBlockType, FileStatus, StepType, StepStatus } from '../types';
 import { MarkdownContent } from './MarkdownContent';
 import { StepSummary } from './agent/StepSummary';
+import { StreamingText } from './StreamingText';
 import { parseProviderTags, type ProviderId, type ExtractedTag, type CanonicalTagName } from '../llmTags';
 
 /* ─────────────────────────────────────────────────────────────────── */
@@ -150,7 +151,25 @@ function parseContentBlocks(content: string, provider: ProviderId = 'custom'): C
     blocks.push({ type: 'text', content: cleanedText });
   }
 
-  return blocks;
+  return mergeAdjacentReasoning(blocks);
+}
+
+/**
+ * §降噪：把相邻的 reasoning 块合并为一个（content 用 \n\n 连接）。
+ * 流式期间同样安全——最后一个 reasoning 块内容增长时仍只是同一个块，
+ * ReasoningBlock 的自动展开/收起（依赖 isActive）不受影响。
+ */
+function mergeAdjacentReasoning(blocks: ContentBlockType[]): ContentBlockType[] {
+  const merged: ContentBlockType[] = [];
+  for (const block of blocks) {
+    const last = merged[merged.length - 1];
+    if (block.type === 'reasoning' && last && last.type === 'reasoning') {
+      last.content += '\n\n' + block.content;
+    } else {
+      merged.push(block);
+    }
+  }
+  return merged;
 }
 
 /* ─────────────────────────────────────────────────────────────────── */
@@ -290,6 +309,9 @@ function ContentBlocksBase({
   // §任务列表归纳：把 <step> 标签从普通 block 流中抽出，统一渲染为顶部汇总面板
   const stepBlocks = blocks.filter((b): b is Extract<ContentBlockType, { type: 'step' }> => b.type === 'step');
   const otherBlocks = blocks.filter((b) => b.type !== 'step');
+  // §流式聚焦：当前正在接收输出的 block 是最后一个 block
+  const activeOtherIndex = isStreaming ? otherBlocks.length - 1 : -1;
+  const activeStepIndex = isStreaming && stepBlocks.length > 0 ? stepBlocks.length - 1 : -1;
 
   return (
     <MessageCard
@@ -304,10 +326,11 @@ function ContentBlocksBase({
       agentStatus={agentStatus}
     >
       {stepBlocks.length > 0 && (
-        <StepSummary steps={stepBlocks} completed={completed} />
+        <StepSummary steps={stepBlocks} completed={completed} isActive={activeStepIndex >= 0} />
       )}
       {otherBlocks.map((block, idx) => {
         const isLastBlock = idx === otherBlocks.length - 1;
+        const isActive = idx === activeOtherIndex;
         return (
           <BlockRenderer
             key={idx}
@@ -317,7 +340,7 @@ function ContentBlocksBase({
             onKillShell={onKillShell}
             onOptionClick={onOptionClick}
             completed={completed}
-            showStreamingCursor={isStreaming && isLastBlock && block.type === 'text'}
+            isActive={isActive}
           />
         );
       })}
@@ -524,26 +547,38 @@ interface BlockRendererProps {
   onKillShell?: (id: string) => void;
   onOptionClick?: (text: string) => void;
   completed?: boolean;
-  showStreamingCursor?: boolean;
+  /** §流式聚焦：当前 block 是否正在接收输出 */
+  isActive?: boolean;
 }
 
-function BlockRenderer({ block, shellOutputs, onExecuteShell, onKillShell, onOptionClick, completed, showStreamingCursor }: BlockRendererProps) {
+function BlockRenderer({ block, shellOutputs, onExecuteShell, onKillShell, onOptionClick, completed, isActive }: BlockRendererProps) {
+  const isStreaming = !completed;
   switch (block.type) {
     case 'text':
       return (
-        <div className="ai-card__section ai-card__section--text">
-          <MarkdownContent
-            content={block.content}
-            onOptionClick={onOptionClick}
-            onExecuteShell={onExecuteShell}
-            onKillShell={onKillShell}
-            shellOutputs={shellOutputs}
-          />
-          {showStreamingCursor && <span className="streaming-cursor" />}
+        <div className="ai-card__section ai-card__section--text" data-active-block={isActive || undefined}>
+          {isStreaming && isActive ? (
+            <StreamingText
+              content={block.content}
+              isStreaming={isStreaming}
+              onOptionClick={onOptionClick}
+              onExecuteShell={onExecuteShell}
+              onKillShell={onKillShell}
+              shellOutputs={shellOutputs}
+            />
+          ) : (
+            <MarkdownContent
+              content={block.content}
+              onOptionClick={onOptionClick}
+              onExecuteShell={onExecuteShell}
+              onKillShell={onKillShell}
+              shellOutputs={shellOutputs}
+            />
+          )}
         </div>
       );
     case 'reasoning':
-      return <ReasoningBlock content={block.content} />;
+      return <ReasoningBlock content={block.content} isActive={isActive} />;
     case 'edit':
       return <EditSummary filePath={block.filePath} additions={block.additions} deletions={block.deletions} />;
     case 'shell':
@@ -561,11 +596,24 @@ function BlockRenderer({ block, shellOutputs, onExecuteShell, onKillShell, onOpt
 /*  Reasoning Block                                                   */
 /* ─────────────────────────────────────────────────────────────────── */
 
-function ReasoningBlock({ content }: { content: string }) {
+function ReasoningBlock({ content, isActive }: { content: string; isActive?: boolean }) {
   const [open, setOpen] = useState(false);
+  const autoOpenedRef = useRef(false);
+
+  useEffect(() => {
+    if (isActive) {
+      if (!open) {
+        setOpen(true);
+        autoOpenedRef.current = true;
+      }
+    } else if (open && autoOpenedRef.current) {
+      setOpen(false);
+      autoOpenedRef.current = false;
+    }
+  }, [isActive, open]);
 
   return (
-    <div className="reasoning">
+    <div className="reasoning" data-active-block={isActive || undefined}>
       <button
         className="reasoning-header"
         onClick={() => setOpen(!open)}

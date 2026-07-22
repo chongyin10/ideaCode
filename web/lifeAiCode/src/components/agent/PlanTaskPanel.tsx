@@ -51,16 +51,18 @@ export function PlanTaskPanel({ steps }: PlanTaskPanelProps) {
 
   useEffect(() => {
     if (allDone) {
-      // 全部完成 → 3s 后隐藏
+      // 全部完成 → 先折叠，再延迟 3s 隐藏
+      setExpanded(false);
       if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
       hideTimerRef.current = setTimeout(() => setHidden(true), 3000);
     } else {
-      // 有任务重新开始 → 取消隐藏
+      // 有任务重新开始 → 取消隐藏并展开
       if (hideTimerRef.current) {
         clearTimeout(hideTimerRef.current);
         hideTimerRef.current = null;
       }
       setHidden(false);
+      setExpanded(true);
     }
     return () => {
       if (hideTimerRef.current) clearTimeout(hideTimerRef.current);

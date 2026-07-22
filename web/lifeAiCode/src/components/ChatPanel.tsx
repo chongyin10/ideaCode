@@ -13,6 +13,7 @@ import { AgentStatusSummary } from './agent/AgentStatusSummary';
 import { PlanTaskPanel } from './agent/PlanTaskPanel';
 import { TaskSummary } from './agent/TaskSummary';
 import { TodoListBlock } from './agent/TodoListBlock';
+import { ShellInteraction } from './agent/ShellInteraction';
 import { ShieldCheck, Brain, Pencil, ArrowDown, User, Sparkles, Paperclip, Send, MessageSquare, Loader2, Check, Square, ChevronDown, X, GripVertical, Code2, MessageCircleQuestion, FileText, Terminal, RefreshCw, Network, Lightbulb, GitCompare, Trash2, Archive, MapPin, Undo2, Info, Copy } from 'lucide-react';
 
 /** 预处理：检测并补齐未闭合的 markdown 结构（供 chatResponse 处理时使用） */
@@ -212,6 +213,8 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
   const [shellChangedFiles, setShellChangedFiles] = useState<SuggestionChange[]>([]);
   // §需求9：当前 Agent 任务的 plan steps（含状态），任务结束后保留供查看
   const [planSteps, setPlanSteps] = useState<PlanStep[]>([]);
+  // §流式计划：计划生成过程中实时累积的文本，planGenerated 到达后清空
+  const [planStreamText, setPlanStreamText] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const scrollRafRef = useRef<number | null>(null);
@@ -576,7 +579,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
                 const noPlaceholder = prev.filter((m) => !m.placeholder);
                 return noPlaceholder.map((m) =>
                   m.id === msg.id
-                    ? { ...m, content: m.content || '> ⏹ 已停止生成', streaming: false, incomplete: false, incompleteReasons: [] }
+                    ? { ...m, content: m.content || msg.content || '> ⏹ 已停止生成', streaming: false, incomplete: false, incompleteReasons: [] }
                     : m
                 );
               });
@@ -914,6 +917,8 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
         }
         // §后台任务管理器：Agent 主循环结束后等待后台任务
         case 'deferredWaitStart': {
+          // §已中止后忽略迟到的状态，避免运行状态条在"停止"后死灰复燃
+          if (abortedRef.current) break;
           const shellList = (msg.shells || [])
             .map((s: { cmd: string }, i: number) => `${i + 1}. \`${s.cmd}\``)
             .join('  ');
@@ -931,6 +936,8 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
         case 'step': {
           // Bug 21: 处理 step 进度消息，更新 agentStatus 显示当前步骤。
           // 原代码未处理该消息类型，extension.js/agentRuntime.js 发送的 step 进度被静默丢弃。
+          // §已中止后忽略迟到的 step，避免运行状态条在"停止"后死灰复燃
+          if (abortedRef.current) break;
           if (msg.status === 'running') {
             const STEP_LABELS: Record<string, string> = {
               think: '正在思考',
@@ -965,7 +972,10 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
             setAgentStatus(null);
             setIsProcessing(false);
           } else {
-            setAgentStatus({ status: msg.status, message: msg.message });
+            // §已中止后忽略迟到的 running 状态，避免状态条在"停止"后死灰复燃
+            if (!abortedRef.current) {
+              setAgentStatus({ status: msg.status, message: msg.message });
+            }
           }
           break;
         }
@@ -1052,6 +1062,15 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
           }, 3000);
           break;
         }
+        case 'planStreamToken': {
+          // §流式计划：实时累积 token，token=null 表示流结束并清空
+          if (msg.token === null) {
+            setPlanStreamText('');
+          } else {
+            setPlanStreamText((prev) => prev + msg.token);
+          }
+          break;
+        }
         case 'planGenerated': {
           // §需求9：Planner 下发计划，初始化所有 step 为 pending
           const initSteps: PlanStep[] = msg.steps.map((s) => ({
@@ -1062,6 +1081,8 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
             status: 'pending' as const,
           }));
           setPlanSteps(initSteps);
+          // §流式计划文本已被解析为 checklist，清空临时文本
+          setPlanStreamText('');
           // §待办任务：同步写入最后一条 assistant 消息的 todos，随消息持久化
           setMessages((prev) => {
             const idx = prev.length - 1;
@@ -1163,6 +1184,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
     setShellChangedFiles([]);
     setToolCalls([]);
     setPlanSteps([]);
+    setPlanStreamText('');
     setPendingAgentEdits([]);
     setError(null);
     // §需求4：切换历史会话时清空回复计时器与耗时显示
@@ -1283,6 +1305,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
     if (agentMode) {
       setToolCalls([]);
       setPlanSteps([]);
+      setPlanStreamText('');
     }
 
     if (!vscode) {
@@ -1345,6 +1368,14 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
     vscode?.postMessage({ command: 'abortGeneration' } as WebViewRequest);
     // 阻断后续输出
     abortedRef.current = true;
+    // §取消 pending 的 rAF 并清空缓存，避免 handleAbort 后延迟渲染用旧 pending 覆盖状态
+    //   （rAF 在下一帧执行，如果 handleAbort 时 rAF 还没触发，它会用 streamingUpdateRef
+    //    中的旧 content 覆盖 handleAbort 设置的状态，并把 streaming 设回 true）
+    if (streamingRafRef.current != null) {
+      cancelAnimationFrame(streamingRafRef.current);
+      streamingRafRef.current = null;
+    }
+    streamingUpdateRef.current = null;
     // 同步恢复 UI 状态
     setIsProcessing(false);
     setAgentStatus(null);
@@ -1436,6 +1467,20 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
     [messages],
   );
 
+  // §交互式 Shell：从 shellOutputs 中筛出 Agent 运行中且需要用户输入的 PTY 进程
+  // （id 以 'agent-shell-' 开头 + status='running'），交给 ShellInteraction 组件显示输出 + 输入框
+  const runningShells = useMemo(
+    () => Object.entries(shellOutputs)
+      .filter(([id, data]) => id.startsWith('agent-shell-') && data.status === 'running')
+      .map(([id, data]) => ({ id, ...data })),
+    [shellOutputs],
+  );
+
+  // §向 PTY 进程发送用户输入（回车 / 上下箭头 / Ctrl+C 等）
+  const handleShellInput = useCallback((shellId: string, input: string) => {
+    vscode?.postMessage({ command: 'shellInput', id: shellId, input } as WebViewRequest);
+  }, [vscode]);
+
   // §定位提问：滚动到指定消息并临时高亮
   const handleLocateMessage = useCallback((id: string) => {
     const el = document.getElementById(`msg-${id}`);
@@ -1462,9 +1507,10 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
   };
 
   const handleCancelAgent = () => {
-    if (vscode) {
-      vscode.postMessage({ command: 'cancelAgent' } as WebViewRequest);
-    }
+    // §复用 handleAbort 的乐观复位：点击"停止"后立即清空运行状态条等 UI，
+    // 不等后端回包（后端 cancelAgent/abortGeneration 走同一处理分支），
+    // 避免后端无响应或迟到消息导致状态条一直残留。
+    handleAbort();
   };
 
   // §撤销修改：将 AI 自动修改的文件恢复到修改前的内容
@@ -1702,6 +1748,23 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
                     <div className="message-body">
                       {agentMode && planSteps.length > 0 && <TodoListBlock steps={planSteps} defaultExpanded />}
                       {agentMode && <ToolCallLog toolCalls={toolCalls} />}
+                      {agentMode && runningShells.length > 0 && (
+                        <ShellInteraction
+                          shells={runningShells}
+                          onShellInput={handleShellInput}
+                          onKillShell={(id) => vscode?.postMessage({ command: 'killShell', id } as WebViewRequest)}
+                        />
+                      )}
+                      {agentMode && planStreamText && (
+                        // §流式计划：计划生成中实时展示 LLM 输出，让用户看到计划正在生成
+                        <div className="plan-stream-text">
+                          <div className="plan-stream-text__label">
+                            <Sparkles size={12} strokeWidth={2} />
+                            制定执行计划
+                          </div>
+                          <pre className="plan-stream-text__content">{planStreamText}</pre>
+                        </div>
+                      )}
                       {(!showAgentPanel || !hasAgentContent) && (
                         // §等待 LLM 首个 token / Agent 计划生成前的视觉反馈
                         <div className="thinking-indicator">
@@ -1770,6 +1833,13 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
                   {showAgentPanel && (
                     <>
                       {agentMode && <ToolCallLog toolCalls={toolCalls} />}
+                      {agentMode && runningShells.length > 0 && (
+                        <ShellInteraction
+                          shells={runningShells}
+                          onShellInput={handleShellInput}
+                          onKillShell={(id) => vscode?.postMessage({ command: 'killShell', id } as WebViewRequest)}
+                        />
+                      )}
                     </>
                   )}
 
@@ -1808,16 +1878,6 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
                       onReject={handleRejectSuggestion}
                       onOpenDiffInEditor={handleOpenDiffInEditor}
                       workspaceRoot={context?.workspaceRoot}
-                    />
-                  )}
-
-                  {/* §任务末尾总结：Agent 完成后展示计划/读/写/改/删/命令等统计 */}
-                  {msg.role === 'assistant' && agentStatus?.status === 'done' && index === messages.length - 1 && (
-                    <TaskSummary
-                      toolCalls={toolCalls}
-                      planSteps={planSteps}
-                      changes={allChanges}
-                      duration={lastResponseDuration}
                     />
                   )}
                 </div>
@@ -1881,6 +1941,18 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
       {planSteps.length > 0 && (
         <div className="agent-summary-zone">
           <PlanTaskPanel steps={planSteps} />
+        </div>
+      )}
+
+      {/* §外部任务总结：Agent 完成后在消息区域外展示统计卡片 */}
+      {agentStatus?.status === 'done' && (toolCalls.length > 0 || planSteps.length > 0) && (
+        <div className="agent-summary-zone">
+          <TaskSummary
+            toolCalls={toolCalls}
+            planSteps={planSteps}
+            changes={allChanges}
+            duration={lastResponseDuration}
+          />
         </div>
       )}
 

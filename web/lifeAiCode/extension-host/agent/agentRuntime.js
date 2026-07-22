@@ -247,6 +247,23 @@ class AgentRuntime {
         this._notifyStep('done', `达到最大轮次 ${MAX_ROUNDS}，任务停止`);
       }
 
+      // §任务总结：Agent 调用过工具且自然收敛时，额外生成一段自然语言总结。
+      // 避免某些模型只输出 reasoning/空内容，导致用户看不到最终结论。
+      if (converged && !this.cancelled && !signal.aborted && this._hasToolCalls(messages)) {
+        try {
+          const summary = await this._generateFinalSummary(userInput, messages, finalResponse, onToken, signal);
+          if (summary) {
+            finalResponse += summary;
+          }
+        } catch (err) {
+          if (err && (err.isAbort || err.name === 'AbortError' || this.cancelled)) {
+            // 中止时忽略总结错误
+          } else {
+            console.warn('[AgentRuntime] 生成最终总结失败:', err?.message || err);
+          }
+        }
+      }
+
       // §同步阻塞模式：shell 命令在主循环中已同步等待完成（waitShellCompletion 阻塞），
       // 不再有 deferred 后台队列。主循环结束 = 所有 shell 已完成，直接触发 onDone。
       // 类似微任务/宏任务模式：shell = 同步屏障，主流程被卡住直到 shell 完成，
@@ -302,14 +319,23 @@ class AgentRuntime {
   }
 
   /**
-   * 生成任务计划
+   * 生成任务计划（流式）
+   * §改为流式请求：把 LLM 输出的 token 实时推给前端渲染，
+   * 避免用户在"制定执行计划"阶段看到长时间空白等待。
    */
   async _generatePlan(userInput, signal) {
     if (!this.llmClient) return [];
     const { formatToolSchemasForPrompt } = require('./toolSchema');
     const prompt = this.planner.buildPlanningPrompt(userInput, formatToolSchemasForPrompt());
+    let planTokenListener = null;
     try {
-      const planContent = await this.llmClient.chat(
+      planTokenListener = (token) => {
+        if (typeof this.context.postToWebView === 'function') {
+          this.context.postToWebView({ type: 'planStreamToken', token });
+        }
+      };
+      this.llmClient.on('token', planTokenListener);
+      const planContent = await this.llmClient.chatStream(
         [
           { role: 'system', content: this.adapter.buildAgentSystemPrompt() },
           { role: 'user', content: prompt },
@@ -319,6 +345,14 @@ class AgentRuntime {
       return this.planner.parsePlan(planContent);
     } catch {
       return [];
+    } finally {
+      if (planTokenListener) {
+        try { this.llmClient.off('token', planTokenListener); } catch { /* ignore */ }
+      }
+      // 通知前端计划流式输出结束（token: null 表示结束）
+      if (typeof this.context.postToWebView === 'function') {
+        this.context.postToWebView({ type: 'planStreamToken', token: null });
+      }
     }
   }
 
@@ -460,7 +494,8 @@ ${transcript}
 
     try {
       this._notifyStep('think', '上下文超阈值，自动压缩中…');
-      const summary = await this.llmClient.chat(summaryPrompt, { signal });
+      // §改为流式请求，与非流式保持一致，避免出现"非流式请求"日志
+      const summary = await this.llmClient.chatStream(summaryPrompt, { signal });
       const cleanSummary = String(summary || '')
         .replace(/<think>[\s\S]*?<\/think>/g, '')
         .trim();
@@ -490,6 +525,79 @@ ${transcript}
     } catch (err) {
       if (err && (err.isAbort || err.name === 'AbortError' || this.cancelled)) return;
       console.warn('[AgentRuntime] 自动压缩失败:', err?.message || err);
+    }
+  }
+
+  /**
+   * §任务总结：判断本次任务是否调用过工具
+   */
+  _hasToolCalls(messages) {
+    return messages.some((m) =>
+      m.role === 'tool' ||
+      m.tool_calls ||
+      (typeof m.content === 'string' && (m.content.includes('<tool_call>') || m.content.includes('<tool_result>')))
+    );
+  }
+
+  /**
+   * §任务总结：基于任务执行过程和当前回复，生成一段自然语言总结。
+   * 通过 onToken 把总结 token 推给调用方，让前端流式显示。
+   */
+  async _generateFinalSummary(userInput, messages, finalResponse, onToken, signal) {
+    const executionLines = [];
+    for (const m of messages) {
+      if (m.role === 'tool') {
+        let result = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+        result = result.length > 200 ? result.slice(0, 200) + '...' : result;
+        executionLines.push(`- 工具结果：${result}`);
+      } else if (m.role === 'assistant' && m.tool_calls) {
+        for (const tc of m.tool_calls) {
+          const args = typeof tc.function?.arguments === 'string' ? tc.function.arguments : JSON.stringify(tc.function?.arguments || {});
+          const argsShort = args.length > 150 ? args.slice(0, 150) + '...' : args;
+          executionLines.push(`- 调用工具：${tc.function?.name}，参数：${argsShort}`);
+        }
+      } else if (m.role === 'assistant' && typeof m.content === 'string' && m.content.includes('<tool_call>')) {
+        const match = m.content.match(/<tool_call>\s*({[\s\S]*?})\s*<\/tool_call>/);
+        if (match) {
+          try {
+            const tc = JSON.parse(match[1]);
+            executionLines.push(`- 调用工具：${tc.name}，参数：${JSON.stringify(tc.arguments).slice(0, 200)}`);
+          } catch {
+            executionLines.push(`- 调用工具：${m.content.slice(0, 200)}`);
+          }
+        }
+      } else if (m.role === 'user' && typeof m.content === 'string' && m.content.includes('<tool_result>')) {
+        const result = m.content.replace(/<tool_result>\n?|\n?<\/tool_result>/g, '').slice(0, 200);
+        executionLines.push(`- 工具结果：${result}`);
+      }
+    }
+
+    const executionSummary = executionLines.join('\n') || '无';
+
+    const summaryPrompt = [
+      { role: 'system', content: '你是 LifeAiCode Agent 的总结助手。请根据用户任务和 Agent 执行过程，用中文生成一段简洁的最终总结。总结控制在 200 字以内，说明任务目标、执行了什么、关键发现。不要输出工具调用、步骤标签、代码块。' },
+      { role: 'user', content: `## 用户任务\n${userInput}\n\n## 执行过程\n${executionSummary}\n\n## 当前回复\n${finalResponse || '（无）'}\n\n请生成最终总结：` }
+    ];
+
+    const prefix = '\n\n---\n\n**任务总结**：\n';
+    if (typeof onToken === 'function') {
+      onToken(prefix);
+    }
+
+    let summary = '';
+    const summaryListener = (token) => {
+      summary += token;
+      if (typeof onToken === 'function') {
+        onToken(token);
+      }
+    };
+
+    try {
+      this.llmClient.on('token', summaryListener);
+      await this.llmClient.chatStream(summaryPrompt, { signal });
+      return prefix + summary;
+    } finally {
+      try { this.llmClient.off('token', summaryListener); } catch { /* ignore */ }
     }
   }
 

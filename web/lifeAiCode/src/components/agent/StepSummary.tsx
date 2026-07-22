@@ -1,14 +1,17 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import { Check, Loader2, Circle, ChevronDown } from 'lucide-react';
 import type { ContentBlock } from '../../types';
 
 interface StepSummaryProps {
   steps: Array<Extract<ContentBlock, { type: 'step' }>>;
   completed?: boolean;
+  /** §流式聚焦：当前是否正在接收输出 */
+  isActive?: boolean;
 }
 
-export function StepSummary({ steps, completed }: StepSummaryProps) {
-  const [expanded, setExpanded] = useState(true);
+export function StepSummary({ steps, completed, isActive }: StepSummaryProps) {
+  const [expanded, setExpanded] = useState(false);
+  const autoOpenedRef = useRef(false);
 
   const { doneCount, total, items } = useMemo(() => {
     const effectiveSteps = steps.map((s) => {
@@ -18,6 +21,20 @@ export function StepSummary({ steps, completed }: StepSummaryProps) {
     const done = effectiveSteps.filter((s) => s.status === 'done').length;
     return { doneCount: done, total: effectiveSteps.length, items: effectiveSteps };
   }, [steps, completed]);
+
+  const hasRunning = items.some((s) => s.status === 'running');
+
+  useEffect(() => {
+    if (isActive || hasRunning) {
+      if (!expanded) {
+        setExpanded(true);
+        autoOpenedRef.current = true;
+      }
+    } else if (completed && expanded && autoOpenedRef.current) {
+      setExpanded(false);
+      autoOpenedRef.current = false;
+    }
+  }, [isActive, hasRunning, completed, expanded]);
 
   if (total === 0) return null;
 

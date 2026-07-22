@@ -486,10 +486,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 16px;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 6px 2px;
   width: fit-content;
 }
 .thinking-indicator__icon {
@@ -526,6 +523,39 @@ body {
 @keyframes thinking-bounce {
   0%, 80%, 100% { opacity: 0.3; transform: translateY(0); }
   40% { opacity: 1; transform: translateY(-4px); }
+}
+
+/* ─── 流式计划文本（计划生成中实时展示 LLM 输出） ─── */
+.plan-stream-text {
+  margin: 4px 0 8px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  max-width: 100%;
+  overflow: hidden;
+}
+.plan-stream-text__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-400);
+  margin-bottom: 8px;
+  animation: thinking-pulse 1.8s ease-in-out infinite;
+}
+.plan-stream-text__content {
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', monospace);
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-300, rgba(255, 255, 255, 0.7));
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow-y: auto;
 }
 .message-row--user .message-body { align-items: flex-end; }
 
@@ -640,35 +670,13 @@ body {
 /*  AI Message Card (the main container — collapsible)              */
 /* ════════════════════════════════════════════════════════════════ */
 
+/* §简约化：卡片不再是一个"盒子"——去掉整体背景填充和边框，
+   内容直接排在消息流里，层次靠留白、字号与颜色明度表达 */
 .ai-card {
   position: relative;
   width: 100%;
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--border-subtle);
-  background: var(--surface-1);
-  overflow: hidden;
-  transition: border-color var(--duration-base) var(--ease-out);
 }
 
-.ai-card::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 1px;
-  background: var(--border-default);
-  transition: background var(--duration-base) var(--ease-out);
-}
-
-.ai-card--running {
-  border-color: rgba(59, 130, 246, 0.18);
-  box-shadow: var(--shadow-glow-blue);
-}
-.ai-card--running::before {
-  background: linear-gradient(180deg, var(--accent-500), var(--info-500));
-  animation: borderPulse 2s var(--ease-in-out) infinite;
-}
 .ai-card--running .ai-card__status-dot {
   background: var(--accent-500);
   box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.18);
@@ -701,44 +709,27 @@ body {
   100% { left: 100%; }
 }
 
-.ai-card--done::before {
-  background: var(--success-500);
-  opacity: 0.6;
-}
 .ai-card--done .ai-card__status-dot {
   background: var(--success-500);
   box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.15);
 }
 
-.ai-card--error {
-  border-color: rgba(239, 68, 68, 0.22);
-  box-shadow: var(--shadow-glow-red);
-}
-.ai-card--error::before { background: var(--error-500); }
-
-@keyframes borderPulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.55; }
-}
 @keyframes dotPulse {
   0%, 100% { transform: scale(1); opacity: 1; }
   50% { transform: scale(0.65); opacity: 0.7; }
 }
 
-/* Card Header */
+/* Card Header —— 纯文字行：状态点 + 标题 + meta + 状态徽章 + chevron，无背景无分隔线 */
 .ai-card__header {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 12px 16px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.025) 0%, transparent 100%);
-  border-bottom: 1px solid var(--border-subtle);
+  padding: 6px 8px;
   cursor: pointer;
   user-select: none;
-  transition: background var(--duration-fast);
 }
-.ai-card__header:hover {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.01) 100%);
+.ai-card__header:hover .ai-card__chevron {
+  color: var(--text-secondary);
 }
 
 .ai-card__status-dot {
@@ -835,12 +826,9 @@ body {
   to { opacity: 1; transform: translateY(0); }
 }
 
-/* Section wrapper — groups blocks logically */
+/* Section wrapper — groups blocks logically（用间距分隔，不用分隔线） */
 .ai-card__section {
-  padding: 8px;
-}
-.ai-card__section + .ai-card__section {
-  border-top: 1px solid var(--border-subtle);
+  padding: 4px 8px;
 }
 .ai-card__section--text {
   font-size: 14.5px;
@@ -851,9 +839,7 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 12px;
-  background: rgba(255, 255, 255, 0.015);
-  border-top: 1px solid var(--border-subtle);
+  padding: 4px 12px;
 }
 /* §操作按钮组：与 ai-card__body 并排（兄弟关系），只放 Icon */
 .ai-card__actions {
@@ -1153,25 +1139,24 @@ body {
   margin: 0;
   padding: 2px 8px 0 8px;
 }
+/* §简约化：header 是纯文字行（图标 + 标签 + chevron），无盒子无背景 */
 .reasoning-header {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 5px 10px;
-  background: var(--surface-2);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-  color: var(--text-secondary);
+  padding: 4px 2px;
+  background: transparent;
+  border: none;
+  color: var(--text-tertiary);
   font-size: 12px;
   cursor: pointer;
   text-align: left;
   font-family: var(--font-sans);
-  transition: all var(--duration-fast);
+  transition: color var(--duration-fast);
 }
 .reasoning-header:hover {
-  background: var(--surface-3);
-  border-color: var(--border-strong);
+  color: var(--text-secondary);
 }
 .reasoning-icon {
   display: flex;
@@ -1182,7 +1167,7 @@ body {
 .reasoning-label {
   flex: 1;
   font-weight: 400;
-  color: var(--text-secondary);
+  color: inherit;
 }
 .reasoning-preview {
   flex: 1;
@@ -1195,23 +1180,20 @@ body {
   font-style: italic;
 }
 .reasoning-chevron {
-  color: var(--text-tertiary);
+  color: var(--text-muted);
   transition: transform var(--duration-base) var(--ease-out);
   flex-shrink: 0;
 }
 .reasoning-chevron--open { transform: rotate(180deg); }
 
+/* §简约化：展开的推理内容用左侧细竖线 + 缩进表达层级，无背景无边框盒 */
 .reasoning-body {
-  margin-top: 4px;
-  padding: 10px 12px;
-  background: var(--surface-5);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
+  margin: 2px 0 6px 5px;
+  padding: 2px 4px 4px 14px;
+  border-left: 2px solid var(--border-strong);
   color: var(--text-secondary);
   font-size: 13.5px;
   line-height: 1.65;
-  /* font-style: italic; */
-  opacity: 0.7;
   animation: reasoningExpand var(--duration-base) var(--ease-out);
 }
 /* §减少 reasoning 与后续正文区块的间距 */
@@ -1762,13 +1744,7 @@ body {
 }
 
 /* ─── 截断 / 不完整回复 ─── */
-.ai-card--incomplete {
-  border-color: rgba(245, 158, 11, 0.25);
-  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.08);
-}
-.ai-card--incomplete::before {
-  background: var(--warning-500);
-}
+/* §简约化：不完整状态只靠 badge/banner 的警示色表达，不再给卡片加边框发光 */
 
 .ai-card__incomplete-badge {
   display: inline-flex;
@@ -2655,7 +2631,20 @@ body {
 
 /* Streaming cursor (text-end blinking caret) */
 .streaming-cursor {
-  display: none;
+  display: inline-block;
+  width: 6px;
+  height: 11px;
+  margin-left: 2px;
+  background: var(--accent-400);
+  vertical-align: text-bottom;
+  animation: cursorBlink 1s steps(2) infinite;
+  border-radius: 1px;
+}
+
+/* §流式打字机：光标出现在最后一个子元素的文本末尾 */
+.md-content.streaming-text > :last-child::after {
+  content: '';
+  display: inline-block;
   width: 6px;
   height: 11px;
   margin-left: 2px;
@@ -5979,51 +5968,35 @@ body {
   background: transparent;
 }
 
-/* §设计语言统一：与 .ai-card section 共享 token。背景用 surface-1、
-   边框 border-subtle、圆角 radius-md，状态徽章复用 ai-card__badge 的
-   色调与字号节奏，让 tool-call-log 在视觉上成为 MessageCard 的"另一段"。 */
+/* §简约化：tool-call-log 不再是一个面板盒子——去掉容器边框/背景，
+   用一条左侧细竖线 + 缩进表达"这一组属于工具调用"，
+   标题降级为 muted 小号分组标签行。 */
 .tool-call-log {
   margin: 4px 0;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--surface-1);
-  overflow: hidden;
+  border-left: 2px solid var(--border-subtle);
+  background: transparent;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 6px;
+  gap: 2px;
+  padding: 2px 0 2px 12px;
 }
 
 .tool-call-log__header {
-  padding: 8px 12px;
+  padding: 2px 0;
   font-size: 11px;
-  font-weight: 600;
-  color: var(--text-tertiary);
-  background: var(--surface-2);
-  border-bottom: 1px solid var(--border-subtle);
+  font-weight: 500;
+  color: var(--text-muted);
   font-family: var(--font-sans);
   letter-spacing: 0.3px;
 }
 
+/* §简约化：每条工具调用是一行紧凑文本（图标 + 名称 + 状态），无盒子 */
 .tool-call-card {
-  padding: 2px 14px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--surface-2);
+  padding: 3px 0;
+  border: none;
+  background: transparent;
   font-size: 12px;
   font-family: var(--font-sans);
-  transition: border-color var(--duration-base) var(--ease-out),
-    background var(--duration-base) var(--ease-out);
-}
-.tool-call-card:hover {
-  border-color: var(--border-default);
-}
-.tool-call-card--running {
-  border-color: rgba(59, 130, 246, 0.32);
-  background: var(--surface-3);
-}
-.tool-call-card--success {
-  border-color: rgba(34, 197, 94, 0.18);
 }
 
 .tool-call-card__header {
@@ -6044,9 +6017,6 @@ body {
 }
 .tool-call-card__header--clickable {
   cursor: pointer;
-}
-.tool-call-card__header--clickable:hover {
-  background: var(--surface-2);
 }
 .tool-call-card__header:disabled {
   cursor: default;
@@ -6077,9 +6047,6 @@ body {
   transform: rotate(180deg);
   color: var(--text-secondary);
 }
-.tool-call-card__header--clickable:hover .tool-call-card__chevron {
-  background: var(--surface-3);
-}
 
 .tool-call-card__body {
   display: flex;
@@ -6108,21 +6075,18 @@ body {
   width: 18px;
   height: 18px;
   border-radius: var(--radius-xs);
-  background: var(--surface-2);
+  background: transparent;
   color: var(--text-secondary);
   flex-shrink: 0;
 }
 .tool-call-card--running .tool-call-card__icon {
   color: var(--accent-400);
-  background: rgba(59, 130, 246, 0.14);
 }
 .tool-call-card--success .tool-call-card__icon {
   color: var(--success-400);
-  background: rgba(34, 197, 94, 0.12);
 }
 .tool-call-card--error .tool-call-card__icon {
   color: var(--error-400);
-  background: rgba(239, 68, 68, 0.12);
 }
 
 .tool-call-card__name {
@@ -6255,25 +6219,10 @@ body {
 }
 
 /* ─── Shell Group (聚合 execute_shell，匹配图 1 中的"工具调用"大 tab 面板) ─── */
+/* §简约化：去掉面板盒子的边框/背景，只保留 header 行 + 缩进列表 */
 .shell-group {
-  margin: 4px 0;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--surface-1);
-  overflow: hidden;
-  transition: border-color var(--duration-base) var(--ease-out),
-    background var(--duration-base) var(--ease-out);
-}
-/* 展开时给整个面板加一个淡蓝氛围，提示"我现在在干活" */
-.shell-group--open {
-  border-color: rgba(59, 130, 246, 0.22);
-  background: linear-gradient(180deg,
-    rgba(59, 130, 246, 0.04) 0%,
-    var(--surface-1) 60%);
-}
-/* 当前 ShellGroup 里有 running 任务时给 header 加左侧蓝色条 */
-.shell-group:has(.tool-call-card--running) {
-  border-color: rgba(59, 130, 246, 0.32);
+  margin: 2px 0;
+  background: transparent;
 }
 
 .shell-group__header {
@@ -6281,7 +6230,7 @@ body {
   align-items: center;
   gap: 10px;
   width: 100%;
-  padding: 10px 14px;
+  padding: 4px 2px;
   background: transparent;
   border: none;
   color: inherit;
@@ -6289,9 +6238,7 @@ body {
   font-family: var(--font-sans);
   cursor: pointer;
   text-align: left;
-  transition: background var(--duration-fast) var(--ease-out);
 }
-.shell-group__header:hover { background: var(--surface-2); }
 
 .shell-group__dot {
   width: 8px;
@@ -6376,14 +6323,15 @@ body {
   flex-shrink: 0;
 }
 .shell-group__chevron--open { transform: rotate(180deg); color: var(--text-secondary); }
-.shell-group__header:hover .shell-group__chevron { background: var(--surface-3); }
+.shell-group__header:hover .shell-group__chevron { color: var(--text-secondary); }
 
 .shell-group__list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 8px;
-  border-top: 1px solid var(--border-subtle);
+  gap: 2px;
+  padding: 2px 0 2px 12px;
+  margin-left: 4px;
+  border-left: 2px solid var(--border-subtle);
   animation: shellGroupExpand 0.32s var(--ease-out);
 }
 @keyframes shellGroupExpand {
@@ -6394,38 +6342,218 @@ body {
 /* 当前正在执行的子任务：左侧加淡蓝色块高亮 */
 .shell-group__item {
   position: relative;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border-subtle);
-  background: var(--surface-1);
-  overflow: hidden;
-  transition: border-color var(--duration-base) var(--ease-out),
-    box-shadow var(--duration-base) var(--ease-out);
-}
-.shell-group__item:hover {
-  border-color: var(--border-default);
-}
-.shell-group__item--current {
-  border-color: rgba(59, 130, 246, 0.32);
-  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.18) inset;
+  border-radius: var(--radius-sm);
 }
 .shell-group__item--current::before {
   content: '';
   position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 3px;
+  left: -12px;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  border-radius: 1px;
   background: var(--accent-400);
-  box-shadow: 0 0 8px rgba(59, 130, 246, 0.5);
   z-index: 1;
 }
 
-/* 嵌套在 shell-group 内的 tool-call-card：用 .shell-group__item 作为外框 */
+/* 嵌套在 shell-group 内的 tool-call-card：纯文本行 */
 .shell-group .tool-call-card {
   border: none;
-  border-radius: 0;
   background: transparent;
-  padding: 10px 14px;
+  padding: 3px 0;
+}
+
+/* ─── Shell Interaction (交互式终端：create-vite 等需要用户输入的命令) ─── */
+.shell-interaction-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.shell-interaction {
+  border: 1px solid rgba(59, 130, 246, 0.32);
+  border-radius: var(--radius-md);
+  background: var(--surface-3);
+  overflow: hidden;
+  font-size: 12px;
+  font-family: var(--font-sans);
+}
+
+.shell-interaction__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: rgba(59, 130, 246, 0.08);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.shell-interaction__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-400);
+  flex-shrink: 0;
+}
+
+.shell-interaction__title {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.shell-interaction__hint {
+  font-size: 10.5px;
+  color: var(--accent-400);
+  background: rgba(59, 130, 246, 0.12);
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+}
+
+.shell-interaction__spinner {
+  color: var(--accent-400);
+  animation: spin 1s linear infinite;
+}
+
+.shell-interaction__kill {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: background var(--duration-fast), color var(--duration-fast);
+  flex-shrink: 0;
+}
+.shell-interaction__kill:hover {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+
+.shell-interaction__output {
+  margin: 0;
+  padding: 8px 12px;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--code-bg);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--code-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* §可视化 select 选择列表 */
+.shell-interaction__select {
+  padding: 10px 12px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.shell-interaction__question {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  line-height: 1.5;
+  padding: 0 2px;
+}
+
+.shell-interaction__options {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--surface-1);
+}
+
+.shell-interaction__option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  font-family: var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--duration-fast), color var(--duration-fast);
+  border-left: 3px solid transparent;
+}
+.shell-interaction__option:hover {
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+.shell-interaction__option--selected {
+  background: rgba(59, 130, 246, 0.1);
+  color: var(--accent-400);
+  border-left-color: var(--accent-400);
+  font-weight: 500;
+}
+.shell-interaction__option--selected:hover {
+  background: rgba(59, 130, 246, 0.16);
+  color: var(--accent-400);
+}
+
+.shell-interaction__option-marker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: var(--accent-400);
+}
+
+.shell-interaction__option-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shell-interaction__select-tip {
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  padding: 0 2px;
+}
+
+.shell-interaction__toggle-raw {
+  display: block;
+  width: max-content;
+  margin: 0 12px 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: background var(--duration-fast), color var(--duration-fast);
+}
+.shell-interaction__toggle-raw:hover {
+  background: var(--surface-2);
+  color: var(--text-secondary);
+}
+
+.shell-interaction__output--raw {
+  max-height: 160px;
+  border-top: 1px solid var(--border-subtle);
 }
 
 /* ─── Read File Group (聚合 read_file 调用) ─── */
@@ -6449,10 +6577,6 @@ body {
   transition: background var(--duration-fast) var(--ease-out);
 }
 
-.read-file-group__header:hover {
-  background: var(--surface-2);
-}
-
 .read-file-group__icon {
   display: flex;
   align-items: center;
@@ -6460,7 +6584,7 @@ body {
   width: 22px;
   height: 22px;
   border-radius: var(--radius-sm);
-  background: rgba(59, 130, 246, 0.12);
+  background: transparent;
   color: var(--accent-400);
   flex-shrink: 0;
 }
@@ -6534,31 +6658,29 @@ body {
 }
 
 .read-file-group__list {
-  padding: 0 12px 10px;
+  padding: 2px 0 6px 24px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
+/* §简约化：明细行无盒子，仅缩进 + 小字 */
 .read-file-group__item {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 5px 8px;
-  border-radius: var(--radius-sm);
+  padding: 3px 0;
   font-size: 11.5px;
-  background: var(--surface-2);
-  border: 1px solid var(--border-subtle);
+  background: transparent;
+  border: none;
 }
 
-.read-file-group__item--running {
-  background: rgba(59, 130, 246, 0.06);
-  border-color: rgba(59, 130, 246, 0.18);
+.read-file-group__item--running .read-file-group__path {
+  color: var(--accent-400);
 }
 
-.read-file-group__item--error {
-  background: rgba(239, 68, 68, 0.06);
-  border-color: rgba(239, 68, 68, 0.18);
+.read-file-group__item--error .read-file-group__path {
+  color: var(--error-400);
 }
 
 .read-file-group__bullet {
@@ -6576,8 +6698,8 @@ body {
   width: 18px;
   height: 18px;
   border-radius: var(--radius-xs);
-  background: var(--surface-3);
-  color: var(--text-secondary);
+  background: transparent;
+  color: var(--text-tertiary);
   flex-shrink: 0;
 }
 
@@ -6726,29 +6848,27 @@ body {
 }
 
 /* ─── §消息内任务列表汇总（<step> 标签归纳） ─── */
+/* §简约化：去掉面板盒子的边框/背景，header 是纯文字行 */
 .step-summary {
   margin: 6px 0;
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-  background: var(--surface-1);
-  overflow: hidden;
+  background: transparent;
 }
 .step-summary__header {
   display: flex;
   align-items: center;
   width: 100%;
-  padding: 6px 10px;
-  background: var(--surface-2);
+  padding: 4px 2px;
+  background: transparent;
   border: none;
-  color: var(--text-secondary);
+  color: var(--text-tertiary);
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   text-align: left;
-  transition: background var(--duration-fast);
+  transition: color var(--duration-fast);
 }
 .step-summary__header:hover {
-  background: var(--surface-3);
+  color: var(--text-secondary);
 }
 .step-summary__title {
   flex: 1;
