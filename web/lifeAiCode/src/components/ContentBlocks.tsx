@@ -449,17 +449,10 @@ function MessageCard({
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
 
   const statusClass = `ai-card--${status}`;
-  const badgeClass = `ai-card__badge--${status}`;
-  const badgeIcon = status === 'running'
-    ? <Loader2 size={10} strokeWidth={2.5} className="ai-card__badge-spinner" />
-    : status === 'error'
-      ? <X size={10} strokeWidth={2.5} />
-      : <Check size={10} strokeWidth={2.5} />;
-  const badgeTitle = status === 'running' ? '进行中' : status === 'error' ? '出错' : '已完成';
 
   return (
     <div className={`ai-card ${statusClass} ${incomplete ? 'ai-card--incomplete' : ''}`}>
-      {/* Header */}
+      {/* Header —— §图标对齐：右侧只保留 chevron（完成/进行中状态由左侧 status-dot 颜色+脉冲表达） */}
       <div
         className="ai-card__header"
         onClick={() => setCollapsed(!collapsed)}
@@ -485,7 +478,6 @@ function MessageCard({
             <AlertTriangle size={10} strokeWidth={2.2} /> 不完整
           </span>
         )}
-        <span className={`ai-card__badge ${badgeClass}`} title={badgeTitle}>{badgeIcon}</span>
         <span className={`ai-card__chevron ${collapsed ? 'ai-card__chevron--collapsed' : ''}`}>
           <ChevronDown size={14} strokeWidth={2} />
         </span>
@@ -598,17 +590,13 @@ function BlockRenderer({ block, shellOutputs, onExecuteShell, onKillShell, onOpt
 
 function ReasoningBlock({ content, isActive }: { content: string; isActive?: boolean }) {
   const [open, setOpen] = useState(false);
-  const autoOpenedRef = useRef(false);
 
+  // §内容保留：推理块在活跃输出时自动展开后不再自动收起。
+  // 之前阶段切换（isActive → false）会自动折叠，用户感知为"上一阶段的输出被清空"。
+  // 现在一旦展开就保持展开，只能由用户手动折叠，确保大模型已输出的内容始终可见。
   useEffect(() => {
-    if (isActive) {
-      if (!open) {
-        setOpen(true);
-        autoOpenedRef.current = true;
-      }
-    } else if (open && autoOpenedRef.current) {
-      setOpen(false);
-      autoOpenedRef.current = false;
+    if (isActive && !open) {
+      setOpen(true);
     }
   }, [isActive, open]);
 
@@ -695,8 +683,7 @@ function ToolCall({
     } catch { /* ignore */ }
   };
 
-  // §状态徽章：与 ShellGroup 的 .shell-group__status 统一为 22×22 纯图标圆形，
-  // 避免同一界面出现两种风格的状态指示器导致参差不齐。
+  // 状态徽章：纯图标圆形，成功/失败/运行中三种着色。
   const statusBadge =
     status === 'running' ? (
       <span className="tool-call-status tool-call-status--running" title="运行中">

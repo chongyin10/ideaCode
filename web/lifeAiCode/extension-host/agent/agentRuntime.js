@@ -20,6 +20,7 @@ const { LlmAdapter } = require('./llmAdapter');
 const { Planner } = require('./planner');
 const { AuditLogger } = require('./auditLogger');
 const { estimateTokens, estimateStringTokens } = require('./modelContextWindow');
+const { buildUserContent } = require('../imageUtils');
 
 // §需求：创建项目/多文件任务需要大量 tool_call 轮次（每个文件至少一轮），
 // 10 轮远不够（标准 Vite+React 项目就有 8-10 个文件 + npm install）。
@@ -98,7 +99,7 @@ class AgentRuntime {
    * @returns {Promise<string>} 最终总结
    */
   async _runOne({ userInput, initialContext, callbacks }) {
-    const { onToken, onToolCall, onDone, onError, history } = callbacks;
+    const { onToken, onToolCall, onDone, onError, history, images } = callbacks;
     const signal = this._abortController.signal;
     const startTime = Date.now();
 
@@ -124,7 +125,8 @@ class AgentRuntime {
         : [];
       const messages = [
         ...historyMessages,
-        { role: 'user', content: `${contextStr}\n\n## 用户任务\n${userInput}` },
+        // §多模态：有图片附件时 content 为 OpenAI 多模态数组（text + image_url）
+        { role: 'user', content: buildUserContent(`${contextStr}\n\n## 用户任务\n${userInput}`, images) },
       ];
 
       // 可选：复杂任务先让 LLM 做计划
@@ -477,7 +479,13 @@ class AgentRuntime {
     const transcript = toCompress
       .map((m) => {
         const role = m.role === 'assistant' ? 'AI' : '用户';
-        const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content || '');
+        // §多模态消息：content 为数组时只取文本部分，图片以占位符表示，
+        // 避免把 base64 图片数据（MB 级）塞进压缩 prompt
+        const content = typeof m.content === 'string'
+          ? m.content
+          : Array.isArray(m.content)
+            ? m.content.map((part) => (part && part.type === 'text' ? part.text : '[图片]')).join('\n')
+            : JSON.stringify(m.content || '');
         return `${role}: ${content.slice(0, 1200)}`;
       })
       .join('\n\n');

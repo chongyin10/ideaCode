@@ -713,6 +713,10 @@ body {
   background: var(--success-500);
   box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.15);
 }
+.ai-card--error .ai-card__status-dot {
+  background: var(--error-500);
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.15);
+}
 
 @keyframes dotPulse {
   0%, 100% { transform: scale(1); opacity: 1; }
@@ -767,38 +771,13 @@ body {
   min-width: 0;
 }
 
-.ai-card__badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: var(--radius-full);
-  flex-shrink: 0;
-}
-.ai-card__badge--running {
-  color: var(--accent-400);
-  background: rgba(59, 130, 246, 0.12);
-  border: 1px solid rgba(59, 130, 246, 0.22);
-}
-.ai-card__badge--done {
-  color: var(--success-400);
-  background: rgba(34, 197, 94, 0.08);
-  border: 1px solid rgba(34, 197, 94, 0.18);
-}
-.ai-card__badge--error {
-  color: var(--error-400);
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid rgba(239, 68, 68, 0.22);
-}
-.ai-card__badge-spinner {
-  animation: spin 0.9s linear infinite;
-}
-
+/* §图标对齐：状态徽章已移除（状态由左侧 status-dot 表达），
+   chevron 是 header 右侧唯一图标，用 auto 左 margin 固定推到行尾 */
 .ai-card__chevron {
   color: var(--text-tertiary);
   transition: transform var(--duration-base) var(--ease-out);
   flex-shrink: 0;
+  margin-left: auto;
 }
 .ai-card__chevron--collapsed { transform: rotate(-90deg); }
 
@@ -1137,7 +1116,9 @@ body {
 
 .reasoning {
   margin: 0;
-  padding: 2px 8px 0 8px;
+  /* §图标对齐：右 padding 必须为 0——外层 ai-card__body-row 已提供 8px，
+     否则 header 里的 chevron 会比其他行多缩进 8px 导致上下不对齐 */
+  padding: 2px 0 0 8px;
 }
 /* §简约化：header 是纯文字行（图标 + 标签 + chevron），无盒子无背景 */
 .reasoning-header {
@@ -1145,7 +1126,7 @@ body {
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 4px 2px;
+  padding: 4px 0;
   background: transparent;
   border: none;
   color: var(--text-tertiary);
@@ -3895,6 +3876,7 @@ body {
 }
 
 .input-wrapper {
+  position: relative;
   max-width: 880px;
   margin: 0 auto;
   background: var(--surface-2);
@@ -3924,6 +3906,125 @@ body {
 }
 .input-textarea::placeholder { color: var(--text-muted); }
 .input-textarea:disabled { opacity: 0.6; }
+
+/* ─── @ 文件补全弹层 ─── */
+.mention-dropdown {
+  position: absolute;
+  top: auto;
+  bottom: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.mention-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.mention-item svg { flex-shrink: 0; color: var(--text-muted); }
+.mention-item--active,
+.mention-item:hover {
+  background: var(--surface-3, rgba(255, 255, 255, 0.06));
+}
+.mention-item-name {
+  flex-shrink: 0;
+  font-weight: 500;
+}
+.mention-item-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.mention-empty {
+  padding: 10px 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+/* ─── @ 文件引用芯片 ─── */
+.mention-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 14px 0;
+}
+.mention-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 6px 3px 8px;
+  background: rgba(59, 130, 246, 0.12);
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  border-radius: var(--radius-sm);
+  color: var(--accent-500, #3b82f6);
+  font-size: 12px;
+  line-height: 1.4;
+  max-width: 240px;
+}
+.mention-chip svg { flex-shrink: 0; }
+.mention-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.mention-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  color: inherit;
+  opacity: 0.7;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.mention-chip-remove:hover {
+  opacity: 1;
+  background: rgba(59, 130, 246, 0.25);
+}
+
+/* ─── 文档解析 loading ─── */
+.doc-parse-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.doc-parse-status__spinner {
+  color: var(--accent-500, #3b82f6);
+  animation: spin 1s linear infinite;
+  flex-shrink: 0;
+}
 
 .input-toolbar {
   display: flex;
@@ -5667,7 +5768,7 @@ body {
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 6px 10px;
+  padding: 6px 8px;
   background: linear-gradient(90deg, rgba(59, 130, 246, 0.08), transparent);
   border: none;
   color: var(--text-secondary);
@@ -6007,6 +6108,7 @@ body {
   background: transparent;
   border: none;
   padding: 0;
+  padding-right: 8px;
   margin: 0;
   color: inherit;
   font: inherit;
@@ -6034,8 +6136,6 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
   border-radius: var(--radius-sm);
   color: var(--text-tertiary);
   transition: transform var(--duration-fast) var(--ease-out),
@@ -6230,7 +6330,7 @@ body {
   align-items: center;
   gap: 10px;
   width: 100%;
-  padding: 4px 2px;
+  padding: 4px 8px 4px 2px;
   background: transparent;
   border: none;
   color: inherit;
@@ -6284,38 +6384,11 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-.shell-group__status {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  margin-left: auto;
-  border-radius: var(--radius-full);
-}
-.shell-group__status--running {
-  background: rgba(59, 130, 246, 0.14);
-  color: var(--accent-400);
-  border: 1px solid rgba(59, 130, 246, 0.24);
-}
-.shell-group__status--success {
-  background: rgba(34, 197, 94, 0.1);
-  color: var(--success-400);
-  border: 1px solid rgba(34, 197, 94, 0.22);
-}
-.shell-group__status--error {
-  background: rgba(239, 68, 68, 0.1);
-  color: var(--error-400);
-  border: 1px solid rgba(239, 68, 68, 0.22);
-}
-.shell-group__spinner { animation: spin 1s linear infinite; }
-
 .shell-group__chevron {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  margin-left: auto;
   border-radius: var(--radius-sm);
   color: var(--text-tertiary);
   transition: transform var(--duration-fast) var(--ease-out),
@@ -6567,7 +6640,8 @@ body {
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 2px 12px;
+  /* §图标对齐：右侧内边距与 ai-card__header 一致（8px），chevron 右缘全面板对齐 */
+  padding: 2px 8px 2px 12px;
   background: transparent;
   border: none;
   color: inherit;
@@ -6587,6 +6661,17 @@ body {
   background: transparent;
   color: var(--accent-400);
   flex-shrink: 0;
+}
+/* §图标对齐：header 状态徽章移除后，组状态改为给左侧图标着色 */
+.read-file-group__icon--running {
+  color: var(--accent-400);
+  animation: dotPulse 1.4s var(--ease-in-out) infinite;
+}
+.read-file-group__icon--error {
+  color: var(--error-400);
+}
+.read-file-group__icon--pending {
+  color: var(--warning-400);
 }
 
 .read-file-group__title {
@@ -6609,41 +6694,8 @@ body {
   text-align: left;
 }
 
-.read-file-group__status {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: var(--radius-full);
-  flex-shrink: 0;
-  margin-left: 8px;
-}
-
-.read-file-group__status--success {
-  color: var(--success-400);
-  background: rgba(34, 197, 94, 0.1);
-}
-
-.read-file-group__status--running {
-  color: var(--accent-400);
-  background: rgba(59, 130, 246, 0.1);
-}
-
-.read-file-group__status--error {
-  color: var(--error-400);
-  background: rgba(239, 68, 68, 0.1);
-}
-
-.read-file-group__status--pending {
-  color: var(--warning-400);
-  background: rgba(234, 179, 8, 0.1);
-}
-
-.read-file-group__spinner {
-  animation: spin 1s linear infinite;
-}
-
+/* §图标对齐：状态徽章已移除，chevron 是 header 右侧唯一图标，
+   auto 左 margin 保证展开态（无 preview 占位）也固定在行尾 */
 .read-file-group__chevron {
   display: flex;
   align-items: center;
@@ -6651,6 +6703,7 @@ body {
   color: var(--text-tertiary);
   transition: transform var(--duration-base) var(--ease-out);
   flex-shrink: 0;
+  margin-left: auto;
 }
 
 .read-file-group__chevron--open {
@@ -6857,7 +6910,7 @@ body {
   display: flex;
   align-items: center;
   width: 100%;
-  padding: 4px 2px;
+  padding: 4px 0;
   background: transparent;
   border: none;
   color: var(--text-tertiary);

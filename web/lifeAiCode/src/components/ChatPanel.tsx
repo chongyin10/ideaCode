@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import type { ChatMessage, ChatHistoryMessage, CodeContext, WebViewRequest, ExtensionMessage, LlmConfig, ProviderType, ToolCallInfo, SuggestionChange, FileChangeStatus } from '../types';
+import type { ChatMessage, ChatHistoryMessage, CodeContext, WebViewRequest, ExtensionMessage, LlmConfig, ProviderType, ToolCallInfo, SuggestionChange, FileChangeStatus, MentionFileItem } from '../types';
 import { PROVIDER_META, getConnectionStatusColor, getModelContextWindow } from '../types';
 import { SuggestionList } from './SuggestionList';
 import { ContentBlocks } from './ContentBlocks';
@@ -14,7 +14,7 @@ import { PlanTaskPanel } from './agent/PlanTaskPanel';
 import { TaskSummary } from './agent/TaskSummary';
 import { TodoListBlock } from './agent/TodoListBlock';
 import { ShellInteraction } from './agent/ShellInteraction';
-import { ShieldCheck, Brain, Pencil, ArrowDown, User, Sparkles, Paperclip, Send, MessageSquare, Loader2, Check, Square, ChevronDown, X, GripVertical, Code2, MessageCircleQuestion, FileText, Terminal, RefreshCw, Network, Lightbulb, GitCompare, Trash2, Archive, MapPin, Undo2, Info, Copy } from 'lucide-react';
+import { ShieldCheck, Brain, Pencil, ArrowDown, User, Sparkles, Paperclip, Send, MessageSquare, Loader2, Check, Square, ChevronDown, X, GripVertical, Code2, MessageCircleQuestion, FileText, Terminal, RefreshCw, Network, Lightbulb, GitCompare, Trash2, Archive, MapPin, Undo2, Info, Copy, Folder, File } from 'lucide-react';
 
 /** 预处理：检测并补齐未闭合的 markdown 结构（供 chatResponse 处理时使用） */
 function groupConfigsByProviderOrder(configs: LlmConfig[]) {
@@ -179,6 +179,15 @@ interface ChatPanelProps {
 export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOpenConfig }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
+  // §@ 文件补全：mention 弹层状态（start = '@' 在输入框中的下标）与工作区文件缓存
+  const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [workspaceFiles, setWorkspaceFiles] = useState<MentionFileItem[]>([]);
+  const fileListRequestedRef = useRef(false);
+  // §@ 文件补全：已选中的文件引用芯片（蓝色标签 + 删除按钮）
+  const [mentions, setMentions] = useState<MentionFileItem[]>([]);
+  // §文档解析 loading：扩展宿主提取附件文本时的提示文案，null 表示空闲
+  const [docParsing, setDocParsing] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   // §4.6: 直接使用 prop，让父组件切换文件/上下文时 ChatPanel 能拿到最新值。
   // 之前用 useState 初次化后再不更新，导致切换文件后 AI 仍拿到旧 context。
@@ -213,7 +222,8 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
   const [shellChangedFiles, setShellChangedFiles] = useState<SuggestionChange[]>([]);
   // §需求9：当前 Agent 任务的 plan steps（含状态），任务结束后保留供查看
   const [planSteps, setPlanSteps] = useState<PlanStep[]>([]);
-  // §流式计划：计划生成过程中实时累积的文本，planGenerated 到达后清空
+  // §流式计划：计划生成过程中实时累积的文本；§内容保留：计划生成完毕后不再清空，
+  // 保留展示直到下一次发问 / 新建会话 / 切换历史（sendMessage / newChat / restoreHistory 中重置）
   const [planStreamText, setPlanStreamText] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -817,6 +827,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
           setShellChangedFiles([]);
           setAgentStatus(null);
           setToolCalls([]);
+          setPlanStreamText('');
           setPendingAgentEdits([]);
           setError(null);
           // §需求4：新建会话时清空回复计时器与耗时显示
@@ -960,6 +971,21 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
           }, 3000);
           break;
         }
+        case 'fileList': {
+          // §@ 文件补全：缓存工作区文件列表
+          setWorkspaceFiles(msg.files);
+          break;
+        }
+        case 'docParse': {
+          // §文档解析 loading：附件提取文本期间显示进度提示
+          if (msg.status === 'parsing') {
+            const progress = msg.total && msg.total > 1 ? `（${msg.current}/${msg.total}）` : '';
+            setDocParsing(`正在解析文档 ${msg.fileName || ''} ${progress}…`);
+          } else {
+            setDocParsing(null);
+          }
+          break;
+        }
         case 'agentStatus': {
           if (msg.status === 'done') {
             // Agent 任务完成：保留状态栏显示"任务完成"
@@ -1034,20 +1060,18 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
           break;
         }
         case 'historyCompacted': {
-          // §需求8：上下文压缩完成，用摘要替换早期消息
-          // 保留最近 2 轮对话（4 条消息）+ 摘要作为首条 user 消息
-          setMessages((prev) => {
-            const realMsgs = prev.filter((m) => !m.placeholder && m.content.trim());
-            if (realMsgs.length <= 4) return prev; // 消息太少不压缩
-            const recent = realMsgs.slice(-4);
-            const summaryMsg: ChatMessage = {
+          // §需求8 + §内容保留：上下文压缩只作用于发送给模型的 messages（后端已就地替换），
+          // 界面上的历史消息不再被摘要替换/删除——所有大模型已输出的内容完整保留。
+          // 仅以一条 system 消息标记压缩发生，让用户理解后续回答"看不到"更早上下文的原因。
+          setMessages((prev) => [
+            ...prev,
+            {
               id: `summary-${Date.now()}`,
-              role: 'user',
-              content: `[历史对话摘要]\n${msg.summary}`,
+              role: 'system',
+              content: `📦 上下文已压缩（${msg.beforeTokens} → ${msg.afterTokens} tokens）：模型后续只看到摘要 + 最近消息，上方历史内容仍完整保留。`,
               timestamp: Date.now(),
-            };
-            return [summaryMsg, ...recent];
-          });
+            },
+          ]);
           // 重置签名避免立即重新保存历史
           lastSavedSignatureRef.current = null;
           // 显示压缩完成提示
@@ -1063,10 +1087,10 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
           break;
         }
         case 'planStreamToken': {
-          // §流式计划：实时累积 token，token=null 表示流结束并清空
-          if (msg.token === null) {
-            setPlanStreamText('');
-          } else {
+          // §流式计划：实时累积 token；token=null 仅表示流结束。
+          // §内容保留：结束后不再清空 planStreamText，已输出的计划内容保留展示，
+          // 直到下一次发问 / 新建会话 / 切换历史时才重置（sendMessage / newChat / restoreHistory）。
+          if (msg.token !== null) {
             setPlanStreamText((prev) => prev + msg.token);
           }
           break;
@@ -1081,8 +1105,8 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
             status: 'pending' as const,
           }));
           setPlanSteps(initSteps);
-          // §流式计划文本已被解析为 checklist，清空临时文本
-          setPlanStreamText('');
+          // §内容保留：流式计划文本不再在 planGenerated 后清空，保留展示在计划面板中，
+          // 与解析出的 checklist 并存（checklist 是结构化视图，原文是模型原始输出）。
           // §待办任务：同步写入最后一条 assistant 消息的 todos，随消息持久化
           setMessages((prev) => {
             const idx = prev.length - 1;
@@ -1267,7 +1291,10 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
   }, []);
 
   const sendMessage = async (text: string) => {
-    if (!text.trim() || isProcessing) return;
+    // §@ 文件补全：芯片形式的文件引用在发送时拼回文本前缀，保证 LLM 能拿到路径
+    const mentionPrefix = mentions.map((m) => `@${m.path}`).join(' ');
+    const fullText = (mentionPrefix ? `${mentionPrefix} ${text}` : text).trim();
+    if (!fullText || isProcessing) return;
 
     setError(null);
     // §需求3：新一轮对话开始前重置中止标志位，允许正常接收后续响应
@@ -1282,7 +1309,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
       clearTimeout(scrollIdleTimerRef.current);
       scrollIdleTimerRef.current = null;
     }
-    const userMsg: ChatMessage = { id: generateId(), role: 'user', content: text.trim(), timestamp: Date.now() };
+    const userMsg: ChatMessage = { id: generateId(), role: 'user', content: fullText, timestamp: Date.now() };
     // 占位消息：填充用户提交到 AI 返回第一个字符之间的时间空隙
     const placeholderMsg: ChatMessage = {
       id: `placeholder-${Date.now()}`,
@@ -1294,6 +1321,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
     };
     setMessages((prev) => [...prev, userMsg, placeholderMsg]);
     setInput('');
+    setMentions([]);
     setIsProcessing(true);
     // §需求4：用户发问时启动回复计时器——记录起点时间、激活动态 tick、清空上次结果。
     // 这里在 setIsProcessing(true) 之后立即同步写入，确保 useEffect 调度时拿到一致状态。
@@ -1327,7 +1355,9 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
 
     vscode.postMessage({
       command: 'sendMessage',
-      text: text.trim(),
+      text: fullText,
+      // §@ 文件补全：芯片形式的引用一并发送，扩展宿主据此提取 docx/pdf 文本
+      attachments: mentions,
       context,
       thinkingEnabled,
       agentMode,
@@ -1379,6 +1409,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
     // 同步恢复 UI 状态
     setIsProcessing(false);
     setAgentStatus(null);
+    setDocParsing(null);
     setToolCalls((prev) => prev.map((t) => (t.status === 'running' ? { ...t, status: 'error' as const } : t)));
     // §结束对话时：正在执行的步骤标记为失败，未执行的保持未执行
     setPlanSteps((prev) => prev.map((s) =>
@@ -1395,7 +1426,97 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
     });
   }, []);
 
+  /* ─── §@ 文件补全 ─── */
+
+  // 根据输入值与光标位置解析 mention 状态：
+  // 光标前最后一个 '@' 前面是行首/空白、且 '@' 到光标之间无空白/换行时，弹层打开
+  const updateMention = (value: string, caret: number) => {
+    const before = value.slice(0, caret);
+    const at = before.lastIndexOf('@');
+    if (at === -1 || (at > 0 && !/\s/.test(before[at - 1]))) {
+      if (mention) setMention(null);
+      return;
+    }
+    const query = before.slice(at + 1);
+    if (/\s/.test(query)) {
+      if (mention) setMention(null);
+      return;
+    }
+    if (!mention || mention.start !== at || mention.query !== query) {
+      setMention({ start: at, query });
+      setMentionIndex(0);
+    }
+  };
+
+  // 弹层首次打开时向扩展宿主请求工作区文件列表（只请求一次，后续本地过滤）
+  useEffect(() => {
+    if (mention && !fileListRequestedRef.current) {
+      fileListRequestedRef.current = true;
+      vscode?.postMessage({ command: 'listFiles' } as WebViewRequest);
+    }
+  }, [mention, vscode]);
+
+  // 实时过滤：名称或相对路径包含 query（中文名直接子串匹配），目录排前，最多 20 条
+  const mentionMatches = useMemo(() => {
+    if (!mention) return [] as MentionFileItem[];
+    const q = mention.query.toLowerCase();
+    const filtered = q
+      ? workspaceFiles.filter((f) => f.name.toLowerCase().includes(q) || f.path.toLowerCase().includes(q))
+      : workspaceFiles;
+    return [...filtered]
+      .sort((a, b) => Number(b.isDirectory) - Number(a.isDirectory))
+      .slice(0, 20);
+  }, [mention, workspaceFiles]);
+
+  // 选中候选项：生成引用芯片（蓝色标签），并把输入框中的 '@query' 文本移除
+  const applyMention = (item: MentionFileItem) => {
+    if (!mention) return;
+    const caret = inputRef.current?.selectionStart ?? mention.start + 1 + mention.query.length;
+    setInput(input.slice(0, mention.start) + input.slice(caret));
+    setMentions((prev) =>
+      prev.some((m) => m.path === item.path && m.isDirectory === item.isDirectory) ? prev : [...prev, item]
+    );
+    setMention(null);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
+  const removeMention = (item: MentionFileItem) => {
+    setMentions((prev) => prev.filter((m) => !(m.path === item.path && m.isDirectory === item.isDirectory)));
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // §@ 文件补全：弹层打开时优先处理导航/选择键
+    if (mention) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setMentionIndex((i) => Math.min(i + 1, mentionMatches.length - 1));
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setMentionIndex((i) => Math.max(i - 1, 0));
+        return;
+      }
+      if ((e.key === 'Enter' || e.key === 'Tab') && mentionMatches.length > 0) {
+        e.preventDefault();
+        applyMention(mentionMatches[Math.min(mentionIndex, mentionMatches.length - 1)]);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setMention(null);
+        return;
+      }
+    }
+    // §@ 文件补全：光标在输入框最前方按 Backspace 时，删除最后一个引用芯片
+    if (e.key === 'Backspace' && mentions.length > 0) {
+      const el = inputRef.current;
+      if (el && el.selectionStart === 0 && el.selectionEnd === 0) {
+        e.preventDefault();
+        setMentions((prev) => prev.slice(0, -1));
+        return;
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(input); }
   };
 
@@ -1840,6 +1961,18 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
                           onKillShell={(id) => vscode?.postMessage({ command: 'killShell', id } as WebViewRequest)}
                         />
                       )}
+                      {agentMode && planStreamText && (
+                        // §内容保留：计划流文本在真实消息渲染分支同样展示——
+                        // 首个 chatResponse 到达后占位消息被移除，计划内容在此继续保留，
+                        // 不再随 planGenerated / 阶段切换而清空
+                        <div className="plan-stream-text">
+                          <div className="plan-stream-text__label">
+                            <Sparkles size={12} strokeWidth={2} />
+                            制定执行计划
+                          </div>
+                          <pre className="plan-stream-text__content">{planStreamText}</pre>
+                        </div>
+                      )}
                     </>
                   )}
 
@@ -1921,6 +2054,13 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
               inline
             />
           )}
+          {/* §文档解析 loading：附件 docx/pdf/xlsx/pptx 提取文本期间显示 */}
+          {docParsing && (
+            <div className="doc-parse-status">
+              <Loader2 size={13} strokeWidth={2} className="doc-parse-status__spinner" />
+              <span>{docParsing}</span>
+            </div>
+          )}
           {/* §需求4：status-indicator-zone 右侧显示回复耗时——
               等待中（isResponseTimerActive=true）实时跳动；已结束时显示最终耗时；
               未发问时不渲染。 */}
@@ -1997,16 +2137,68 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
       {/* Input bar */}
       <div className="input-bar">
         <div className="input-wrapper">
+          {/* §@ 文件补全弹层：输入 '@' 触发，实时过滤工作区文件，点击/回车插回输入框 */}
+          {mention && (
+            <div className="mention-dropdown">
+              {workspaceFiles.length === 0 ? (
+                <div className="mention-empty">正在加载工作区文件…</div>
+              ) : mentionMatches.length === 0 ? (
+                <div className="mention-empty">无匹配的文件</div>
+              ) : (
+                mentionMatches.map((item, idx) => (
+                  <button
+                    key={`${item.path}${item.isDirectory ? '/' : ''}`}
+                    className={`mention-item ${idx === mentionIndex ? 'mention-item--active' : ''}`}
+                    onMouseDown={(e) => { e.preventDefault(); applyMention(item); }}
+                    onMouseEnter={() => setMentionIndex(idx)}
+                  >
+                    {item.isDirectory ? <Folder size={13} strokeWidth={2} /> : <File size={13} strokeWidth={2} />}
+                    <span className="mention-item-name">{item.name}</span>
+                    <span className="mention-item-path">{item.path}</span>
+                  </button>
+                ))
+              )}
+            </div>
+          )}
+          {/* §@ 文件补全：已选中的文件引用芯片（蓝色文字 + 删除按钮） */}
+          {mentions.length > 0 && (
+            <div className="mention-chips">
+              {mentions.map((m) => (
+                <span className="mention-chip" key={`${m.path}${m.isDirectory ? '/' : ''}`} title={m.path}>
+                  {m.isDirectory ? <Folder size={11} strokeWidth={2} /> : <File size={11} strokeWidth={2} />}
+                  <span className="mention-chip-name">@{m.name}</span>
+                  <button
+                    className="mention-chip-remove"
+                    title="移除引用"
+                    onMouseDown={(e) => { e.preventDefault(); removeMention(m); }}
+                  >
+                    <X size={11} strokeWidth={2} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
           <textarea
             ref={inputRef}
             className="input-textarea"
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => {
+              setInput(e.target.value);
+              updateMention(e.target.value, e.target.selectionStart);
+            }}
             onKeyDown={handleKeyDown}
+            onKeyUp={(e) => {
+              // 光标左右移动时重新评估 mention 是否还有效
+              if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
+                updateMention(e.currentTarget.value, e.currentTarget.selectionStart);
+              }
+            }}
+            onClick={(e) => updateMention(e.currentTarget.value, e.currentTarget.selectionStart)}
+            onBlur={() => setMention(null)}
             placeholder={
               isProcessing
                 ? (agentStatus ? `Agent ${agentStatus.status === 'running' ? '执行中' : agentStatus.status}…（可在状态条停止）` : '生成中…')
-                : '输入消息... (Enter 发送，Shift+Enter 换行)'
+                : '输入消息... (Enter 发送，Shift+Enter 换行，@ 引用文件)'
             }
             disabled={isProcessing}
             rows={1}

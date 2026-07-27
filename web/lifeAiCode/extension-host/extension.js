@@ -37,6 +37,9 @@ const { SuggestionGenerator } = require('./suggestionGenerator');
 const { AgentRuntime } = require('./agent/agentRuntime');
 const { createFsAdapter } = require('./remoteFsAdapter');
 const { isRemoteUri } = require('./sshUri');
+const { listWorkspaceFiles } = require('./listFiles');
+const { extractDocumentText, isDocumentFile } = require('./docExtractor');
+const { isImageFile, loadImageAsDataUrl, buildUserContent } = require('./imageUtils');
 
 /* ─── 全局状态 ─── */
 
@@ -1241,7 +1244,7 @@ async function processMessage(text, context, options = {}) {
   if (isProcessing) return;
   isProcessing = true;
 
-  const { thinkingEnabled, continueFromMessageId, continueFromContent, continueFromText, history } = options || {};
+  const { thinkingEnabled, continueFromMessageId, continueFromContent, continueFromText, history, images } = options || {};
   const msgId = continueFromMessageId || generateId();
   console.log('[LifeAiCode] 处理用户消息:', text.slice(0, 60), 'thinkingEnabled:', thinkingEnabled, 'continue:', !!continueFromMessageId, 'history:', Array.isArray(history) ? history.length : 0);
 
@@ -1284,7 +1287,6 @@ async function processMessage(text, context, options = {}) {
       const userMessage = contextStr
         ? `## 用户问题\n${text}\n\n## 代码上下文\n${contextStr}`
         : text;
-
       // 把 IDE 自动读取的文件以步骤形式展示出来
       const readSteps = [];
       if (context.activeFile) {
@@ -1322,7 +1324,7 @@ async function processMessage(text, context, options = {}) {
               return msg;
             })
         : [];
-      messages = [...historyMessages, { role: 'user', content: userMessage }];
+      messages = [...historyMessages, { role: 'user', content: buildUserContent(userMessage, images) }];
     }
 
     // 4. 调用 LLM（先尝试流式，失败回退非流式）
@@ -1330,6 +1332,9 @@ async function processMessage(text, context, options = {}) {
     let aborted = false;
     /** 跟踪本次请求的 token 监听器，结束/异常时精确移除 */
     let tokenListener = null;
+    // §必须声明在 try 之外：finally 中清理节流定时器时引用它，
+    // 若声明在 try 块内，finally 作用域访问会抛 ReferenceError 吞掉真正的错误
+    let streamPostTimer = null;
     try {
       // 仅移除自己上一次的 token 监听器（如果存在），不破坏其他订阅者
       if (processMessage._lastTokenListener) {
@@ -1342,8 +1347,8 @@ async function processMessage(text, context, options = {}) {
       // §流式节流：LLM 每个 SSE data 行都 emit token，高频 postToWebView 会
       // 压垮 Electron IPC + WebView 渲染（用户感知为"卡3秒后一下子输出很多"）。
       // 用时间戳节流，30ms 内最多发送一次，从源头减少消息量。
+      // streamPostTimer 声明已上移到 try 之外（finally 清理时需要引用）
       let lastStreamPostTime = 0;
-      let streamPostTimer = null;
       const STREAM_THROTTLE_MS = 30;
       const flushStreamContent = () => {
         lastStreamPostTime = Date.now();
@@ -1480,8 +1485,33 @@ async function runAgentTask(text, context, options = {}) {
   isProcessing = true;
 
   const msgId = generateId();
-  const { history } = options || {};
+  const { history, images } = options || {};
   console.log('[LifeAiCode][Agent] 开始任务:', text.slice(0, 60), 'history:', Array.isArray(history) ? history.length : 0);
+
+  // §以下变量必须声明在 try 之外：catch 中引用了它们（清理节流定时器、保留已渲染内容），
+  // 若用 let 声明在 try 块内，catch 作用域访问会抛 ReferenceError，
+  // 把真正的错误吞掉变成 "agentStreamPostTimer is not defined"
+  const cleanToolCallTags = (text) => text
+    .replace(new RegExp("`tool_call`[\\s\\S]*?<\/tool_call>", "g"), "")
+    .replace(new RegExp("`tool_call`[\\s\\S]*$", "g"), "")
+    .trim();
+
+  let streamedContent = '';
+  let agentStreamTruncated = false;
+  // §流式节流（与 processMessage 一致）：LLM 每个 SSE delta 都 emit token，
+  // 高频 postToWebView 会压垮 Electron IPC + WebView 渲染，用户感知为
+  // "卡几秒后突然加载很多内容"。用 30ms 节流窗口从源头减少消息量。
+  // cleanToolCallTags 对全量内容做正则，放在 flush 里执行避免每个 token 都跑正则。
+  let agentLastStreamPostTime = 0;
+  let agentStreamPostTimer = null;
+  const AGENT_STREAM_THROTTLE_MS = 30;
+  const flushAgentStream = () => {
+    agentLastStreamPostTime = Date.now();
+    const displayContent = cleanToolCallTags(streamedContent);
+    if (displayContent) {
+      postToWebView({ type: 'chatResponse', id: msgId, content: displayContent, done: false });
+    }
+  };
 
   try {
     if (!agentRuntime) {
@@ -1494,29 +1524,9 @@ async function runAgentTask(text, context, options = {}) {
       message: 'Agent 开始执行任务...',
     });
 
-    const cleanToolCallTags = (text) => text
-      .replace(new RegExp("`tool_call`[\\s\\S]*?<\/tool_call>", "g"), "")
-      .replace(new RegExp("`tool_call`[\\s\\S]*$", "g"), "")
-      .trim();
-
-    let streamedContent = '';
-    let agentStreamTruncated = false;
-    // §流式节流（与 processMessage 一致）：LLM 每个 SSE delta 都 emit token，
-    // 高频 postToWebView 会压垮 Electron IPC + WebView 渲染，用户感知为
-    // "卡几秒后突然加载很多内容"。用 30ms 节流窗口从源头减少消息量。
-    // cleanToolCallTags 对全量内容做正则，放在 flush 里执行避免每个 token 都跑正则。
-    let agentLastStreamPostTime = 0;
-    let agentStreamPostTimer = null;
-    const AGENT_STREAM_THROTTLE_MS = 30;
-    const flushAgentStream = () => {
-      agentLastStreamPostTime = Date.now();
-      const displayContent = cleanToolCallTags(streamedContent);
-      if (displayContent) {
-        postToWebView({ type: 'chatResponse', id: msgId, content: displayContent, done: false });
-      }
-    };
     const finalResponse = await agentRuntime.run(text, context, {
       history,
+      images,
       onToken: (token) => {
         // 实时推送内容到 WebView，过滤 prompt-based 模式下可能混入的 <tool_call> 标签
         // 防止超长 Agent 响应触发 Invalid string length
@@ -1860,6 +1870,96 @@ function previewDiff(suggestionId) {
 
 /* ─── 扩展入口 ─── */
 
+/**
+ * §@ 文件补全：发送消息时，把附件芯片里的 docx/pdf/xlsx/pptx 提取为纯文本拼到消息尾部，
+ * 让纯文本 LLM（如 DeepSeek）能读到文档内容。
+ * 仅支持本地工作区；远程（SSH）因 cat 传输二进制不安全而跳过。
+ * 解析过程通过 docParse 消息通知 WebView 显示 loading。
+ */
+async function buildTextWithAttachments(text, attachments, ctx) {
+  if (!Array.isArray(attachments) || attachments.length === 0) return text;
+  const docAtts = attachments.filter((att) => att && !att.isDirectory && att.path && isDocumentFile(att.path));
+  if (docAtts.length === 0) return text;
+
+  const workspaceRoot = (ctx && ctx.workspaceRoot) || '';
+  const isRemote = Boolean(ctx && ctx.remote && ctx.remote.isRemote) || isRemoteUri(workspaceRoot);
+  const segments = [];
+  // try/finally：无论解析是否出错，都要通知 WebView 结束 loading
+  try {
+    for (let i = 0; i < docAtts.length; i++) {
+      const att = docAtts[i];
+      postToWebView({ type: 'docParse', status: 'parsing', fileName: att.name || att.path, current: i + 1, total: docAtts.length });
+      if (isRemote || !workspaceRoot) {
+        segments.push(`[附件 ${att.path} 未提取: 暂不支持远程工作区的文档提取]`);
+        continue;
+      }
+      const absPath = path.resolve(workspaceRoot, att.path);
+      // 边界检查：防止附件路径越出工作区
+      if (!absPath.startsWith(path.resolve(workspaceRoot))) {
+        segments.push(`[附件 ${att.path} 未提取: 路径越出工作区]`);
+        continue;
+      }
+      const result = await extractDocumentText(absPath);
+      if (result.success) {
+        segments.push(`[附件 ${att.path} 提取的文本内容${result.truncated ? '（过长已截断）' : ''}]\n${result.text}`);
+      } else {
+        segments.push(`[附件 ${att.path} 提取失败: ${result.error}]`);
+      }
+    }
+  } finally {
+    postToWebView({ type: 'docParse', status: 'done' });
+  }
+  if (segments.length === 0) return text;
+  return `${text}\n\n---\n${segments.join('\n\n')}`;
+}
+
+/** 支持视觉输入（image_url 多模态格式）的 Provider 白名单 */
+const VISION_PROVIDERS = new Set(['openai', 'deepseek', 'glm', 'qwen', 'kimi', 'MiniMax', 'doubao', 'custom']);
+
+/**
+ * §多模态：把附件芯片里的图片读为 data URL，供 LLM 以 image_url 格式发送。
+ * 返回 { images, notes }：images 为可发送的图片数组，notes 为未能发送的说明（拼到消息尾部）。
+ */
+async function buildImageAttachments(attachments, ctx) {
+  const MAX_IMAGES = 4;
+  const result = { images: [], notes: [] };
+  if (!Array.isArray(attachments) || attachments.length === 0) return result;
+  const imgAtts = attachments.filter((att) => att && !att.isDirectory && att.path && isImageFile(att.path));
+  if (imgAtts.length === 0) return result;
+
+  // Provider 不支持视觉时不读文件，直接给提示
+  const provider = (llmClient && llmClient.provider) || '';
+  if (!VISION_PROVIDERS.has(provider)) {
+    result.notes.push(`[图片附件未发送: 当前 Provider（${provider || '未知'}）不支持图片输入]`);
+    return result;
+  }
+
+  const workspaceRoot = (ctx && ctx.workspaceRoot) || '';
+  const isRemote = Boolean(ctx && ctx.remote && ctx.remote.isRemote) || isRemoteUri(workspaceRoot);
+  for (const att of imgAtts.slice(0, MAX_IMAGES)) {
+    if (isRemote || !workspaceRoot) {
+      result.notes.push(`[图片附件 ${att.path} 未发送: 暂不支持远程工作区]`);
+      continue;
+    }
+    const absPath = path.resolve(workspaceRoot, att.path);
+    // 边界检查：防止附件路径越出工作区
+    if (!absPath.startsWith(path.resolve(workspaceRoot))) {
+      result.notes.push(`[图片附件 ${att.path} 未发送: 路径越出工作区]`);
+      continue;
+    }
+    const r = await loadImageAsDataUrl(absPath);
+    if (r.success) {
+      result.images.push({ name: att.name || att.path, dataUrl: r.dataUrl });
+    } else {
+      result.notes.push(`[图片附件 ${att.path} 未发送: ${r.error}]`);
+    }
+  }
+  if (imgAtts.length > MAX_IMAGES) {
+    result.notes.push(`[图片附件过多: 仅发送前 ${MAX_IMAGES} 张]`);
+  }
+  return result;
+}
+
 async function activate(context) {
   console.log('[LifeAiCode] 扩展已激活');
 
@@ -2182,10 +2282,15 @@ async function activate(context) {
             agentRuntime.context.workspaceRoot = ctx.workspaceRoot || '';
             agentRuntime.context.remote = ctx.remote || null;
           }
+          // §@ 文档附件：把芯片中的 docx/pdf 提取成纯文本拼到消息尾部
+          const enrichedText = await buildTextWithAttachments(message.text, message.attachments, ctx);
+          // §多模态：把芯片中的图片读为 data URL，随消息以 image_url 格式发给视觉模型
+          const { images, notes: imageNotes } = await buildImageAttachments(message.attachments, ctx);
+          const finalText = imageNotes.length > 0 ? `${enrichedText}\n\n${imageNotes.join('\n')}` : enrichedText;
           if (message.agentMode) {
-            await runAgentTask(message.text, ctx, { history: message.history });
+            await runAgentTask(finalText, ctx, { history: message.history, images });
           } else {
-            await processMessage(message.text, ctx, { thinkingEnabled: message.thinkingEnabled, history: message.history });
+            await processMessage(finalText, ctx, { thinkingEnabled: message.thinkingEnabled, history: message.history, images });
           }
           break;
         }
@@ -2252,6 +2357,19 @@ async function activate(context) {
         }
         case 'requestConfig': {
           broadcastConfigs();
+          break;
+        }
+        case 'listFiles': {
+          // §@ 文件补全：返回工作区扁平文件列表（相对路径），供 WebView 本地过滤
+          try {
+            const files = contextBuilder
+              ? await listWorkspaceFiles({ rpc: contextBuilder.rpc })
+              : [];
+            panel.webview.postMessage({ type: 'fileList', files });
+          } catch (err) {
+            console.error('[LifeAiCode] 获取文件列表失败:', err);
+            panel.webview.postMessage({ type: 'fileList', files: [], error: err.message });
+          }
           break;
         }
         case 'switchConfig': {

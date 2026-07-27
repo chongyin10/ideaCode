@@ -57,6 +57,12 @@ class ExtensionHostManager {
     this.fileWatcher = null;
     /** 文件变化防抖定时器 */
     this.restartTimer = null;
+    /** 心跳定时器：周期性 ping 扩展宿主，检测"进程活着但事件循环卡死"的挂死状态 */
+    this.heartbeatTimer = null;
+    /** 上一个 ping 是否仍未收到响应（用于判定丢拍，避免 ping 堆积） */
+    this._pingInFlight = false;
+    /** 连续丢拍次数：达到上限触发热重启 */
+    this._missedHeartbeats = 0;
     /** 监视的扩展目录列表（按扩展 id） */
     this.watchedDirs = new Set();
   }
@@ -102,6 +108,7 @@ class ExtensionHostManager {
       this.isRunning = false;
       this.hostProcess = null;
       this._hotRestarting = false;
+      this._stopHeartbeat();
       // 通知所有渲染进程扩展宿主已停止
       this.windowManager.broadcast(Channels.EXTENSION_HOST_MESSAGE, {
         type: 'hostStopped',
@@ -125,9 +132,72 @@ class ExtensionHostManager {
     this.stopping = false;
     this._hotRestarting = false;
     console.log('[ExtensionHost] 扩展宿主进程已启动');
+    // 启动心跳：宿主进程崩溃有 exit 事件兜底，但"事件循环卡死"（进程活着却不响应）
+    // 没有任何信号可感知——表现为 LLM/shell 输出突然中断、界面卡死。
+    // 通过周期性 host.ping 检测这种假死并自动热重启。
+    this._startHeartbeat();
 
     // 启动 dev 模式文件监视
     this.startFileWatchers();
+  }
+
+  /**
+   * 启动心跳监视：每 15s 向扩展宿主打一个 host.ping；
+   * 连续 2 次未在周期内收到响应（≈30s 无响应）判定为挂死，触发热重启。
+   * 注意：LLM 流式输出是异步的，健康宿主再忙也能挤出时间应答 ping，
+   * 只有事件循环真正被同步代码卡死 / 进程 wedged 时才会丢拍。
+   */
+  _startHeartbeat() {
+    this._stopHeartbeat();
+    this._missedHeartbeats = 0;
+    this._pingInFlight = false;
+    const HEARTBEAT_INTERVAL_MS = 15000;
+    const MAX_MISSED = 2;
+    this.heartbeatTimer = setInterval(() => {
+      if (!this.isRunning || !this.hostProcess || this.stopping || this._hotRestarting) return;
+      // 上一个 ping 还没回应 → 记一次丢拍
+      if (this._pingInFlight) {
+        this._missedHeartbeats++;
+        console.warn(`[ExtensionHost] 心跳超时（连续 ${this._missedHeartbeats} 次无响应）`);
+        if (this._missedHeartbeats >= MAX_MISSED) {
+          console.error('[ExtensionHost] 扩展宿主疑似挂死（心跳连续超时），执行热重启');
+          this._stopHeartbeat();
+          this._killAndRestart();
+        }
+        return;
+      }
+      this._pingInFlight = true;
+      // 防御：进程刚好死亡时 hostProcess.send 可能同步抛 ERR_IPC_CHANNEL_CLOSED，
+      // 不能让异常炸掉 interval 回调（主进程未捕获异常）。
+      try {
+        this.sendRpc('host.ping', {})
+          .then(() => {
+            this._pingInFlight = false;
+            if (this._missedHeartbeats > 0) {
+              console.log('[ExtensionHost] 心跳恢复');
+            }
+            this._missedHeartbeats = 0;
+          })
+          .catch(() => {
+            // 发送失败/超时：不计丢拍，等下个周期由 _pingInFlight 判定
+            this._pingInFlight = false;
+          });
+      } catch {
+        this._pingInFlight = false;
+      }
+    }, HEARTBEAT_INTERVAL_MS);
+  }
+
+  /**
+   * 停止心跳监视（进程退出 / 主动停止 / 触发热重启时调用）
+   */
+  _stopHeartbeat() {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+    this._pingInFlight = false;
+    this._missedHeartbeats = 0;
   }
 
   /**
@@ -264,6 +334,7 @@ class ExtensionHostManager {
     if (!this.hostProcess) return;
 
     this.stopping = true;
+    this._stopHeartbeat();
     // 清理热重启标志：用户主动停止时，exit 不应再触发重启
     this._hotRestarting = false;
     if (this.restartTimer) {

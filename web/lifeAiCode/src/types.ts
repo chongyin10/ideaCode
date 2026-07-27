@@ -326,7 +326,7 @@ export interface ChatHistoryMessage {
 }
 
 export type WebViewRequest =
-  | { command: 'sendMessage'; text: string; context: CodeContext; thinkingEnabled?: boolean; agentMode?: boolean; history?: ChatHistoryMessage[] }
+  | { command: 'sendMessage'; text: string; context: CodeContext; thinkingEnabled?: boolean; agentMode?: boolean; history?: ChatHistoryMessage[]; attachments?: MentionFileItem[] }
   | { command: 'continueMessage'; messageId: string; continueFromContent: string }
   | { command: 'acceptSuggestion'; suggestionId: string }
   | { command: 'rejectSuggestion'; suggestionId: string }
@@ -352,7 +352,16 @@ export type WebViewRequest =
   // §需求8：手动压缩上下文 — 调 LLM 生成历史摘要替换早期消息
   | { command: 'compactHistory'; messages: { role: 'user' | 'assistant'; content: string }[] }
   // §撤销修改：将 AI 自动修改的文件恢复到修改前的内容
-  | { command: 'revertFiles'; changes: Array<{ filePath: string; original: string }> };
+  | { command: 'revertFiles'; changes: Array<{ filePath: string; original: string }> }
+  // §@ 文件补全：向扩展宿主请求工作区文件列表（扁平相对路径）
+  | { command: 'listFiles' };
+
+/** @ 补全候选项：工作区内的一个文件或目录（path 为相对工作区根的路径） */
+export interface MentionFileItem {
+  name: string;
+  path: string;
+  isDirectory: boolean;
+}
 
 export type ExtensionMessage =
   | { type: 'chatResponse'; id: string; content: string; done: boolean }
@@ -396,7 +405,11 @@ export type ExtensionMessage =
   | { type: 'deferredWaitStart'; pending: number; shells: Array<{ id: string; cmd: string; cwd: string; deferredAt: number; elapsedMs: number }> }
   // §后台任务管理器：后台任务等待结束（全部完成或超时）
   | { type: 'deferredWaitDone'; pending: number; shells?: Array<{ id: string; cmd: string; cwd: string; deferredAt: number; elapsedMs: number }>; timedOut?: boolean }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string }
+  // §@ 文件补全：扩展宿主返回的工作区文件列表
+  | { type: 'fileList'; files: MentionFileItem[]; error?: string }
+  // §文档解析进度：附件 docx/pdf/xlsx/pptx 提取文本时的 loading 提示
+  | { type: 'docParse'; status: 'parsing' | 'done'; fileName?: string; current?: number; total?: number };
 
 /* ─── VSCode API 类型 ─── */
 

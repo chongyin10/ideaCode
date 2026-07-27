@@ -10,6 +10,7 @@ const fs = require('fs');
 const path = require('path');
 const SafeFileReader = require('../safeFileReader.cjs');
 const { isRemoteUri } = require('../../sshUri');
+const { extractDocumentText, isDocumentFile } = require('../../docExtractor');
 
 async function readFile(args, context) {
   const { path: filePathInput } = args || {};
@@ -26,6 +27,25 @@ async function readFile(args, context) {
     const stat = await fsAdapter.stat(filePathInput);
     if (!stat || stat.isDirectory) {
       return { success: false, error: `路径不是文件: ${filePathInput}` };
+    }
+
+    // §文档类文件（docx/pdf）：提取纯文本返回，而非二进制乱码（LLM 读不了二进制）
+    if (isDocumentFile(filePathInput)) {
+      if (isRemoteUri(workspaceRoot)) {
+        return { success: false, error: '暂不支持远程工作区的文档提取（docx/pdf），请下载到本地后重试' };
+      }
+      const result = await extractDocumentText(resolveLocalPath(filePathInput, workspaceRoot));
+      if (!result.success) {
+        return { success: false, error: result.error };
+      }
+      return {
+        success: true,
+        path: filePathInput,
+        size: result.size,
+        document: true,
+        truncated: result.truncated || false,
+        content: result.text,
+      };
     }
 
     // 大文件智能路由：超过 500KB 时不返回截断内容，

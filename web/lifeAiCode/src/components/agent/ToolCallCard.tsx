@@ -117,7 +117,7 @@ export function ToolCallCard({ toolCall, forceExpanded, hideOutputToggle }: Tool
         <span className="tool-call-card__actions">
           {hasBody && (
             <span className={`tool-call-card__chevron ${expanded ? 'tool-call-card__chevron--open' : ''}`}>
-              <ChevronDown size={13} strokeWidth={2} />
+              <ChevronDown size={14} strokeWidth={2} />
             </span>
           )}
         </span>

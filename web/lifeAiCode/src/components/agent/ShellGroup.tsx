@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { ChevronDown, Loader2, Check, X, Wrench } from 'lucide-react';
+import { ChevronDown } from 'lucide-react';
 import type { ToolCallInfo } from '../../types';
 import { ToolCallCard } from './ToolCallCard';
 
@@ -24,7 +24,6 @@ export function ShellGroup({ calls, merged }: ShellGroupProps) {
   const freezeTimerRef = useRef<number | null>(null);
 
   const runningCount = calls.filter((c) => c.status === 'running').length;
-  const errorCount = calls.filter((c) => c.status === 'error').length;
   const allDone = runningCount === 0;
 
   // 当前正在运行的子任务（用于面板展开时聚焦到它）
@@ -68,19 +67,8 @@ export function ShellGroup({ calls, merged }: ShellGroupProps) {
   const autoExpanded = runningCount > 0;
   const expanded = userExpanded !== null ? userExpanded : autoExpanded;
 
-  // 状态徽章（纯图标）
-  let statusIcon = <Check size={11} strokeWidth={2.5} />;
-  let statusClass = 'shell-group__status--success';
-  let statusTitle = '已完成';
-  if (runningCount > 0) {
-    statusIcon = <Loader2 size={11} strokeWidth={2.5} className="shell-group__spinner" />;
-    statusClass = 'shell-group__status--running';
-    statusTitle = `执行中 ${runningCount}/${calls.length}`;
-  } else if (errorCount > 0) {
-    statusIcon = <X size={11} strokeWidth={2.5} />;
-    statusClass = 'shell-group__status--error';
-    statusTitle = `${errorCount} 个失败`;
-  }
+  // §图标对齐：header 右侧只保留 chevron；运行/成功/失败状态由左侧
+  // shell-group__dot 的颜色与脉冲表达（CSS :has() 根据子任务卡片状态着色）。
 
   return (
     <div className={`shell-group ${expanded ? 'shell-group--open' : 'shell-group--collapsed'}`}>
@@ -93,9 +81,6 @@ export function ShellGroup({ calls, merged }: ShellGroupProps) {
         <span className="shell-group__dot" />
         <span className="shell-group__title">General智能体</span>
         <span className="shell-group__count">{calls.length}</span>
-        <span className={`shell-group__status ${statusClass}`} title={statusTitle}>
-          {statusIcon}
-        </span>
         <span className={`shell-group__chevron ${expanded ? 'shell-group__chevron--open' : ''}`}>
           <ChevronDown size={14} strokeWidth={2} />
         </span>

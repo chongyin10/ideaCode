@@ -140,16 +140,16 @@ export function ReadFileGroup({ calls, isActive }: ReadFileGroupProps) {
   const currentName = getFileName(currentCall);
   const hasMore = calls.length > 1;
 
+  // §图标对齐：header 右侧只保留 chevron；组状态改为给左侧图标着色
+  // （running → 蓝色脉冲，error → 红色，pending → 黄色，完成 → 默认蓝）
   const allPending = pendingCount > 0 && runningCount === 0 && errorCount === 0;
-  let statusIcon = allPending ? <Hourglass size={12} strokeWidth={2} /> : <Check size={12} strokeWidth={2.5} />;
-  let statusClass = allPending ? 'read-file-group__status--pending' : 'read-file-group__status--success';
-  if (runningCount > 0) {
-    statusIcon = <Loader2 size={12} strokeWidth={2.5} className="read-file-group__spinner" />;
-    statusClass = 'read-file-group__status--running';
-  } else if (errorCount > 0) {
-    statusIcon = <X size={12} strokeWidth={2.5} />;
-    statusClass = 'read-file-group__status--error';
-  }
+  const iconStateClass = runningCount > 0
+    ? 'read-file-group__icon--running'
+    : errorCount > 0
+      ? 'read-file-group__icon--error'
+      : allPending
+        ? 'read-file-group__icon--pending'
+        : '';
 
   return (
     <div className="tool-call-card read-file-group">
@@ -159,7 +159,11 @@ export function ReadFileGroup({ calls, isActive }: ReadFileGroupProps) {
         onClick={() => setExpanded(!expanded)}
         aria-expanded={expanded}
       >
-        <span className="read-file-group__icon">
+        <span className={`read-file-group__icon ${iconStateClass}`} title={
+          runningCount > 0 ? `执行中 ${runningCount}/${calls.length}` :
+          errorCount > 0 ? `${errorCount} 个失败` :
+          allPending ? '等待确认' : '完成'
+        }>
           <FileText size={14} strokeWidth={1.8} />
         </span>
         <span className="read-file-group__title">
@@ -173,13 +177,6 @@ export function ReadFileGroup({ calls, isActive }: ReadFileGroupProps) {
         )}
         <span className={`read-file-group__chevron ${expanded ? 'read-file-group__chevron--open' : ''}`}>
           <ChevronDown size={14} strokeWidth={2} />
-        </span>
-        <span className={`read-file-group__status ${statusClass}`} title={
-          runningCount > 0 ? '执行中' :
-          errorCount > 0 ? '部分失败' :
-          allPending ? '等待确认' : '完成'
-        }>
-          {statusIcon}
         </span>
       </button>
 
