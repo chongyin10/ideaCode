@@ -197,6 +197,29 @@ export async function readFile(fileSource: FileSource): Promise<string> {
   throw new Error('无法读取文件：不支持的文件源');
 }
 
+export async function readFileBase64(fileSource: FileSource): Promise<string> {
+  if (isRemoteUri(fileSource)) {
+    // 远程 provider 的 readFile 按 utf-8 返回字符串，无法无损表示二进制，暂不支持
+    throw new Error('暂不支持预览远程 PDF 文件');
+  }
+
+  if (isElectron() && isPath(fileSource)) {
+    return window.electronAPI!.fs.readFileBase64(fileSource);
+  }
+  if (isHandle(fileSource) && fileSource.kind === 'file') {
+    const file = await (fileSource as FileSystemFileHandle).getFile();
+    const buf = new Uint8Array(await file.arrayBuffer());
+    // 分块转 base64，避免大文件 String.fromCharCode(...buf) 栈溢出
+    let binary = '';
+    const CHUNK = 0x8000;
+    for (let i = 0; i < buf.length; i += CHUNK) {
+      binary += String.fromCharCode(...buf.subarray(i, i + CHUNK));
+    }
+    return btoa(binary);
+  }
+  throw new Error('无法读取文件：不支持的文件源');
+}
+
 /**
  * 缓存预热：预加载最近项目中的关键文件
  * 在项目打开后调用，使用 requestIdleCallback 在后台渐进加载

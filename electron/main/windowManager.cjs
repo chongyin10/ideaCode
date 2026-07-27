@@ -67,6 +67,8 @@ class WindowManager {
         nodeIntegration: false,
         webSecurity: true,
         enableRemoteModule: false,
+        // 启用 Chromium 内置插件（PDFium PDF 查看器），供 PdfViewer 的 iframe 渲染 PDF
+        plugins: true,
         // 启用进程沙箱（Electron 20+ 默认开启）
         sandbox: true,
       },

@@ -32,6 +32,7 @@ import MonacoEditor from '../components/MonacoEditor';
 import ConfirmDialog, { type ConfirmResult } from '../components/ConfirmDialog';
 import ContextMenu, { type MenuItem } from '../components/ContextMenu';
 import { findFileReferences, type FileSearchResult } from '../services/searchService';
+import { BINARY_VIEWER_LANGS, type FileKind } from '../utils/fileType';
 import { revealInExplorer } from '../services/fileOperations';
 import { notifyPanelResizeStart, notifyPanelResizeEnd } from '../services/panelResizeNotifier';
 import { BCMTabManager } from '../utils/algorithms/neuralTabManager';
@@ -44,6 +45,7 @@ import './Home.css';
 // 不在首屏 bundle 中加载，减少首屏体积。
 const DiffEditorPanel = lazy(() => import('../components/DiffEditorPanel'));
 const CommitDetailPanel = lazy(() => import('../components/CommitDetailPanel'));
+const MediaViewer = lazy(() => import('../components/MediaViewer'));
 const ExtensionDetail = lazy(() => import('../components/ExtensionDetail'));
 const SshFileTreePanel = lazy(() => import('../components/SshFileTreePanel'));
 const TerminalEditorView = lazy(() => import('../components/TerminalEditorView'));
@@ -72,8 +74,6 @@ const formatTime = (timestamp: number, translate: (key: string, options?: Record
 
 /** 根据 openedFile 判断 Tab 类型，用于控制标签页是否显示只读锁图标 */
 function getTabType(file: { language: string; name: string }): TabType {
-  const ext = file.name.split('.').pop()?.toLowerCase() || '';
-  const imageExts = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'svg']);
   switch (file.language) {
     case 'ssh-file-tree':
       return 'structure';
@@ -81,8 +81,9 @@ function getTabType(file: { language: string; name: string }): TabType {
       return 'terminal';
     case 'extension':
       return 'extension';
+    case 'image':
+      return 'image';
     default:
-      if (imageExts.has(ext)) return 'image';
       return 'file';
   }
 }
@@ -838,6 +839,8 @@ function Home() {
                 />
               ) : file.language === 'commit-detail' && file.commitDetailData ? (
                 <CommitDetailPanel key={`commit-${file.id}-${group.id}`} data={file.commitDetailData} fileId={file.id} />
+              ) : BINARY_VIEWER_LANGS.has(file.language) ? (
+                <MediaViewer key={`media-${file.id}-${group.id}`} source={file.source} name={file.name} kind={file.language as Exclude<FileKind, 'text'>} />
               ) : file.isDiff && file.diffData ? (
                 <DiffEditorPanel key={`diff-${file.id}-${group.id}`} diffData={file.diffData} groupId={group.id} />
               ) : (

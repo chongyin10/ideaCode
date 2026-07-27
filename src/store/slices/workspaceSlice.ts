@@ -1,6 +1,7 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import type { FileEntry, FileSource } from '../../services/fileService';
 import { isSameSource, readFile, readDirectory, writeFile, isPath, isRemoteUri } from '../../services/fileService';
+import { BINARY_VIEWER_LANGS } from '../../utils/fileType';
 import { addRecentProject, getRecentProjects, removeRecentProject } from '../../services/fileHistory';
 import type { RecentProject } from '../../types/electron';
 export interface OpenedFile {
@@ -377,8 +378,24 @@ export const openFile = createAsyncThunk(
   async (entry: FileEntry & { readOnly?: boolean }) => {
     if (entry.kind !== 'file') return null;
     const { getLanguageFromPath } = await import('../../utils/languageFromPath');
+    const { getFileKind, sniffKindFromContent, isBinaryContent } = await import('../../utils/fileType');
     const sourceStr = typeof entry.source === 'string' ? entry.source : entry.name;
     const language = getLanguageFromPath(entry.name);
+
+    // §二进制媒体文件（pdf/图片/视频/音频）：不做 utf-8 文本读取（会产生乱码且撑爆内存），
+    // 以只读方式打开，内容由 MediaViewer 组件按 base64 加载并渲染。
+    const kind = getFileKind(entry.name);
+    if (kind !== 'text') {
+      return {
+        id: sourceStr,
+        name: entry.name,
+        source: entry.source,
+        content: '',
+        language: kind,
+        isDirty: false,
+        readOnly: true,
+      };
+    }
 
     // §未保存的临时文件（untitled://）不读取磁盘，直接以空内容打开
     if (sourceStr.startsWith('untitled://')) {
@@ -396,6 +413,20 @@ export const openFile = createAsyncThunk(
     const content = await readFile(entry.source);
     // 用完整路径作为唯一 id，避免不同目录下的同名文件（如 index.tsx）冲突
     const id = sourceStr;
+
+    // §扩展名不可信时的内容兜底（如网盘临时文件 xxx.png.baiduyun.uploading.cfg）：
+    // 1. 魔数嗅探出真实类型则按对应预览器打开；
+    // 2. 否则按二进制启发式判断，是二进制则以只读"无法预览"页呈现，避免 Monaco 乱码。
+    if (kind === 'text') {
+      const sniffed = sniffKindFromContent(content);
+      if (sniffed) {
+        return { id, name: entry.name, source: entry.source, content: '', language: sniffed, isDirty: false, readOnly: true };
+      }
+      if (isBinaryContent(content)) {
+        return { id, name: entry.name, source: entry.source, content: '', language: 'binary', isDirty: false, readOnly: true };
+      }
+    }
+
     return { id, name: entry.name, source: entry.source, content, language, isDirty: false, readOnly: entry.readOnly ?? false };
   }
 );
@@ -523,6 +554,7 @@ export const refreshOpenedFiles = createAsyncThunk(
     const updates: { id: string; content: string }[] = [];
     for (const file of state.openedFiles) {
       if (typeof file.source !== 'string' || isRemoteUri(file.source)) continue;
+      if (BINARY_VIEWER_LANGS.has(file.language)) continue;
       if (file.isDirty) continue;
       try {
         const stat = await fs.stat(file.source);
@@ -549,6 +581,7 @@ export const reloadFilesFromDisk = createAsyncThunk(
     const updates: { id: string; content: string }[] = [];
     for (const file of state.openedFiles) {
       if (typeof file.source !== 'string' || isRemoteUri(file.source)) continue;
+      if (BINARY_VIEWER_LANGS.has(file.language)) continue;
       if (!pathSet.has(file.source)) continue;
       try {
         const content = await readFile(file.source);

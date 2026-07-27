@@ -138,6 +138,21 @@ function registerFsHandlers() {
     return fs.readFile(filePath, 'utf-8');
   });
 
+  /* ── 读取二进制文件（base64）── */
+  // 用于 PDF 等二进制文件预览：渲染层拿到 base64 后构造 Blob URL，
+  // 交给 Chromium 内置 PDF 查看器渲染，避免 utf-8 读取产生乱码。
+  ipcMain.handle(Channels.FS_READ_FILE_BASE64, async (_event, filePath) => {
+    const stat = await fs.stat(filePath);
+    if (stat.isDirectory()) {
+      throw new Error(`EISDIR: 无法读取目录: ${filePath}`);
+    }
+    if (stat.size > MAX_READ_SIZE) {
+      throw new Error(`文件过大（${(stat.size / 1024 / 1024).toFixed(1)}MB），超过 ${MAX_READ_SIZE / 1024 / 1024}MB 读取上限`);
+    }
+    const buf = await fs.readFile(filePath);
+    return buf.toString('base64');
+  });
+
   /* ── 写入文件 ── */
   // §AI 创建新文件（如 agent 模式下 write_file）可能落在尚未存在的目录里，
   // 直接 fs.writeFile 会抛 ENOENT。这里先 mkdir -p 父目录（已存在时为 no-op），

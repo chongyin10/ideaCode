@@ -13,6 +13,7 @@ const Channels = {
   DIALOG_SAVE_FILE: 'dialog:saveFile',
   FS_READ_DIR: 'fs:readDir',
   FS_READ_FILE: 'fs:readFile',
+  FS_READ_FILE_BASE64: 'fs:readFileBase64',
   FS_WRITE_FILE: 'fs:writeFile',
   FS_STAT: 'fs:stat',
   FS_WATCH: 'fs:watch',
@@ -150,6 +151,7 @@ const electronAPI = {
   fs: {
     readDir: (dirPath) => ipcRenderer.invoke(Channels.FS_READ_DIR, dirPath),
     readFile: (filePath) => ipcRenderer.invoke(Channels.FS_READ_FILE, filePath),
+    readFileBase64: (filePath) => ipcRenderer.invoke(Channels.FS_READ_FILE_BASE64, filePath),
     writeFile: (filePath, content) =>
       ipcRenderer.invoke(Channels.FS_WRITE_FILE, filePath, content),
     stat: (filePath) => ipcRenderer.invoke(Channels.FS_STAT, filePath),

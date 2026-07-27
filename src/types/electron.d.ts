@@ -167,6 +167,7 @@ export interface ElectronAPI {
   fs: {
     readDir: (dirPath: string) => Promise<FsEntry[]>;
     readFile: (filePath: string) => Promise<string>;
+    readFileBase64: (filePath: string) => Promise<string>;
     writeFile: (filePath: string, content: string) => Promise<boolean>;
     stat: (filePath: string) => Promise<FsStat | null>;
     watch: (watchPath: string) => Promise<WatchResult>;

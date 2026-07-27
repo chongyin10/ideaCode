@@ -16,6 +16,7 @@ const Channels = {
   /* ─── 文件系统 (Node.js fs 运行时) ─── */
   FS_READ_DIR: 'fs:readDir',
   FS_READ_FILE: 'fs:readFile',
+  FS_READ_FILE_BASE64: 'fs:readFileBase64',
   FS_WRITE_FILE: 'fs:writeFile',
   FS_STAT: 'fs:stat',
   FS_WATCH: 'fs:watch',
