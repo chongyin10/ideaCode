@@ -1,0 +1,57 @@
+.workflow-style-config {
+  padding: 24px;
+  max-width: 480px;
+  height: 100%;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+.workflow-style-config__section {
+  margin-bottom: 20px;
+}
+
+.workflow-style-config__group {
+  font-size: 12px;
+  font-weight: 600;
+  color: #cccccc;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #3c3c3c;
+}
+
+.workflow-style-config__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 0;
+  font-size: 13px;
+  color: #cccccc;
+}
+
+.workflow-style-config__row input[type='color'] {
+  width: 48px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.workflow-style-config__row select,
+.workflow-style-config__row input[type='number'] {
+  width: 180px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: #cccccc;
+  background-color: #3c3c3c;
+  border: 1px solid #454545;
+  border-radius: 4px;
+  outline: none;
+}
+
+.workflow-style-config__row select:focus,
+.workflow-style-config__row input[type='number']:focus {
+  border-color: #007fd4;
+}

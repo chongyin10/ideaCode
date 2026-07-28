@@ -49,6 +49,8 @@ const MediaViewer = lazy(() => import('../components/MediaViewer'));
 const ExtensionDetail = lazy(() => import('../components/ExtensionDetail'));
 const SshFileTreePanel = lazy(() => import('../components/SshFileTreePanel'));
 const TerminalEditorView = lazy(() => import('../components/TerminalEditorView'));
+const WorkflowCanvas = lazy(() => import('../components/WorkflowCanvas'));
+const WorkflowStyleConfig = lazy(() => import('../components/WorkflowStyleConfig'));
 const ConnectToModal = lazy(() => import('../components/ConnectToModal'));
 const CloneRepoModal = lazy(() => import('../components/CloneRepoModal'));
 const QuickOpen = lazy(() => import('../components/QuickOpen'));
@@ -837,6 +839,10 @@ function Home() {
                   title={file.name}
                   active={focused && group.activeFileId === file.id}
                 />
+              ) : file.language === 'workflow' ? (
+                <WorkflowCanvas key={`workflow-${file.id}-${group.id}`} />
+              ) : file.language === 'workflow-style-config' ? (
+                <WorkflowStyleConfig key={`workflow-style-${file.id}-${group.id}`} />
               ) : file.language === 'commit-detail' && file.commitDetailData ? (
                 <CommitDetailPanel key={`commit-${file.id}-${group.id}`} data={file.commitDetailData} fileId={file.id} />
               ) : BINARY_VIEWER_LANGS.has(file.language) ? (

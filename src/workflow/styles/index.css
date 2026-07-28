@@ -1,0 +1,12 @@
+/* Global styles for the library */
+* {
+  box-sizing: border-box;
+}
+
+:root {
+  --primary-color: #0070f3;
+  --secondary-color: #f3f4f6;
+  --danger-color: #ef4444;
+  --text-color: #1f2937;
+  --border-color: #e5e7eb;
+}

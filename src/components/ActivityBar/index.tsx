@@ -1,5 +1,5 @@
 import { useState, useRef, useMemo } from 'react';
-import { Files, Search, GitBranch, Bug, Blocks, User, Settings, Terminal, Sparkles, Zap, Lightbulb, Wand, type LucideIcon } from 'lucide-react';
+import { Files, Search, GitBranch, Bug, Blocks, User, Settings, Terminal, Sparkles, Zap, Lightbulb, Wand, Workflow, type LucideIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import { switchPanel, moveDockableItem, reorderDockableItem, type DockLocation } from '../../store/slices/layoutSlice';
@@ -11,7 +11,7 @@ const DOCK_MIME = 'application/lifeai-dock-item';
 // 动态图标映射（扩展贡献的图标名 → lucide-react 组件）
 const iconMap: Record<string, LucideIcon> = {
   Files, Search, GitBranch, Bug, Blocks, User, Settings, Terminal,
-  Sparkles, Zap, Lightbulb, Wand,
+  Sparkles, Zap, Lightbulb, Wand, Workflow,
 };
 
 function getLucideIcon(name: string): LucideIcon | null {

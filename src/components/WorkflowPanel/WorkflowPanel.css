@@ -1,0 +1,32 @@
+.workflow-palette {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  height: 100%;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+.workflow-palette__item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 48px;
+  background-color: #2d2d30;
+  border: 1px solid;
+  border-radius: 6px;
+  color: #e8e8e8;
+  font-size: 13px;
+  cursor: grab;
+  user-select: none;
+  transition: background-color 0.15s ease;
+}
+
+.workflow-palette__item:hover {
+  background-color: #37373d;
+}
+
+.workflow-palette__item:active {
+  cursor: grabbing;
+}

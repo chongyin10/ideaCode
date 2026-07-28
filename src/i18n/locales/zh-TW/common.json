@@ -158,8 +158,12 @@
     "sourceControl": "原始碼管理",
     "runAndDebug": "執行和偵錯",
     "extensions": "擴充功能",
+    "workflow": "工作流程",
     "account": "帳戶",
     "settings": "設定"
+  },
+  "workflow": {
+    "styleConfig": "樣式設定"
   },
   "topBar": {
     "searchFilesTooltip": "搜尋檔案 (Ctrl+P)",

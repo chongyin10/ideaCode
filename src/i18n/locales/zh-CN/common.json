@@ -158,8 +158,12 @@
     "sourceControl": "源代码管理",
     "runAndDebug": "运行和调试",
     "extensions": "扩展",
+    "workflow": "工作流",
     "account": "账户",
     "settings": "设置"
+  },
+  "workflow": {
+    "styleConfig": "样式配置"
   },
   "topBar": {
     "searchFilesTooltip": "搜索文件 (Ctrl+P)",

@@ -206,7 +206,8 @@ function activeGroup(state: WorkspaceState): EditorGroup {
 
 function insertOpenedFile(state: WorkspaceState, file: OpenedFile) {
   if (!state.openedFiles.find((f) => f.id === file.id)) {
-    state.openedFiles.push({ ...file, isPreview: true });
+    // 尊重调用方显式指定的 isPreview（如工作流画布 tab 默认固定），未指定则为预览态
+    state.openedFiles.push({ ...file, isPreview: file.isPreview ?? true });
   }
   const group = activeGroup(state);
 
@@ -1144,7 +1145,13 @@ const workspaceSlice = createSlice({
       const payload = action.payload;
       const id = typeof payload === 'string' ? payload : (payload as { id: string }).id;
       const file = state.openedFiles.find((f) => f.id === id);
-      if (file) file.readOnly = !file.readOnly;
+      if (file) {
+        file.readOnly = !file.readOnly;
+        // §工作流画布 tab：锁定 = 固定（不被其他 tab 替换），解锁 = 恢复预览态走正常替换逻辑
+        if (file.language === 'workflow') {
+          file.isPreview = !file.readOnly;
+        }
+      }
     },
     toggleAiEditMode: (state) => {
       state.aiEditMode = !state.aiEditMode;

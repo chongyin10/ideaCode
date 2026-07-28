@@ -158,8 +158,12 @@
     "sourceControl": "Source Control",
     "runAndDebug": "Run and Debug",
     "extensions": "Extensions",
+    "workflow": "Workflow",
     "account": "Account",
     "settings": "Settings"
+  },
+  "workflow": {
+    "styleConfig": "Style Config"
   },
   "topBar": {
     "searchFilesTooltip": "Search files (Ctrl+P)",

@@ -9,7 +9,7 @@ export interface DockableItem {
   title: string;
   icon: string;
   location: DockLocation;
-  type: 'explorer' | 'search' | 'debug' | 'extensions' | 'terminal' | 'output' | 'problems' | 'debug-console' | 'ports' | 'viewContainer' | 'custom';
+  type: 'explorer' | 'search' | 'debug' | 'extensions' | 'terminal' | 'output' | 'problems' | 'debug-console' | 'ports' | 'viewContainer' | 'workflow' | 'custom';
   sourceContainerId?: string;
   sourceViewId?: string;
   badge?: number;
@@ -42,7 +42,7 @@ function persistSidePanelVisible(visible: boolean) {
 }
 
 /** ActivityBar 面板默认顺序 */
-export const DEFAULT_PANEL_ORDER: PanelId[] = ['explorer', 'search', 'debug', 'extensions'];
+export const DEFAULT_PANEL_ORDER: PanelId[] = ['explorer', 'search', 'debug', 'extensions', 'workflow'];
 
 /** 底部面板 tab 默认顺序 */
 export const DEFAULT_BOTTOM_TAB_ORDER: BottomTabId[] = ['problems', 'output', 'debug-console', 'terminal', 'ports'];
@@ -54,6 +54,8 @@ const DEFAULT_DOCKABLE_ITEMS: DockableItem[] = [
   // Source Control 由 web/git 扩展提供（contributes.viewsContainers.activitybar）
   { id: 'debug', title: 'activityBar.runAndDebug', icon: '$(bug)', location: 'left', type: 'debug' },
   { id: 'extensions', title: 'activityBar.extensions', icon: '$(blocks)', location: 'left', type: 'extensions' },
+  // 工作流画布：内置功能（src/workflow 画布引擎），非扩展贡献
+  { id: 'workflow', title: 'activityBar.workflow', icon: '$(workflow)', location: 'left', type: 'workflow' },
 
   { id: 'right-kimi-code', title: 'KIMI CODE', icon: '$(sparkles)', location: 'right', type: 'custom' },
 
