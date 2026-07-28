@@ -41,6 +41,39 @@
   outline: none;
 }
 
+.media-viewer__doc-scroll {
+  flex: 1;
+  overflow: auto;
+  padding: 24px;
+}
+
+/* mammoth 输出的 docx HTML：浅色纸张背景保证可读性 */
+.media-viewer__doc {
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 32px 40px;
+  background: #fff;
+  color: #222;
+  font-size: 14px;
+  line-height: 1.7;
+  border-radius: 4px;
+}
+
+.media-viewer__doc img {
+  max-width: 100%;
+}
+
+.media-viewer__doc table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.media-viewer__doc td,
+.media-viewer__doc th {
+  border: 1px solid #ccc;
+  padding: 4px 8px;
+}
+
 .media-viewer--message {
   align-items: center;
   justify-content: center;

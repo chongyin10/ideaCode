@@ -1,6 +1,6 @@
 ---
 name: file-preview
-description: IDEACODE 编辑器二进制/媒体文件预览架构说明与新增文件类型预览的标准流程（pdf、图片、视频、音频、二进制兜底）
+description: IDEACODE 编辑器二进制/媒体文件预览架构说明与新增文件类型预览的标准流程（pdf、图片、视频、音频、word/docx、二进制兜底）
 type: prompt
 whenToUse: 当用户要求支持某种新文件后缀的打开/预览，或反馈某个文件打开后是乱码、二进制内容被当文本显示时
 ---
@@ -21,7 +21,7 @@ whenToUse: 当用户要求支持某种新文件后缀的打开/预览，或反�
    - `isBinaryContent(content)`：前 8KB NUL 一票否决 + 控制字符比例 >10% 判定二进制。
    - `BINARY_VIEWER_LANGS`：不走 Monaco 的 language 集合。
 2. **`src/store/slices/workspaceSlice.ts` `openFile`**：分类入口。kind 非 text → 只读打开不读内容；text → 读文本后先魔数嗅探、再二进制启发式，命中则改以对应预览类型只读打开。`refreshOpenedFiles` / `reloadFilesFromDisk` 用 `BINARY_VIEWER_LANGS.has(file.language)` 跳过二进制文件。
-3. **`src/components/MediaViewer/`**：统一预览组件。pdf → iframe + Chromium 内置 PDFium；image → `<img>`；video/audio → 原生 `<video>/<audio controls>`；binary → 兜底提示页（不读内容）。内容经 `readFileBase64` → Blob URL 加载，卸载时 `revokeObjectURL`。
+3. **`src/components/MediaViewer/`**：统一预览组件。pdf → iframe + Chromium 内置 PDFium；image → `<img>`；video/audio → 原生 `<video>/<audio controls>`；word（仅 .docx）→ `mammoth.convertToHtml({ arrayBuffer })` 转 HTML 渲染（浅色纸张容器，旧版 .doc 无可靠 JS 方案，走 binary 兜底）；binary → 兜底提示页（不读内容）。内容经 `readFileBase64` 加载，Blob URL 卸载时 `revokeObjectURL`。mammoth 是既有依赖（扩展宿主 docExtractor 也用它），浏览器端直接用 `import { convertToHtml } from 'mammoth'`。
 4. **`src/services/fileService.ts` `readFileBase64`**：本地走 IPC `fs:readFileBase64`（主进程 `electron/main/ipcHandlers/fsHandler.cjs`，含 128MB 上限与 EISDIR 保护）；浏览器 FileSystemHandle 走 arrayBuffer 分块转 base64；远程（SSH）URI 抛错提示不支持。
 5. **`src/pages/Home.tsx`**：`BINARY_VIEWER_LANGS.has(file.language)` 分支懒加载渲染 `MediaViewer`；`getTabType` 控制 tab 锁图标。
 6. **`electron/main/windowManager.cjs`**：`webPreferences.plugins: true` 是 iframe 渲染 PDF 的前提，勿删。
@@ -29,8 +29,8 @@ whenToUse: 当用户要求支持某种新文件后缀的打开/预览，或反�
 ## 新增一种预览类型的标准流程
 
 1. 在 `fileType.ts` 加扩展名映射（新 kind 则扩展 `FileKind` 与 `BINARY_VIEWER_LANGS`）。
-2. 若魔数可靠，在 `sniffKindFromContent` 加一条 ASCII 魔数匹配。
-3. 在 `MediaViewer` 加对应渲染分支（需要新读法时先扩展 `readFileBase64` / 主进程 IPC）。
+2. 若魔数可靠，在 `sniffKindFromContent` 加一条 ASCII 魔数匹配（zip 系格式 docx/xlsx 魔数同为 'PK'，无法区分，不要嗅探）。
+3. 在 `MediaViewer` 加对应渲染分支（需要新读法时先扩展 `readFileBase64` / 主进程 IPC）。优先复用已有依赖（如 mammoth），新增 npm 依赖前先确认项目里没有同等能力。
 4. `npx tsc -b` + `npx vite build` 验证（仓库有存量 tsc 报错，只确认改动文件无新错）。
 
 ## 注意事项

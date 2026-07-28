@@ -9,7 +9,7 @@
  */
 
 /** 可预览/识别的文件大类 */
-export type FileKind = 'pdf' | 'image' | 'video' | 'audio' | 'binary' | 'text';
+export type FileKind = 'pdf' | 'image' | 'video' | 'audio' | 'word' | 'binary' | 'text';
 
 /** 图片扩展名 → MIME（svg 除外：svg 是文本，保留在 Monaco 中编辑） */
 const IMAGE_MIME_MAP: Record<string, string> = {
@@ -43,8 +43,13 @@ const AUDIO_MIME_MAP: Record<string, string> = {
   aac: 'audio/aac',
 };
 
+/** Word 文档扩展名 → MIME（仅 docx：zip+XML 可用 mammoth 解析；旧版 .doc 二进制无可靠 JS 方案） */
+const WORD_MIME_MAP: Record<string, string> = {
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+};
+
 /** 不走 Monaco 的 language 集合（workspaceSlice 刷新/重载逻辑据此跳过） */
-export const BINARY_VIEWER_LANGS: ReadonlySet<string> = new Set(['pdf', 'image', 'video', 'audio', 'binary']);
+export const BINARY_VIEWER_LANGS: ReadonlySet<string> = new Set(['pdf', 'image', 'video', 'audio', 'word', 'binary']);
 
 function getExt(name: string): string {
   const dotIdx = name.lastIndexOf('.');
@@ -60,6 +65,7 @@ export function getFileKind(name: string): FileKind {
   if (ext in IMAGE_MIME_MAP) return 'image';
   if (ext in VIDEO_MIME_MAP) return 'video';
   if (ext in AUDIO_MIME_MAP) return 'audio';
+  if (ext in WORD_MIME_MAP) return 'word';
   return 'text';
 }
 
@@ -75,6 +81,8 @@ export function getPreviewMime(name: string, kind: FileKind): string {
       return VIDEO_MIME_MAP[ext] || 'video/mp4';
     case 'audio':
       return AUDIO_MIME_MAP[ext] || 'audio/mpeg';
+    case 'word':
+      return WORD_MIME_MAP[ext] || WORD_MIME_MAP.docx;
     default:
       return 'application/octet-stream';
   }

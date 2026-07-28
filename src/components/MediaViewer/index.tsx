@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { FileWarning, FileQuestion } from 'lucide-react';
+import { convertToHtml } from 'mammoth';
 import type { FileSource } from '../../services/fileService';
 import { readFileBase64 } from '../../services/fileService';
 import { getPreviewMime, type FileKind } from '../../utils/fileType';
@@ -9,17 +10,17 @@ interface MediaViewerProps {
   /** 文件源：本地路径 / FileSystemHandle */
   source: FileSource;
   name: string;
-  /** 预览类型：pdf / image / video / audio；binary 表示无法预览的二进制 */
+  /** 预览类型：pdf / image / video / audio / word；binary 表示无法预览的二进制 */
   kind: Exclude<FileKind, 'text'>;
 }
 
-function base64ToBlob(base64: string, mimeType: string): Blob {
+function base64ToBytes(base64: string): Uint8Array {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) {
     bytes[i] = binary.charCodeAt(i);
   }
-  return new Blob([bytes], { type: mimeType });
+  return bytes;
 }
 
 const KIND_LABEL: Record<string, string> = {
@@ -27,6 +28,7 @@ const KIND_LABEL: Record<string, string> = {
   image: '图片',
   video: '视频',
   audio: '音频',
+  word: 'Word',
   binary: '二进制',
 };
 
@@ -36,10 +38,12 @@ const KIND_LABEL: Record<string, string> = {
  * - image → Blob URL + <img>
  * - video → Blob URL + <video controls>
  * - audio → Blob URL + <audio controls>
+ * - word  → mammoth 解析 docx 为 HTML 渲染（仅 .docx；旧版 .doc 走 binary 兜底）
  * - binary → 不可预览的兜底提示页（不读取内容）
  */
 export default function MediaViewer({ source, name, kind }: MediaViewerProps) {
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [wordHtml, setWordHtml] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -48,9 +52,18 @@ export default function MediaViewer({ source, name, kind }: MediaViewerProps) {
     let url: string | null = null;
 
     readFileBase64(source)
-      .then((base64) => {
+      .then(async (base64) => {
         if (cancelled) return;
-        url = URL.createObjectURL(base64ToBlob(base64, getPreviewMime(name, kind)));
+        if (kind === 'word') {
+          // mammoth 把 docx 转成 HTML（内嵌图片转为 data URL），直接渲染
+          const bytes = base64ToBytes(base64);
+          const result = await convertToHtml({ arrayBuffer: bytes.buffer as ArrayBuffer });
+          if (cancelled) return;
+          setWordHtml(result.value);
+          setError(null);
+          return;
+        }
+        url = URL.createObjectURL(new Blob([base64ToBytes(base64).buffer as ArrayBuffer], { type: getPreviewMime(name, kind) }));
         setBlobUrl(url);
         setError(null);
       })
@@ -81,6 +94,24 @@ export default function MediaViewer({ source, name, kind }: MediaViewerProps) {
         <FileWarning size={32} strokeWidth={1.5} />
         <p>无法预览 {name}</p>
         <p className="media-viewer__detail">{error}</p>
+      </div>
+    );
+  }
+
+  if (kind === 'word') {
+    if (wordHtml === null) {
+      return (
+        <div className="media-viewer media-viewer--message">
+          <p>加载中…</p>
+        </div>
+      );
+    }
+    return (
+      <div className="media-viewer">
+        <div className="media-viewer__doc-scroll">
+          {/* mammoth 输出为可信的文档结构 HTML（无脚本），直接注入渲染 */}
+          <div className="media-viewer__doc" dangerouslySetInnerHTML={{ __html: wordHtml }} />
+        </div>
       </div>
     );
   }
