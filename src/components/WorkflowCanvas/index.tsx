@@ -13,6 +13,7 @@ import {
 } from '../../workflow';
 import { setWorkflowRuntime, getWorkflowInstance, setWorkflowInstance, type WorkflowInstance } from '../../services/workflowRuntime';
 import WorkflowPanel from '../WorkflowPanel';
+import WorkflowToolbar from '../WorkflowToolbar';
 import {
   getEffectiveConfig,
   subscribeEffectiveConfig,
@@ -198,6 +199,7 @@ const WorkflowCanvas = ({ tabId }: { tabId: string }) => {
   return (
     <div ref={containerRef} className="workflow-canvas">
       <WorkflowPanel />
+      <WorkflowToolbar tabId={tabId} />
     </div>
   );
 };

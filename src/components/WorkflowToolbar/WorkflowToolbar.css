@@ -1,0 +1,201 @@
+/* 工作流画布顶部工具条：下拉箭头 + 展开的横向工具面板 */
+.workflow-toolbar {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  z-index: 30;
+}
+
+/* 顶部居中的下拉箭头按钮 */
+.workflow-toolbar__toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  background: #252526;
+  color: #cccccc;
+  cursor: pointer;
+}
+
+.workflow-toolbar__toggle:hover {
+  background: #37373d;
+}
+
+.workflow-toolbar__toggle svg {
+  transition: transform 0.18s ease;
+}
+
+.workflow-toolbar__toggle.open svg {
+  transform: rotate(180deg);
+}
+
+/* 展开的横向工具面板（淡入 + 下滑展开动画） */
+.workflow-toolbar__panel {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 4px 6px;
+  border: 1px solid #3c3c3c;
+  border-radius: 6px;
+  background: #252526;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  opacity: 0;
+  transform: translateY(-6px) scaleY(0.9);
+  transform-origin: top center;
+  pointer-events: none;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.workflow-toolbar__panel.open {
+  opacity: 1;
+  transform: translateY(0) scaleY(1);
+  pointer-events: auto;
+}
+
+.workflow-toolbar__action {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #cccccc;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.workflow-toolbar__action:hover {
+  background: #37373d;
+}
+
+/* 保存到资源管理器：命名对话框 */
+.workflow-save-dialog__overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 15vh;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.workflow-save-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 320px;
+  padding: 14px;
+  border: 1px solid #3c3c3c;
+  border-radius: 6px;
+  background: #252526;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  animation: workflow-save-dialog-in 0.16s ease;
+}
+
+@keyframes workflow-save-dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.workflow-save-dialog__title {
+  font-size: 13px;
+  color: #cccccc;
+}
+
+.workflow-save-dialog__input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 8px;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  background: #1e1e1e;
+  color: #cccccc;
+  font-size: 12px;
+  outline: none;
+}
+
+.workflow-save-dialog__input:focus {
+  border-color: #007fd4;
+}
+
+.workflow-save-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.workflow-save-dialog__btn {
+  padding: 4px 12px;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  background: transparent;
+  color: #cccccc;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.workflow-save-dialog__btn:hover {
+  background: #37373d;
+}
+
+.workflow-save-dialog__btn--primary {
+  border-color: #007fd4;
+  background: #007fd4;
+  color: #ffffff;
+}
+
+.workflow-save-dialog__btn--primary:hover {
+  background: #1a8fe0;
+}
+
+.workflow-save-dialog__btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 操作成功轻量提示（自动消失） */
+.workflow-toolbar__toast {
+  position: fixed;
+  top: 48px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 90;
+  padding: 5px 14px;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  background: #252526;
+  color: #cccccc;
+  font-size: 12px;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  animation: workflow-toast-in 0.18s ease;
+}
+
+@keyframes workflow-toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -6px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}

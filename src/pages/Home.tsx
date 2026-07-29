@@ -719,6 +719,8 @@ function Home() {
     const group = editorGroups[groupIndex];
     const fileIds = group?.fileIds ?? [];
     const index = fileIds.indexOf(fileId);
+    // 工作流 tab 不显示路径/引用相关的菜单项
+    const isWorkflow = openedFileMap.get(fileId)?.language === 'workflow';
 
     return [
       {
@@ -767,32 +769,36 @@ function Home() {
           closeTargetsWithConfirm(targets);
         },
       },
-      {
-        id: 'copyPath',
-        label: t('tabBar.contextMenu.copyPath'),
-        group: '2_path',
-        onClick: () => handleCopyPath(fileId),
-      },
-      {
-        id: 'copyRelativePath',
-        label: t('tabBar.contextMenu.copyRelativePath'),
-        group: '2_path',
-        onClick: () => handleCopyRelativePath(fileId),
-      },
-      {
-        id: 'reveal',
-        label: t('tabBar.contextMenu.reveal'),
-        group: '3_reveal',
-        onClick: () => handleRevealFile(fileId),
-      },
-      {
-        id: 'findReferences',
-        label: t('tabBar.contextMenu.findReferences'),
-        group: '4_refs',
-        onClick: () => handleFindReferences(fileId),
-      },
+      ...(isWorkflow
+        ? []
+        : [
+            {
+              id: 'copyPath',
+              label: t('tabBar.contextMenu.copyPath'),
+              group: '2_path',
+              onClick: () => handleCopyPath(fileId),
+            },
+            {
+              id: 'copyRelativePath',
+              label: t('tabBar.contextMenu.copyRelativePath'),
+              group: '2_path',
+              onClick: () => handleCopyRelativePath(fileId),
+            },
+            {
+              id: 'reveal',
+              label: t('tabBar.contextMenu.reveal'),
+              group: '3_reveal',
+              onClick: () => handleRevealFile(fileId),
+            },
+            {
+              id: 'findReferences',
+              label: t('tabBar.contextMenu.findReferences'),
+              group: '4_refs',
+              onClick: () => handleFindReferences(fileId),
+            },
+          ]),
     ];
-  }, [contextMenu, editorGroups, t, handleCloseTab, closeTargetsWithConfirm, handleCopyPath, handleCopyRelativePath, handleRevealFile, handleFindReferences]);
+  }, [contextMenu, editorGroups, openedFileMap, t, handleCloseTab, closeTargetsWithConfirm, handleCopyPath, handleCopyRelativePath, handleRevealFile, handleFindReferences]);
 
   /* ─── 编辑器快照 ─── */
 

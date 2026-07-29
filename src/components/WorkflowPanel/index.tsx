@@ -96,47 +96,44 @@ const WorkflowPanel = () => {
     );
   };
 
-  // 折叠态：只留一个展开按钮，最大限度把画布空间让出来
-  if (collapsed) {
-    return (
+  // 折叠/展开都做 CSS 过渡：面板与展开按钮常驻，用 class 切换
+  return (
+    <>
+      <div className={`workflow-palette ${collapsed ? 'workflow-palette--collapsed' : ''}`}>
+        <div className="workflow-palette__header">
+          <span className="workflow-palette__title">{t('activityBar.workflow')}</span>
+          <button
+            type="button"
+            className="workflow-palette__header-action"
+            title={t('workflow.styleConfig')}
+            onClick={handleOpenStyleConfig}
+          >
+            <Settings size={13} strokeWidth={1.5} />
+          </button>
+          <button
+            type="button"
+            className="workflow-palette__header-action"
+            title={t('activityBar.workflow')}
+            onClick={() => setCollapsed(true)}
+          >
+            <PanelLeftClose size={13} strokeWidth={1.5} />
+          </button>
+        </div>
+        <div className="workflow-palette__list">
+          {PALETTE_NODES.map((node) => (
+            <PaletteItem key={node.key} node={node} />
+          ))}
+        </div>
+      </div>
       <button
         type="button"
-        className="workflow-palette__expand"
+        className={`workflow-palette__expand ${collapsed ? 'workflow-palette__expand--visible' : ''}`}
         title={t('activityBar.workflow')}
         onClick={() => setCollapsed(false)}
       >
         <PanelLeftOpen size={14} strokeWidth={1.5} />
       </button>
-    );
-  }
-
-  return (
-    <div className="workflow-palette">
-      <div className="workflow-palette__header">
-        <span className="workflow-palette__title">{t('activityBar.workflow')}</span>
-        <button
-          type="button"
-          className="workflow-palette__header-action"
-          title={t('workflow.styleConfig')}
-          onClick={handleOpenStyleConfig}
-        >
-          <Settings size={13} strokeWidth={1.5} />
-        </button>
-        <button
-          type="button"
-          className="workflow-palette__header-action"
-          title={t('activityBar.workflow')}
-          onClick={() => setCollapsed(true)}
-        >
-          <PanelLeftClose size={13} strokeWidth={1.5} />
-        </button>
-      </div>
-      <div className="workflow-palette__list">
-        {PALETTE_NODES.map((node) => (
-          <PaletteItem key={node.key} node={node} />
-        ))}
-      </div>
-    </div>
+    </>
   );
 };
 

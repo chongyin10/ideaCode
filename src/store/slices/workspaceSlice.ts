@@ -356,7 +356,7 @@ function removeEmptyGroups(state: WorkspaceState): void {
 
 export const loadDirectory = createAsyncThunk(
   'workspace/loadDirectory',
-  async ({ source, name }: { source: FileSource; name: string }, { dispatch }) => {
+  async ({ source, name, preserveSession }: { source: FileSource; name: string; preserveSession?: boolean }, { dispatch }) => {
     const entries = await readDirectory(source);
     if (isPath(source) && !isRemoteUri(source)) {
       try { await addRecentProject(source, name); } catch { /* 忽略 */ }
@@ -370,7 +370,7 @@ export const loadDirectory = createAsyncThunk(
     if (isPath(source)) {
       dispatch(refreshAllFilePaths(source));
     }
-    return { source, name, entries };
+    return { source, name, entries, preserveSession: preserveSession === true };
   }
 );
 
@@ -1173,16 +1173,46 @@ const workspaceSlice = createSlice({
             ? 'ssh'
             : 'local';
         state.entries = action.payload.entries;
-        // 打开新文件夹/工程时，重置所有编辑会话状态
-        state.openedFiles = [];
-        state.activeFileId = null;
-        state.activeFileSource = null;
-        state.editorGroups = [{ id: 'g0', fileIds: [], activeFileId: null, tabHistory: [], ratio: 1 }];
-        state.activeGroupIndex = 0;
-        state.editorSnapshots = {};
+        // §preserveSession（如工作流"保存到资源管理器"首次加载所在目录）：
+        // 只切换工作区根，不重置编辑会话，避免 tab 全部关闭再重开造成的整屏抖动。
+        if (action.payload.preserveSession) return;
+        // 打开新文件夹/工程时，重置编辑会话状态；
+        // 但工作流等虚拟 tab 与具体项目无关（画布实例在 workflowRuntime 注册表中），切换文件夹时保留
+        const keepIds = new Set(
+          state.openedFiles
+            .filter((f) => f.language === 'workflow' || f.language === 'workflow-style-config')
+            .map((f) => f.id)
+        );
+        state.openedFiles = state.openedFiles.filter((f) => keepIds.has(f.id));
+        // 各组只保留存活 tab，并修正组内激活 tab
+        for (const g of state.editorGroups) {
+          g.fileIds = g.fileIds.filter((id) => keepIds.has(id));
+          g.tabHistory = g.tabHistory.filter((id) => keepIds.has(id));
+          if (g.activeFileId && !keepIds.has(g.activeFileId)) {
+            g.activeFileId = g.tabHistory[g.tabHistory.length - 1] ?? g.fileIds[0] ?? null;
+          }
+        }
+        // 回收空组，至少保留一个组
+        state.editorGroups = state.editorGroups.filter((g) => g.fileIds.length > 0);
+        if (state.editorGroups.length === 0) {
+          state.editorGroups = [{ id: 'g0', fileIds: [], activeFileId: null, tabHistory: [], ratio: 1 }];
+          state.activeGroupIndex = 0;
+          state.splitPhase = 'closed';
+        } else {
+          if (state.activeGroupIndex >= state.editorGroups.length) state.activeGroupIndex = 0;
+          if (state.editorGroups.length === 1) {
+            state.editorGroups[0].ratio = 1;
+            state.splitPhase = 'closed';
+          } else {
+            state.splitPhase = 'open';
+          }
+        }
+        // 清理已关闭 tab 的编辑器快照（key 为 `${fileId}::${groupIndex}`）
+        state.editorSnapshots = Object.fromEntries(
+          Object.entries(state.editorSnapshots).filter(([key]) => keepIds.has(key.split('::')[0]))
+        );
         state.mirrorContent = {};
-        state.splitPhase = 'closed';
-        state.nextGroupId = 1;
+        // nextGroupId 单调递增不重置，避免与保留的组 id 冲突
         state.diffView = null;
         state.settingsVisible = false;
         state.missingFileIds = [];
@@ -1193,6 +1223,8 @@ const workspaceSlice = createSlice({
         state.pendingSearchQuery = null;
         state.gitStatus = {};
         state.gitBranch = null;
+        // 根据保留后的焦点组同步全局激活文件镜像
+        syncGlobalActive(state);
       })
       .addCase(openFile.fulfilled, (state, action) => {
         if (!action.payload) return;

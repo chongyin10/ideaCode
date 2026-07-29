@@ -21,6 +21,8 @@ export interface WorkflowRuntime {
 
 /** 全部画布实例：scope（= tab id）→ 实例 */
 const instances = new Map<string, WorkflowInstance>();
+/** 画布已保存到的文件路径：scope → 完整路径（保存成功后记录，再次保存时直接覆盖） */
+const savedFilePaths = new Map<string, string>();
 /** 当前挂载中的画布运行时（物料面板据此注册拖拽源） */
 let runtime: WorkflowRuntime | null = null;
 /** 最近活跃的画布 scope：样式配置 tab 据此确定编辑目标；画布卸载后仍保留 */
@@ -57,6 +59,16 @@ export function setWorkflowInstance(scope: string, instance: WorkflowInstance): 
   instances.set(scope, instance);
 }
 
+/** 画布已保存到的文件路径（无记录返回 undefined） */
+export function getWorkflowSavedFilePath(scope: string): string | undefined {
+  return savedFilePaths.get(scope);
+}
+
+/** 记录画布保存到的文件路径，再次保存时直接覆盖该文件 */
+export function setWorkflowSavedFilePath(scope: string, filePath: string): void {
+  savedFilePaths.set(scope, filePath);
+}
+
 /** 销毁某个工作流画布实例（tab 关闭时调用，释放 Graph 与宿主 DOM） */
 export function destroyWorkflowInstance(scope: string): void {
   const instance = instances.get(scope);
@@ -67,6 +79,7 @@ export function destroyWorkflowInstance(scope: string): void {
   instance.graph.destroy();
   instance.host.remove();
   instances.delete(scope);
+  savedFilePaths.delete(scope);
   if (runtime?.scope === scope) {
     setWorkflowRuntime(null);
   }

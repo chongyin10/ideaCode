@@ -164,7 +164,17 @@
   },
   "workflow": {
     "styleConfig": "样式配置",
-    "newCanvas": "新建工作流"
+    "newCanvas": "新建工作流",
+    "toolbar": "工作流工具",
+    "saveToExplorer": "保存到资源管理器",
+    "exportJson": "导出",
+    "importJson": "导入",
+    "saveFailed": "保存失败",
+    "importInvalid": "导入失败：文件格式不正确",
+    "saveNamePlaceholder": "请输入文件名称",
+    "savedTo": "已保存：{{name}}",
+    "exportedTo": "已导出：{{name}}",
+    "imported": "导入完成"
   },
   "topBar": {
     "searchFilesTooltip": "搜索文件 (Ctrl+P)",

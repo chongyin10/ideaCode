@@ -164,7 +164,17 @@
   },
   "workflow": {
     "styleConfig": "Style Config",
-    "newCanvas": "New Workflow"
+    "newCanvas": "New Workflow",
+    "toolbar": "Workflow Tools",
+    "saveToExplorer": "Save to Explorer",
+    "exportJson": "Export",
+    "importJson": "Import",
+    "saveFailed": "Save failed",
+    "importInvalid": "Import failed: invalid file format",
+    "saveNamePlaceholder": "Enter file name",
+    "savedTo": "Saved: {{name}}",
+    "exportedTo": "Exported: {{name}}",
+    "imported": "Import completed"
   },
   "topBar": {
     "searchFilesTooltip": "Search files (Ctrl+P)",

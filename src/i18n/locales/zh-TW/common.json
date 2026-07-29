@@ -164,7 +164,17 @@
   },
   "workflow": {
     "styleConfig": "樣式設定",
-    "newCanvas": "新增工作流程"
+    "newCanvas": "新增工作流程",
+    "toolbar": "工作流程工具",
+    "saveToExplorer": "儲存到總管",
+    "exportJson": "匯出",
+    "importJson": "匯入",
+    "saveFailed": "儲存失敗",
+    "importInvalid": "匯入失敗：檔案格式不正確",
+    "saveNamePlaceholder": "請輸入檔案名稱",
+    "savedTo": "已儲存：{{name}}",
+    "exportedTo": "已匯出：{{name}}",
+    "imported": "匯入完成"
   },
   "topBar": {
     "searchFilesTooltip": "搜尋檔案 (Ctrl+P)",
