@@ -1,11 +1,65 @@
+/* 画布内嵌浮动物料面板：与画布四边保持间隙，可折叠 */
 .workflow-palette {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  bottom: 12px;
+  width: 180px;
+  display: flex;
+  flex-direction: column;
+  background-color: #252526;
+  border: 1px solid #3c3c3c;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  z-index: 10;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.workflow-palette__header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 10px;
+  border-bottom: 1px solid #3c3c3c;
+  flex-shrink: 0;
+}
+
+.workflow-palette__title {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 600;
+  color: #cccccc;
+  letter-spacing: 0.5px;
+  user-select: none;
+}
+
+.workflow-palette__header-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: #9d9d9d;
+  cursor: pointer;
+}
+
+.workflow-palette__header-action:hover {
+  background-color: #37373d;
+  color: #e8e8e8;
+}
+
+.workflow-palette__list {
   display: flex;
   flex-direction: column;
   gap: 10px;
   padding: 12px;
-  height: 100%;
   overflow-y: auto;
-  box-sizing: border-box;
+  flex: 1;
 }
 
 .workflow-palette__item {
@@ -13,6 +67,7 @@
   align-items: center;
   justify-content: center;
   height: 48px;
+  flex-shrink: 0;
   background-color: #2d2d30;
   border: 1px solid;
   border-radius: 6px;
@@ -29,4 +84,29 @@
 
 .workflow-palette__item:active {
   cursor: grabbing;
+}
+
+/* 折叠态的展开按钮：同样浮动在画布左上角 */
+.workflow-palette__expand {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  background-color: #252526;
+  border: 1px solid #3c3c3c;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  color: #9d9d9d;
+  cursor: pointer;
+  z-index: 10;
+}
+
+.workflow-palette__expand:hover {
+  background-color: #37373d;
+  color: #e8e8e8;
 }

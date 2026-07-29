@@ -528,7 +528,7 @@ export class Snapline implements Plugin {
         
         if (this.snaplines.length === 0) return;
         
-        const { offset, scale } = this.graph['state'];
+        const { offset, scale } = this.graph.getTransform();
         
         // 设置绘制样式
         this.ctx.strokeStyle = this.options.lineColor;

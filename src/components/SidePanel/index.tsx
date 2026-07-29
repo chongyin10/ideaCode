@@ -1,13 +1,11 @@
 import { useRef, useState, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Settings } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import {
   setSidePanelWidth,
   setSidePanelVisible,
   MIN_SIDEBAR_WIDTH,
 } from '../../store/slices/layoutSlice';
-import { openVirtualFile } from '../../store/slices/workspaceSlice';
 import WebViewPanel from '../WebViewPanel';
 import { DockableContent } from '../DockableContent';
 import './SidePanel.css';
@@ -88,20 +86,6 @@ const SidePanel = () => {
   const activeWebViewPanel = webviewPanels.find((p) => p.id === activePanel);
   const isExtensionView = activeItem?.type === 'viewContainer';
 
-  // 工作流面板：header 齿轮 → 在编辑区打开「样式配置」tab
-  const handleOpenWorkflowStyleConfig = useCallback(() => {
-    dispatch(
-      openVirtualFile({
-        id: 'workflow-style-config',
-        name: t('workflow.styleConfig'),
-        source: 'workflow://style-config',
-        content: '',
-        language: 'workflow-style-config',
-        isDirty: false,
-      })
-    );
-  }, [dispatch, t]);
-
   return (
     <div
       className={`side-panel ${sidePanelVisible ? 'is-visible' : ''} ${isResizing ? 'is-resizing' : ''}`}
@@ -110,16 +94,6 @@ const SidePanel = () => {
       {!isExtensionView && !activeWebViewPanel && (
         <div className="side-panel__header">
           <span>{activePanel ? (panelTitles[activePanel] || activePanel) : t('sidePanel.noPanel')}</span>
-          {activePanel === 'workflow' && (
-            <button
-              type="button"
-              className="side-panel__header-action"
-              title={t('workflow.styleConfig')}
-              onClick={handleOpenWorkflowStyleConfig}
-            >
-              <Settings size={13} strokeWidth={1.5} />
-            </button>
-          )}
         </div>
       )}
       <div className="side-panel__content">

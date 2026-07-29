@@ -1,9 +1,41 @@
 .workflow-style-config {
-  padding: 24px;
-  max-width: 480px;
+  display: flex;
   height: 100%;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.workflow-style-config__form {
+  flex: 1;
+  min-width: 0;
+  padding: 24px;
   overflow-y: auto;
   box-sizing: border-box;
+}
+
+.workflow-style-config__preview {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 24px 24px 24px 0;
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+.workflow-style-config__preview-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #cccccc;
+  margin-bottom: 8px;
+}
+
+.workflow-style-config__preview-canvas {
+  flex: 1;
+  min-height: 0;
+  border: 1px solid #3c3c3c;
+  border-radius: 6px;
+  overflow: hidden;
+  position: relative;
 }
 
 .workflow-style-config__section {
@@ -53,5 +85,61 @@
 
 .workflow-style-config__row select:focus,
 .workflow-style-config__row input[type='number']:focus {
+  border-color: #007fd4;
+}
+
+/* 开关（小地图显隐等） */
+.workflow-style-config__switch {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid #454545;
+  border-radius: 10px;
+  background-color: #3c3c3c;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.workflow-style-config__switch.is-on {
+  background-color: #0e639c;
+  border-color: #1177bb;
+}
+
+.workflow-style-config__switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background-color: #e8e8e8;
+  transition: transform 0.15s ease;
+}
+
+.workflow-style-config__switch.is-on .workflow-style-config__switch-thumb {
+  transform: translateX(16px);
+}
+
+/* 作用域说明文字 */
+.workflow-style-config__hint {
+  padding: 2px 0 6px;
+  font-size: 12px;
+  color: #858585;
+}
+
+/* 恢复默认按钮 */
+.workflow-style-config__reset-btn {
+  padding: 4px 12px;
+  font-size: 12px;
+  color: #cccccc;
+  background-color: #3c3c3c;
+  border: 1px solid #454545;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.workflow-style-config__reset-btn:hover {
+  background-color: #4a4a4d;
   border-color: #007fd4;
 }

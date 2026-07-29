@@ -2,8 +2,9 @@ import { useState, useRef, useMemo } from 'react';
 import { Files, Search, GitBranch, Bug, Blocks, User, Settings, Terminal, Sparkles, Zap, Lightbulb, Wand, Workflow, type LucideIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
-import { switchPanel, moveDockableItem, reorderDockableItem, type DockLocation } from '../../store/slices/layoutSlice';
-import { setSettingsVisible } from '../../store/slices/workspaceSlice';
+import { switchPanel, moveDockableItem, reorderDockableItem, setRightPanelVisible, activateVirtualPanel, type DockLocation } from '../../store/slices/layoutSlice';
+import { setSettingsVisible, openVirtualFile, activateFile } from '../../store/slices/workspaceSlice';
+import { WORKFLOW_TAB_ID, getLastActiveWorkflowScope } from '../../services/workflowRuntime';
 import './ActivityBar.css';
 
 const DOCK_MIME = 'application/lifeai-dock-item';
@@ -29,6 +30,36 @@ const ActivityBar = () => {
   const dispatch = useAppDispatch();
   const activePanel = useAppSelector((state) => state.layout.activePanel);
   const dockableItems = useAppSelector((state) => state.layout.dockableItems);
+  const openedFiles = useAppSelector((state) => state.workspace.openedFiles);
+  // 工作流：内置画布功能，作为「虚拟左侧面板」——没有侧栏内容，
+  // 点击时只切换图标选中态（activePanel='workflow'），侧栏保持收起，
+  // 编辑器全屏显示画布 tab；同时关闭右侧面板，保证菜单互斥。
+  // 已有工作流 tab 时聚焦最近活跃的一个，否则创建第一个；
+  // 更多工作流 tab 由 TabBar 上工作流标签右侧的「+」按钮创建。
+  const handleOpenWorkflow = () => {
+    dispatch(activateVirtualPanel('workflow'));
+    dispatch(setRightPanelVisible(false));
+    const existing = openedFiles.filter((f) => f.language === 'workflow');
+    if (existing.length > 0) {
+      const lastScope = getLastActiveWorkflowScope();
+      const target = existing.find((f) => f.id === lastScope) ?? existing[0];
+      dispatch(activateFile(target.id));
+      return;
+    }
+    dispatch(
+      openVirtualFile({
+        id: WORKFLOW_TAB_ID,
+        name: t('activityBar.workflow'),
+        source: 'workflow://canvas',
+        content: '',
+        language: 'workflow',
+        isDirty: false,
+        // 默认锁定（固定 tab，不被其他 tab 替换）；用户在 tab 上解锁后恢复预览态
+        isPreview: false,
+        readOnly: true,
+      })
+    );
+  };
 
   const leftItems = useMemo(() => {
     return dockableItems.filter((i) => i.location === 'left');
@@ -157,6 +188,14 @@ const ActivityBar = () => {
             </div>
           );
         })}
+        {/* 工作流固定入口：虚拟左侧面板，选中态与其他图标一样由 activePanel 驱动 */}
+        <div
+          className={`activity-bar__item ${activePanel === 'workflow' ? 'active' : ''}`}
+          title={t('activityBar.workflow')}
+          onClick={handleOpenWorkflow}
+        >
+          <Workflow size={20} strokeWidth={1.5} />
+        </div>
       </div>
       <div className="activity-bar__bottom">
         {bottomItems.map((item, idx) => (

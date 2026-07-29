@@ -8,6 +8,7 @@ import {
   openFile,
   closeFile,
   activateFile,
+  openVirtualFile,
   setFileContent,
   setMirrorFileContent,
   saveFile,
@@ -24,6 +25,7 @@ import {
   reorderTab,
 } from '../store/slices/workspaceSlice';
 import { removeEditorTerminal } from '../store/slices/terminalSlice';
+import { destroyWorkflowInstance, getNextWorkflowTabMeta } from '../services/workflowRuntime';
 
 import { warmupFileCache, openFileDialog } from '../services/fileService';
 import { terminalSDK } from '../services/terminalSDK';
@@ -483,6 +485,10 @@ function Home() {
         terminalSDK.disposeTab(id).catch(() => {});
         return;
       }
+      // 工作流画布 tab 关闭时销毁对应的 Graph 实例，释放内存
+      if (file?.language === 'workflow') {
+        destroyWorkflowInstance(id);
+      }
       // Diff 文件和普通文件一样按组关闭：closeFile 只从指定组移除，
       // 当文件不再被任何组引用时自动从 openedFiles 清理。
       // 避免使用 closeDiffView（它会从所有组中移除，导致多面板时全部关闭）。
@@ -490,6 +496,26 @@ function Home() {
     },
     [dispatch]
   );
+
+  /* ─── 新建工作流 Tab（TabBar 上工作流标签右侧的「+」按钮） ─── */
+
+  const handleAddWorkflowTab = useCallback(() => {
+    const { id, seq } = getNextWorkflowTabMeta(openedFilesRef.current);
+    const baseName = t('activityBar.workflow');
+    dispatch(
+      openVirtualFile({
+        id,
+        name: seq === 1 ? baseName : `${baseName} ${seq}`,
+        source: `workflow://canvas/${seq}`,
+        content: '',
+        language: 'workflow',
+        isDirty: false,
+        // 默认锁定（固定 tab，不被其他 tab 替换）；用户在 tab 上解锁后恢复预览态
+        isPreview: false,
+        readOnly: true,
+      })
+    );
+  }, [dispatch, t]);
 
   const closeTargetsWithConfirm = useCallback(
     (targets: { id: string; groupIndex: number }[]) => {
@@ -512,6 +538,10 @@ function Home() {
             dispatch(removeEditorTerminal(t.id));
             terminalSDK.disposeTab(t.id).catch(() => {});
           } else {
+            // 工作流画布 tab 关闭时销毁对应的 Graph 实例，释放内存
+            if (file?.language === 'workflow') {
+              destroyWorkflowInstance(t.id);
+            }
             dispatch(closeFile(t));
           }
         });
@@ -810,6 +840,8 @@ function Home() {
                 readOnly: f.readOnly,
                 gitStatus: gitCode,
                 type: getTabType(f),
+                // TabBar 据此识别工作流 tab：仅工作流 tab 右侧渲染「+」新建按钮
+                language: f.language,
               };
             })}
             activeId={group.activeFileId}
@@ -819,7 +851,8 @@ function Home() {
             onPin={() => dispatch(pinPreviewFile())}
             onToggleReadOnly={(id) => dispatch(toggleFileReadOnly(id))}
             onReorder={(fromId, toId, position) => dispatch(reorderTab({ fromId, toId, position }))}
-            onSplitView={file?.language === 'extension' || file?.language === 'ssh-file-tree' || file?.language === 'terminal' ? undefined : () => dispatch(toggleSplitView())}
+            onAddWorkflow={handleAddWorkflowTab}
+            onSplitView={file?.language === 'extension' || file?.language === 'ssh-file-tree' || file?.language === 'terminal' || file?.language === 'workflow' || file?.language === 'workflow-style-config' ? undefined : () => dispatch(toggleSplitView())}
             splitActive={splitView}
             focused={focused}
             loadingFiles={loadingFiles}
@@ -840,7 +873,7 @@ function Home() {
                   active={focused && group.activeFileId === file.id}
                 />
               ) : file.language === 'workflow' ? (
-                <WorkflowCanvas key={`workflow-${file.id}-${group.id}`} />
+                <WorkflowCanvas key={`workflow-${file.id}-${group.id}`} tabId={file.id} />
               ) : file.language === 'workflow-style-config' ? (
                 <WorkflowStyleConfig key={`workflow-style-${file.id}-${group.id}`} />
               ) : file.language === 'commit-detail' && file.commitDetailData ? (
@@ -878,7 +911,7 @@ function Home() {
         </>
       );
     },
-    [dispatch, handleCloseTab, handleTabContextMenu, handleEditorChange, handleOpenQuickOpen, splitView, getPanelContent, rootPath, gitStatus, handleTabReady, handleOpenFileByPath, loadingFiles, missingFileIdsSet, t]
+    [dispatch, handleCloseTab, handleTabContextMenu, handleEditorChange, handleOpenQuickOpen, splitView, getPanelContent, rootPath, gitStatus, handleTabReady, handleOpenFileByPath, loadingFiles, missingFileIdsSet, handleAddWorkflowTab, t]
   );
 
   return (

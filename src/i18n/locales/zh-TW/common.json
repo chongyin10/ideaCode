@@ -163,7 +163,8 @@
     "settings": "設定"
   },
   "workflow": {
-    "styleConfig": "樣式設定"
+    "styleConfig": "樣式設定",
+    "newCanvas": "新增工作流程"
   },
   "topBar": {
     "searchFilesTooltip": "搜尋檔案 (Ctrl+P)",

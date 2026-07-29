@@ -106,6 +106,8 @@ export class MiniMap implements Plugin {
     private canvas: HTMLCanvasElement | null = null;
     private ctx: CanvasRenderingContext2D | null = null;
     private eventHandler: EventHandler | null = null;
+    /** 是否可见（hide 后跳过重绘，避免对不可见画布做无效绘制） */
+    private visible: boolean = true;
 
     // 视口拖拽状态
     private isDraggingViewport: boolean = false;
@@ -453,6 +455,8 @@ export class MiniMap implements Plugin {
      */
     render(): void {
         if (!this.ctx || !this.canvas || !this.graph || !this.options.enabled) return;
+        // 隐藏时不重绘：监听仍在，但对不可见画布做全量重绘是纯粹的 CPU/GPU 浪费
+        if (!this.visible) return;
 
         // 清除画布
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
@@ -824,15 +828,19 @@ export class MiniMap implements Plugin {
      * 显示小地图
      */
     show(): void {
+        this.visible = true;
         if (this.container) {
             this.container.style.display = 'block';
         }
+        // 恢复显示时补一次重绘（hide 期间的重绘被跳过了）
+        this.render();
     }
 
     /**
      * 隐藏小地图
      */
     hide(): void {
+        this.visible = false;
         if (this.container) {
             this.container.style.display = 'none';
         }

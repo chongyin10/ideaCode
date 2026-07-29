@@ -1,10 +1,15 @@
-import { Node, NodeOptions, type ResizeHandlePosition, type NodeStyle } from './Node';
-import { DynamicHeightNode } from './DynamicNode';
+import { Node, NodeOptions, isRowHoverable, type RowHoverable, type ResizeHandlePosition, type NodeStyle } from './Node';
 import { Edge, EdgeOptions, EdgeType } from './Edge';
 import { Port } from './Port';
-import { EventManager, EVENT_NAMES, type BaseEvent, type MouseEvent, type WheelEvent, type EventHandler } from './EventManager';
+import { EventManager, EVENT_NAMES, type MouseEvent, type WheelEvent, type EventHandler } from './EventManager';
 import { Plugin } from '../plugins';
 import { Shape, ShapeConfig } from './Shape';
+import { Viewport } from './Viewport';
+import { GraphEventDispatcher } from './GraphEventDispatcher';
+import { ConnectionManager } from './interactions/ConnectionManager';
+import { ResizeManager } from './interactions/ResizeManager';
+import { DragManager } from './interactions/DragManager';
+import { getLineSegmentIntersection, resolveEdgeEndpoints } from './utils/geometry';
 
 export interface Point {
     x: number;
@@ -116,9 +121,10 @@ export interface GraphOptions {
     dropdown?: DropdownOptions;
 }
 
+/**
+ * @deprecated 画布平移状态已迁移至 DragManager，此接口仅为兼容现有导出而保留
+ */
 export interface GraphState {
-    offset: Point;
-    scale: number;
     isDragging: boolean;
     lastMousePosition: Point | null;
 }
@@ -153,38 +159,20 @@ export class Graph {
     private edgeCanvas: HTMLCanvasElement;
     private edgeCtx: CanvasRenderingContext2D;
     private options: Omit<Required<GraphOptions>, 'dropdown'> & { dropdown?: DropdownOptions };
-    private state: GraphState;
+    private viewport: Viewport;
     private nodes: Map<string, Node> = new Map();
     private edges: Map<string, Edge> = new Map();
     private selectedNode: Node | null = null;
     private selectedEdge: Edge | null = null;
     private hoveredNode: Node | null = null;
     private hoveredEdge: Edge | null = null;
-    private draggedNode: Node | null = null;
-    private isDraggingNode: boolean = false;
-    private dragStartPosition: Point = { x: 0, y: 0 };
-    private dragNodeStartPosition: Point = { x: 0, y: 0 };
 
-    // 边拖拽状态
-    private isDraggingEdge: boolean = false;
-    private draggedEdge: Edge | null = null;
-    private dragEdgeStartOffset: Point = { x: 0, y: 0 };
+    // 鼠标交互状态机（连接 / 缩放 / 拖拽，从 Graph 抽取）
+    private connectionManager: ConnectionManager;
+    private resizeManager: ResizeManager;
+    private dragManager: DragManager;
 
-    // 连接拖拽状态
-    private isConnecting: boolean = false;
-    private connectSourceNode: Node | null = null;
-    private connectSourcePort: Port | null = null;
-    private connectTargetNode: Node | null = null;
-    private connectTargetPort: Port | null = null;
-    private connectCurrentPoint: Point = { x: 0, y: 0 };
     private rafId: number | null = null;
-
-    // Resize 状态
-    private isResizing: boolean = false;
-    private resizingNode: Node | null = null;
-    private resizingHandle: ResizeHandlePosition | null = null;
-    private resizeStartPoint: Point = { x: 0, y: 0 };
-    private resizeStartBounds: { x: number; y: number; width: number; height: number } | null = null;
 
     // HTML 节点元素管理
     private htmlNodeElements: Map<string, HTMLElement> = new Map();
@@ -207,12 +195,10 @@ export class Graph {
 
     // 事件管理器
     private eventManager: EventManager;
-    
-    // 记录当前鼠标下的元素（用于 mouseenter/mouseleave）
-    private lastMouseOverNode: Node | null = null;
-    private lastMouseOverEdge: Edge | null = null;
-    private lastMouseOverPort: Port | null = null;
-    
+
+    // 事件分发器（鼠标事件到图元素的路由与悬停跟踪）
+    private eventDispatcher: GraphEventDispatcher;
+
     // 已注册的插件
     private plugins: Map<string, Plugin> = new Map();
 
@@ -407,18 +393,21 @@ export class Graph {
         };
 
         this.container = options.container;
-        this.state = {
-            offset: {
-                x: this.options.initialOffsetX,
-                y: this.options.initialOffsetY,
-            },
-            scale: 1,
-            isDragging: false,
-            lastMousePosition: null,
-        };
+        this.viewport = new Viewport({
+            x: this.options.initialOffsetX,
+            y: this.options.initialOffsetY,
+        });
 
         // 初始化事件管理器
         this.eventManager = new EventManager();
+
+        // 初始化事件分发器
+        this.eventDispatcher = new GraphEventDispatcher(this);
+
+        // 初始化鼠标交互状态机
+        this.connectionManager = new ConnectionManager(this);
+        this.resizeManager = new ResizeManager(this);
+        this.dragManager = new DragManager(this);
 
         // 创建画布元素
         this.canvas = this.createCanvas();
@@ -442,8 +431,8 @@ export class Graph {
             onClick: this.handleClick.bind(this),
             onDblClick: this.handleDblClick.bind(this),
             onContextMenu: this.handleContextMenu.bind(this),
-            onMouseEnter: (e: globalThis.MouseEvent) => this.handleMouseEnterLeave(e, true),
-            onMouseLeaveCanvas: (e: globalThis.MouseEvent) => this.handleMouseEnterLeave(e, false),
+            onMouseEnter: (e: globalThis.MouseEvent) => this.eventDispatcher.handleMouseEnterLeave(e),
+            onMouseLeaveCanvas: (e: globalThis.MouseEvent) => this.eventDispatcher.handleMouseEnterLeave(e),
         };
 
         this.init();
@@ -545,7 +534,7 @@ export class Graph {
         const element = this.htmlNodeElements.get(node.getId());
         if (element) {
             const pos = node.getPosition();
-            const { offset, scale } = this.state;
+            const { offset, scale } = this.viewport;
             // 计算屏幕坐标 = 世界坐标 * 缩放 + 偏移
             const screenX = pos.x * scale + offset.x;
             const screenY = pos.y * scale + offset.y;
@@ -788,402 +777,37 @@ export class Graph {
         }
 
         // 分发 mousedown 事件（复用已检测的结果）
-        this.dispatchMouseEventWithTarget('mousedown', e, worldPoint, clickedNode, clickedPort);
+        this.eventDispatcher.dispatchMouseEventWithTarget('mousedown', e, worldPoint, clickedNode, clickedPort);
 
         // 如果点击了 resize handle，开始 resize
         if (clickedNode && clickedResizeHandle) {
-            this.startResize(clickedNode, clickedResizeHandle, worldPoint);
+            this.resizeManager.start(clickedNode, clickedResizeHandle, worldPoint);
             return;
         }
 
         // 如果点击了连接桩，开始连接拖拽
         if (clickedPort && clickedNode) {
-            this.startConnection(clickedNode, clickedPort, worldPoint);
+            this.connectionManager.start(clickedNode, clickedPort, worldPoint);
             return;
         }
 
         // 如果点击了边，开始拖拽边
         if (clickedEdge) {
-            this.startEdgeDrag(clickedEdge, screenPoint, worldPoint);
+            this.dragManager.startEdgeDrag(clickedEdge, screenPoint);
             return;
         }
 
         if (clickedNode) {
             // 开始拖拽节点
-            this.draggedNode = clickedNode;
-            this.isDraggingNode = true;
-            this.dragStartPosition = { ...screenPoint };
-            const nodePos = clickedNode.getPosition();
-            this.dragNodeStartPosition = { ...nodePos };
-            
-            // 选中节点（延迟触发 node:unselected 事件，在 mouseup 时触发）
-            this.selectNode(clickedNode.getId(), false);
-            
-            // 触发 node:dragstart 事件
-            clickedNode.triggerNodeEvent('dragstart', e, { x: worldPoint.x, y: worldPoint.y });
-            this.emit(EVENT_NAMES.NODE_DRAGSTART, {
-                type: 'node',
-                target: clickedNode,
-                node: clickedNode,
-                originalEvent: e,
-                x: worldPoint.x,
-                y: worldPoint.y,
-            });
-            
-            this.canvas.style.cursor = 'grabbing';
+            this.dragManager.startNodeDrag(clickedNode, screenPoint, worldPoint, e);
         } else {
             // 如果按住 Alt键，不启动画布拖拽（留给 Selection插件处理框选）
             if (e.altKey) {
                 return;
             }
             // 拖拽画布
-            this.state.isDragging = true;
-            this.state.lastMousePosition = {
-                x: e.clientX,
-                y: e.clientY,
-            };
-            this.canvas.style.cursor = this.options.draggingCursor;
+            this.dragManager.startPan(e.clientX, e.clientY);
         }
-    }
-
-    /**
-     * 开始连接拖拽
-     */
-    private startConnection(sourceNode: Node, sourcePort: Port, startPoint: Point): void {
-        this.isConnecting = true;
-        this.connectSourceNode = sourceNode;
-        this.connectSourcePort = sourcePort;
-        this.connectCurrentPoint = startPoint;
-        this.connectTargetNode = null;
-        this.connectTargetPort = null;
-        
-        this.canvas.style.cursor = 'crosshair';
-        
-        // 禁用所有 HTML 节点的鼠标事件捕获，使鼠标事件能够穿透到 overlay 层
-        // 这样在连接拖拽时，鼠标经过 HTML 节点也不会中断连接线的更新
-        this.htmlNodeElements.forEach((element) => {
-            element.style.pointerEvents = 'none';
-        });
-        
-        this.scheduleRender();
-    }
-
-    /**
-     * 更新连接目标
-     */
-    private updateConnectionTarget(worldPoint: Point): void {
-        if (!this.isConnecting) return;
-
-        this.connectCurrentPoint = worldPoint;
-
-        // 查找当前鼠标下的连接桩
-        let targetPort: Port | null = null;
-        let targetNode: Node | null = null;
-
-        const nodes = this.getAllNodes();
-        for (let i = nodes.length - 1; i >= 0; i--) {
-            const node = nodes[i];
-            // 跳过源节点
-            if (node === this.connectSourceNode) continue;
-
-            const port = node.getPortAtPoint(worldPoint);
-            if (port) {
-                targetPort = port;
-                targetNode = node;
-                break;
-            }
-        }
-
-        // 吸附逻辑：如果鼠标不在连接桩上，检查是否在吸附范围内
-        if (!targetPort) {
-            let closestPort: Port | null = null;
-            let closestNode: Node | null = null;
-            let minDistance = Infinity;
-
-            for (const node of nodes) {
-                // 跳过源节点
-                if (node === this.connectSourceNode) continue;
-
-                const nodePos = node.getPosition();
-                const nodeStyle = node.getStyle();
-
-                // 获取节点的所有连接桩
-                const ports = node.getAllPorts ? node.getAllPorts() : [];
-
-                for (const port of ports) {
-                    const distance = port.getDistanceToPoint(
-                        worldPoint,
-                        nodePos.x,
-                        nodePos.y,
-                        nodeStyle.width,
-                        nodeStyle.height
-                    );
-                    const snapDistance = port.getSnapDistance();
-
-                    // 如果距离小于吸附距离且比之前找到的更近
-                    if (distance <= snapDistance && distance < minDistance) {
-                        minDistance = distance;
-                        closestPort = port;
-                        closestNode = node;
-                    }
-                }
-            }
-
-            if (closestPort && closestNode) {
-                targetPort = closestPort;
-                targetNode = closestNode;
-                // 吸附时，将当前点设置为连接桩的位置
-                const nodePos = targetNode.getPosition();
-                const nodeStyle = targetNode.getStyle();
-                this.connectCurrentPoint = targetPort.getConnectionPoint(
-                    nodePos.x,
-                    nodePos.y,
-                    nodeStyle.width,
-                    nodeStyle.height
-                );
-            }
-        }
-
-        // 如果目标变化，更新状态
-        if (targetPort !== this.connectTargetPort) {
-            this.connectTargetPort = targetPort;
-            this.connectTargetNode = targetNode;
-        }
-
-        this.scheduleRender();
-    }
-
-    /**
-     * 完成连接
-     */
-    private completeConnection(): void {
-        if (!this.isConnecting) return;
-
-        // 如果有有效的目标连接桩，创建边
-        if (this.connectSourceNode && this.connectSourcePort &&
-            this.connectTargetNode && this.connectTargetPort) {
-            
-            // 调用连接验证函数
-            const validateResult = this.options.validateConnection({
-                sourceNode: this.connectSourceNode,
-                sourcePort: this.connectSourcePort,
-                targetNode: this.connectTargetNode,
-                targetPort: this.connectTargetPort,
-            });
-            
-            // 如果验证失败，不创建边
-            if (!validateResult) {
-                this.resetConnection();
-                return;
-            }
-            
-            this.addEdge({
-                id: `edge-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-                source: {
-                    nodeId: this.connectSourceNode.getId(),
-                    portId: this.connectSourcePort.getId(),
-                },
-                target: {
-                    nodeId: this.connectTargetNode.getId(),
-                    portId: this.connectTargetPort.getId(),
-                },
-                type: EdgeType.Straight,
-            });
-        }
-
-        this.resetConnection();
-    }
-
-    /**
-     * 取消连接
-     */
-    private cancelConnection(): void {
-        this.resetConnection();
-    }
-
-    /**
-     * 重置连接状态
-     */
-    private resetConnection(): void {
-        this.isConnecting = false;
-        this.connectSourceNode = null;
-        this.connectSourcePort = null;
-        this.connectTargetNode = null;
-        this.connectTargetPort = null;
-        this.connectCurrentPoint = { x: 0, y: 0 };
-        this.canvas.style.cursor = 'default';
-        
-        // 恢复所有 HTML 节点的鼠标事件捕获
-        this.htmlNodeElements.forEach((element) => {
-            element.style.pointerEvents = 'auto';
-        });
-        
-        this.scheduleRender();
-    }
-
-    // ==================== 边拖拽相关方法 ====================
-
-    /**
-     * 开始拖拽边
-     */
-    private startEdgeDrag(edge: Edge, screenPoint: Point, _worldPoint: Point): void {
-        this.isDraggingEdge = true;
-        this.draggedEdge = edge;
-        this.dragStartPosition = { ...screenPoint };
-        this.dragEdgeStartOffset = edge.getOffset();
-        
-        // 选中边
-        this.selectEdge(edge.getId());
-        
-        this.canvas.style.cursor = 'move';
-        
-        this.scheduleRender();
-    }
-
-    /**
-     * 更新边拖拽
-     */
-    private updateEdgeDrag(screenPoint: Point): void {
-        if (!this.isDraggingEdge || !this.draggedEdge) return;
-
-        // 计算鼠标移动的差值（世界坐标）
-        const deltaX = (screenPoint.x - this.dragStartPosition.x) / this.state.scale;
-        const deltaY = (screenPoint.y - this.dragStartPosition.y) / this.state.scale;
-
-        // 更新边的偏移量
-        const newOffsetX = this.dragEdgeStartOffset.x + deltaX;
-        const newOffsetY = this.dragEdgeStartOffset.y + deltaY;
-        this.draggedEdge.setOffset(newOffsetX, newOffsetY);
-
-        this.scheduleRender();
-    }
-
-    /**
-     * 完成边拖拽
-     */
-    private completeEdgeDrag(): void {
-        if (!this.isDraggingEdge || !this.draggedEdge) return;
-
-        this.isDraggingEdge = false;
-        this.draggedEdge = null;
-        this.dragStartPosition = { x: 0, y: 0 };
-        this.dragEdgeStartOffset = { x: 0, y: 0 };
-        
-        this.canvas.style.cursor = 'default';
-        
-        this.scheduleRender();
-    }
-
-    // ==================== Resize 相关方法 ====================
-
-    /**
-     * 开始 resize
-     */
-    private startResize(node: Node, handle: ResizeHandlePosition, startPoint: Point): void {
-        this.isResizing = true;
-        this.resizingNode = node;
-        this.resizingHandle = handle;
-        this.resizeStartPoint = startPoint;
-        this.resizeStartBounds = node.getBounds();
-        
-        // 根据 handle 位置设置光标样式
-        const cursorMap: Record<ResizeHandlePosition, string> = {
-            'nw': 'nw-resize',
-            'n': 'n-resize',
-            'ne': 'ne-resize',
-            'e': 'e-resize',
-            'se': 'se-resize',
-            's': 's-resize',
-            'sw': 'sw-resize',
-            'w': 'w-resize',
-        };
-        this.canvas.style.cursor = cursorMap[handle];
-        
-        // 触发 resize 开始事件
-        this.emit('node:resizestart', {
-            type: 'node',
-            target: node,
-            node: node,
-            handle: handle,
-            startPoint: startPoint,
-        });
-        
-        this.scheduleRender();
-    }
-
-    /**
-     * 更新 resize
-     */
-    private updateResize(worldPoint: Point): void {
-        if (!this.isResizing || !this.resizingNode || !this.resizingHandle || !this.resizeStartBounds) return;
-
-        // 计算鼠标移动的差值（世界坐标）
-        // worldPoint 和 resizeStartPoint 已经是世界坐标，直接相减得到世界坐标系的移动距离
-        // 这样节点在屏幕上的尺寸变化与鼠标移动的屏幕距离成正比
-        const deltaX = worldPoint.x - this.resizeStartPoint.x;
-        const deltaY = worldPoint.y - this.resizeStartPoint.y;
-
-        // 计算新的节点尺寸和位置，传入起始边界框以确保计算正确
-        const result = this.resizingNode.calculateResize(
-            this.resizingHandle,
-            deltaX,
-            deltaY,
-            50,  // minWidth
-            30,  // minHeight
-            this.resizeStartBounds  // 传入起始边界框，避免累积误差
-        );
-
-        if (result.changed) {
-            // 更新节点位置和尺寸
-            this.resizingNode.setPosition(result.x, result.y);
-            this.resizingNode.updateStyle({
-                width: result.width,
-                height: result.height,
-            });
-            
-            // 触发 resize 事件（resize 过程中持续触发）
-            this.emit('node:resize', {
-                type: 'node',
-                target: this.resizingNode,
-                node: this.resizingNode,
-                bounds: this.resizingNode.getBounds(),
-            });
-            
-            // 立即渲染，使 handles 跟随节点实时更新
-            this.render();
-        }
-    }
-
-    /**
-     * 完成 resize
-     */
-    private completeResize(): void {
-        if (this.isResizing && this.resizingNode) {
-            // 触发 resize 完成事件
-            const bounds = this.resizingNode.getBounds();
-            this.emit('node:resizeend', {
-                type: 'node',
-                target: this.resizingNode,
-                node: this.resizingNode,
-                bounds,
-            });
-        }
-        
-        this.resetResize();
-    }
-
-    /**
-     * 重置 resize 状态
-     */
-    private resetResize(): void {
-        this.isResizing = false;
-        this.resizingNode = null;
-        this.resizingHandle = null;
-        this.resizeStartPoint = { x: 0, y: 0 };
-        this.resizeStartBounds = null;
-        this.canvas.style.cursor = 'default';
-        
-        this.scheduleRender();
     }
 
     /**
@@ -1191,150 +815,66 @@ export class Graph {
      */
     private handleMouseMove(e: globalThis.MouseEvent): void {
         // 处理 resize
-        if (this.isResizing) {
-            const rect = this.canvas.getBoundingClientRect();
-            const screenPoint: Point = {
-                x: e.clientX - rect.left,
-                y: e.clientY - rect.top,
-            };
-            const worldPoint = this.screenToWorld(screenPoint);
-            
-            this.updateResize(worldPoint);
+        if (this.resizeManager.isActive()) {
+            const worldPoint = this.eventToWorldPoint(e);
+
+            this.resizeManager.update(worldPoint);
             return;
         }
 
         // 处理连接拖拽
-        if (this.isConnecting) {
-            const rect = this.canvas.getBoundingClientRect();
-            const screenPoint: Point = {
-                x: e.clientX - rect.left,
-                y: e.clientY - rect.top,
-            };
-            const worldPoint = this.screenToWorld(screenPoint);
-            
-            this.updateConnectionTarget(worldPoint);
+        if (this.connectionManager.isActive()) {
+            const worldPoint = this.eventToWorldPoint(e);
+
+            this.connectionManager.updateTarget(worldPoint);
             return;
         }
 
         // 处理边拖拽
-        if (this.isDraggingEdge) {
-            const rect = this.canvas.getBoundingClientRect();
-            const screenPoint: Point = {
-                x: e.clientX - rect.left,
-                y: e.clientY - rect.top,
-            };
-            
-            this.updateEdgeDrag(screenPoint);
+        if (this.dragManager.isEdgeDragging()) {
+            const screenPoint = this.eventToScreenPoint(e);
+
+            this.dragManager.updateEdgeDrag(screenPoint);
             return;
         }
 
         // 处理节点拖拽
-        if (this.isDraggingNode && this.draggedNode) {
-            const rect = this.canvas.getBoundingClientRect();
-            const screenPoint: Point = {
-                x: e.clientX - rect.left,
-                y: e.clientY - rect.top,
-            };
-            
-            // 计算鼠标移动的差值（屏幕坐标）
-            const deltaX = (screenPoint.x - this.dragStartPosition.x) / this.state.scale;
-            const deltaY = (screenPoint.y - this.dragStartPosition.y) / this.state.scale;
-            
-            // 更新节点位置
-            const newX = this.dragNodeStartPosition.x + deltaX;
-            const newY = this.dragNodeStartPosition.y + deltaY;
-            this.draggedNode.setPosition(newX, newY);
-            
-            // 触发 node:drag 事件
-            this.draggedNode.triggerNodeEvent('drag', e, { x: newX, y: newY });
-            this.emit(EVENT_NAMES.NODE_DRAG, {
-                type: 'node',
-                target: this.draggedNode,
-                node: this.draggedNode,
-                originalEvent: e,
-                x: newX,
-                y: newY,
-            });
-            
-            this.scheduleRender();
+        if (this.dragManager.isNodeDragging()) {
+            const screenPoint = this.eventToScreenPoint(e);
+
+            this.dragManager.updateNodeDrag(screenPoint, e);
             return;
         }
 
         // 处理画布拖拽
-        if (this.state.isDragging && this.state.lastMousePosition) {
-            const deltaX = e.clientX - this.state.lastMousePosition.x;
-            const deltaY = e.clientY - this.state.lastMousePosition.y;
-
-            this.state.offset.x += deltaX;
-            this.state.offset.y += deltaY;
-
-            this.state.lastMousePosition = {
-                x: e.clientX,
-                y: e.clientY,
-            };
-
-            this.scheduleRender();
+        if (this.dragManager.updatePan(e.clientX, e.clientY)) {
             return;
         }
 
         // 处理鼠标悬停状态（非拖拽状态下）
-        this.handleMouseEnterLeave(e, true);
+        this.eventDispatcher.handleMouseEnterLeave(e);
 
         // 处理 resize handle 悬停时的光标变化
-        if (!this.isResizing && !this.isConnecting && !this.isDraggingNode && !this.state.isDragging) {
-            this.handleResizeHandleHover(e);
+        if (!this.resizeManager.isActive() && !this.connectionManager.isActive() && !this.dragManager.isNodeDragging() && !this.dragManager.isPanningActive()) {
+            this.resizeManager.handleHover(e);
         }
 
-        // 处理 DynamicHeightNode 的行悬停状态
+        // 处理行级悬停节点的行悬停状态
         this.handleDynamicNodeRowHover(e);
-    }
-
-    /**
-     * 处理 resize handle 悬停时的光标变化
-     */
-    private handleResizeHandleHover(e: globalThis.MouseEvent): void {
-        const rect = this.canvas.getBoundingClientRect();
-        const screenPoint: Point = {
-            x: e.clientX - rect.left,
-            y: e.clientY - rect.top,
-        };
-        const worldPoint = this.screenToWorld(screenPoint);
-
-        // 检查是否悬停在选中节点的 resize handle 上
-        if (this.selectedNode && !this.selectedNode.isHtmlNode()) {
-            const resizeHandle = this.selectedNode.getResizeHandleAtPoint(worldPoint);
-            if (resizeHandle) {
-                const cursorMap: Record<ResizeHandlePosition, string> = {
-                    'nw': 'nw-resize',
-                    'n': 'n-resize',
-                    'ne': 'ne-resize',
-                    'e': 'e-resize',
-                    'se': 'se-resize',
-                    's': 's-resize',
-                    'sw': 'sw-resize',
-                    'w': 'w-resize',
-                };
-                this.canvas.style.cursor = cursorMap[resizeHandle];
-                return;
-            }
-        }
-
-        // 恢复光标：如果在节点上显示 grab，否则显示 default
-        // 注意：这里不处理，由 handleMouseEnterLeave 方法处理节点/端口/边的光标
     }
 
     /**
      * 点击事件处理
      */
     private handleClick(e: globalThis.MouseEvent): void {
-        this.dispatchMouseEvent('click', e);
+        this.eventDispatcher.dispatchMouseEvent('click', e);
     }
 
     /**
      * 双击事件处理
      */
     private handleDblClick(e: globalThis.MouseEvent): void {
-        this.dispatchMouseEvent('dblclick', e);
+        this.eventDispatcher.dispatchMouseEvent('dblclick', e);
     }
 
     /**
@@ -1342,7 +882,7 @@ export class Graph {
      */
     private handleContextMenu(e: globalThis.MouseEvent): void {
         e.preventDefault();
-        this.dispatchMouseEvent('contextmenu', e);
+        this.eventDispatcher.dispatchMouseEvent('contextmenu', e);
     }
 
     /**
@@ -1350,76 +890,40 @@ export class Graph {
      */
     private handleMouseUp(e: globalThis.MouseEvent): void {
         // 将鼠标位置转换为世界坐标
-        const rect = this.canvas.getBoundingClientRect();
-        const screenPoint: Point = {
-            x: e.clientX - rect.left,
-            y: e.clientY - rect.top,
-        };
-        const worldPoint = this.screenToWorld(screenPoint);
+        const worldPoint = this.eventToWorldPoint(e);
 
         // 处理 resize 结束
-        if (this.isResizing) {
-            this.completeResize();
+        if (this.resizeManager.isActive()) {
+            this.resizeManager.complete();
             return;
         }
 
         // 处理连接拖拽结束
-        if (this.isConnecting) {
-            this.completeConnection();
+        if (this.connectionManager.isActive()) {
+            this.connectionManager.complete();
             return;
         }
 
         // 处理边拖拽结束
-        if (this.isDraggingEdge) {
-            this.completeEdgeDrag();
+        if (this.dragManager.isEdgeDragging()) {
+            this.dragManager.completeEdgeDrag();
             return;
         }
 
         // 处理节点拖拽结束
-        if (this.isDraggingNode && this.draggedNode) {
-            // 触发 node:dragend 事件
-            const finalPosition = this.draggedNode.getPosition();
-            const oldPosition = { ...this.dragNodeStartPosition };
-            console.log('[Graph] node:dragend - oldPosition:', oldPosition, 'finalPosition:', finalPosition);
-            this.draggedNode.triggerNodeEvent('dragend', e, { x: finalPosition.x, y: finalPosition.y });
-            this.emit(EVENT_NAMES.NODE_DRAGEND, {
-                type: 'node',
-                target: this.draggedNode,
-                node: this.draggedNode,
-                originalEvent: e,
-                x: finalPosition.x,
-                y: finalPosition.y,
-                oldPosition: oldPosition,
-                newPosition: finalPosition,
-            });
-
-            // 触发延迟的 node:unselected 事件（如果有）
-            if (this.nodeToUnselect) {
-                this.triggerNodeUnselected(this.nodeToUnselect, worldPoint.x, worldPoint.y, e);
-                this.nodeToUnselect = null;
-            }
-
-            this.isDraggingNode = false;
-            this.draggedNode = null;
-            // 恢复光标：如果在节点上显示 grab，否则显示 default
-            this.canvas.style.cursor = this.hoveredNode ? 'grab' : 'default';
+        if (this.dragManager.completeNodeDrag(e, worldPoint)) {
             return;
         }
 
         // 分发 mouseup 事件
-        this.dispatchMouseEvent('mouseup', e);
+        this.eventDispatcher.dispatchMouseEvent('mouseup', e);
 
         // 处理画布拖拽结束
-        if (!this.state.isDragging) {
+        if (!this.dragManager.isPanningActive()) {
             return;
         }
 
-        this.state.isDragging = false;
-        this.state.lastMousePosition = null;
-        this.canvas.style.cursor = 'default';
-
-        // 触发拖拽完成回调
-        this.options.onDragEnd({ ...this.state.offset });
+        this.dragManager.completePan();
     }
 
     /**
@@ -1427,29 +931,29 @@ export class Graph {
      */
     private handleMouseLeave(e: globalThis.MouseEvent): void {
         // 如果正在 resize，取消 resize
-        if (this.isResizing) {
-            this.resetResize();
+        if (this.resizeManager.isActive()) {
+            this.resizeManager.reset();
             return;
         }
 
         // 如果正在连接，取消连接
-        if (this.isConnecting) {
-            this.cancelConnection();
+        if (this.connectionManager.isActive()) {
+            this.connectionManager.cancel();
             return;
         }
 
         // 如果正在拖拽边，完成拖拽（保留偏移）
-        if (this.isDraggingEdge) {
-            this.completeEdgeDrag();
+        if (this.dragManager.isEdgeDragging()) {
+            this.dragManager.completeEdgeDrag();
             return;
         }
 
-        if (this.state.isDragging) {
+        if (this.dragManager.isPanningActive()) {
             this.handleMouseUp(e);
         }
         
         // 触发 mouseleave 事件
-        this.handleMouseEnterLeave(e, false);
+        this.eventDispatcher.handleMouseEnterLeave(e);
         
         // 清除所有悬停状态
         if (this.hoveredNode) {
@@ -1476,8 +980,8 @@ export class Graph {
         const mouseY = e.clientY - rect.top;
 
         // 计算缩放前鼠标在世界坐标系中的位置
-        const worldX = (mouseX - this.state.offset.x) / this.state.scale;
-        const worldY = (mouseY - this.state.offset.y) / this.state.scale;
+        const worldX = (mouseX - this.viewport.offset.x) / this.viewport.scale;
+        const worldY = (mouseY - this.viewport.offset.y) / this.viewport.scale;
 
         // 检查鼠标是否在空白区域
         const worldPoint: Point = { x: worldX, y: worldY };
@@ -1505,25 +1009,25 @@ export class Graph {
 
         // 如果在空白区域，触发 blank:mousewheel 事件
         if (!isOnElement) {
-            this.dispatchMouseEvent('mousewheel', e as globalThis.WheelEvent);
+            this.eventDispatcher.dispatchMouseEvent('mousewheel', e as globalThis.WheelEvent);
         }
 
         // 计算新的缩放比例
         const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
         const newScale = Math.max(
             this.options.minZoom,
-            Math.min(this.options.maxZoom, this.state.scale * zoomFactor)
+            Math.min(this.options.maxZoom, this.viewport.scale * zoomFactor)
         );
 
         // 计算新的偏移量，保持鼠标指向的世界坐标不变
-        this.state.scale = newScale;
-        this.state.offset.x = mouseX - worldX * newScale;
-        this.state.offset.y = mouseY - worldY * newScale;
+        this.viewport.scale = newScale;
+        this.viewport.offset.x = mouseX - worldX * newScale;
+        this.viewport.offset.y = mouseY - worldY * newScale;
 
         this.scheduleRender();
 
         // 触发缩放回调
-        this.options.onZoom(this.state.scale, { ...this.state.offset });
+        this.options.onZoom(this.viewport.scale, { ...this.viewport.offset });
     }
 
     /**
@@ -1549,6 +1053,8 @@ export class Graph {
      * 渲染画布
      */
     private render(): void {
+        // destroy 后 canvas/ctx 已置空：进行中的 panTo/zoomTo 等动画帧直接丢弃
+        if (!this.canvas || !this.ctx || !this.edgeCtx) return;
         const { width, height } = this.canvas.getBoundingClientRect();
 
         // 清空主画布
@@ -1562,10 +1068,10 @@ export class Graph {
         this.edgeCtx.save();
 
         // 应用变换
-        this.ctx.translate(this.state.offset.x, this.state.offset.y);
-        this.ctx.scale(this.state.scale, this.state.scale);
-        this.edgeCtx.translate(this.state.offset.x, this.state.offset.y);
-        this.edgeCtx.scale(this.state.scale, this.state.scale);
+        this.ctx.translate(this.viewport.offset.x, this.viewport.offset.y);
+        this.ctx.scale(this.viewport.scale, this.viewport.scale);
+        this.edgeCtx.translate(this.viewport.offset.x, this.viewport.offset.y);
+        this.edgeCtx.scale(this.viewport.scale, this.viewport.scale);
 
         // 绘制背景
         this.drawBackground();
@@ -1582,7 +1088,7 @@ export class Graph {
         this.renderEdgesAndPorts();
 
         // 绘制连接中的临时连线（在边线层上）
-        this.renderConnectingEdge();
+        this.connectionManager.renderConnectingEdge(this.edgeCtx);
 
         // 恢复上下文状态
         this.ctx.restore();
@@ -1593,61 +1099,6 @@ export class Graph {
 
         // 触发自定义绘制
         this.onRender();
-    }
-
-    /**
-     * 绘制连接中的临时连线
-     */
-    private renderConnectingEdge(): void {
-        if (!this.isConnecting || !this.connectSourceNode || !this.connectSourcePort) {
-            return;
-        }
-
-        const sourcePoint = this.connectSourcePort.getConnectionPoint(
-            this.connectSourceNode.getPosition().x,
-            this.connectSourceNode.getPosition().y,
-            this.connectSourceNode.getStyle().width,
-            this.connectSourceNode.getStyle().height
-        );
-
-        const targetPoint = this.connectCurrentPoint;
-
-        // 使用边线层画布绘制临时连线
-        this.edgeCtx.save();
-
-        // 设置虚线样式
-        this.edgeCtx.strokeStyle = this.connectTargetPort ? '#3b82f6' : '#94a3b8';
-        this.edgeCtx.lineWidth = 2;
-        this.edgeCtx.lineCap = 'round';
-        this.edgeCtx.setLineDash([5, 5]);
-
-        // 绘制直线
-        this.edgeCtx.beginPath();
-        this.edgeCtx.moveTo(sourcePoint.x, sourcePoint.y);
-        this.edgeCtx.lineTo(targetPoint.x, targetPoint.y);
-        this.edgeCtx.stroke();
-
-        // 如果有目标连接桩，高亮显示
-        if (this.connectTargetPort && this.connectTargetNode) {
-            const portPos = this.connectTargetPort.getConnectionPoint(
-                this.connectTargetNode.getPosition().x,
-                this.connectTargetNode.getPosition().y,
-                this.connectTargetNode.getStyle().width,
-                this.connectTargetNode.getStyle().height
-            );
-
-            // 绘制目标点高亮圈
-            this.edgeCtx.beginPath();
-            this.edgeCtx.arc(portPos.x, portPos.y, 8, 0, Math.PI * 2);
-            this.edgeCtx.fillStyle = 'rgba(59, 130, 246, 0.2)';
-            this.edgeCtx.fill();
-            this.edgeCtx.strokeStyle = '#3b82f6';
-            this.edgeCtx.lineWidth = 2;
-            this.edgeCtx.setLineDash([]);
-            this.edgeCtx.stroke();
-        }
-
-        this.edgeCtx.restore();
     }
 
     /**
@@ -1664,7 +1115,7 @@ export class Graph {
         const size = this.options.grid.size ?? 20;
         const color = this.options.grid.color ?? '#e5e7eb';
         const type = this.options.grid.type ?? 'mesh';
-        const { offset, scale } = this.state;
+        const { offset, scale } = this.viewport;
 
         // 计算可见区域在世界坐标系中的范围
         const startX = -offset.x / scale;
@@ -1951,17 +1402,7 @@ export class Graph {
 
             // 如果移除的是选中的节点，触发 unselected 事件并取消选中
             if (this.selectedNode === node) {
-                // 触发 node:unselected 事件
-                this.selectedNode.emit(EVENT_NAMES.NODE_UNSELECTED, {
-                    type: 'node',
-                    target: this.selectedNode,
-                    node: this.selectedNode,
-                });
-                this.emit(EVENT_NAMES.NODE_UNSELECTED, {
-                    type: 'node',
-                    target: this.selectedNode,
-                    node: this.selectedNode,
-                });
+                this.triggerNodeUnselected(this.selectedNode);
                 this.selectedNode = null;
                 this.options.onNodeSelect(null);
             }
@@ -2023,16 +1464,7 @@ export class Graph {
 
             if (triggerUnselectImmediately) {
                 // 立即触发 node:unselected 事件
-                this.selectedNode.emit(EVENT_NAMES.NODE_UNSELECTED, {
-                    type: 'node',
-                    target: this.selectedNode,
-                    node: this.selectedNode,
-                });
-                this.emit(EVENT_NAMES.NODE_UNSELECTED, {
-                    type: 'node',
-                    target: this.selectedNode,
-                    node: this.selectedNode,
-                });
+                this.triggerNodeUnselected(this.selectedNode);
             } else {
                 // 记录待取消选中的节点，延迟到鼠标松开时触发
                 this.nodeToUnselect = this.selectedNode;
@@ -2068,7 +1500,7 @@ export class Graph {
      * 触发 node:unselected 事件（用于延迟触发）
      * @param node - 要触发 unselected 事件的节点
      */
-    private triggerNodeUnselected(node: Node, x: number, y: number, originalEvent: globalThis.MouseEvent): void {
+    private triggerNodeUnselected(node: Node, x?: number, y?: number, originalEvent?: globalThis.MouseEvent): void {
         const eventData = {
             type: 'node',
             target: node,
@@ -2087,16 +1519,7 @@ export class Graph {
     clearNodes(): void {
         // 如果有选中的节点，触发 unselected 事件
         if (this.selectedNode) {
-            this.selectedNode.emit(EVENT_NAMES.NODE_UNSELECTED, {
-                type: 'node',
-                target: this.selectedNode,
-                node: this.selectedNode,
-            });
-            this.emit(EVENT_NAMES.NODE_UNSELECTED, {
-                type: 'node',
-                target: this.selectedNode,
-                node: this.selectedNode,
-            });
+            this.triggerNodeUnselected(this.selectedNode);
             this.selectedNode = null;
         }
         // 清除所有 HTML 节点的 DOM 元素
@@ -2313,53 +1736,12 @@ export class Graph {
         const edgeInfos: EdgeInfo[] = [];
         
         this.edges.forEach((edge) => {
-            const sourceNode = this.nodes.get(edge.getSourceId());
-            const targetNode = this.nodes.get(edge.getTargetId());
-            
-            if (sourceNode && targetNode) {
-                const sourceAnchor = edge.getSourceAnchor();
-                const targetAnchor = edge.getTargetAnchor();
-                
-                // 获取源连接点
-                let sourcePoint: Point;
-                if (sourceAnchor.portId) {
-                    const port = sourceNode.getPort(sourceAnchor.portId);
-                    if (port) {
-                        sourcePoint = port.getConnectionPoint(
-                            sourceNode.getPosition().x,
-                            sourceNode.getPosition().y,
-                            sourceNode.getStyle().width,
-                            sourceNode.getStyle().height
-                        );
-                    } else {
-                        sourcePoint = sourceNode.getAnchorPoint(sourceAnchor.position || 'center');
-                    }
-                } else {
-                    sourcePoint = sourceNode.getAnchorPoint(sourceAnchor.position || 'center');
-                }
-                
-                // 获取目标连接点
-                let targetPoint: Point;
-                if (targetAnchor.portId) {
-                    const port = targetNode.getPort(targetAnchor.portId);
-                    if (port) {
-                        targetPoint = port.getConnectionPoint(
-                            targetNode.getPosition().x,
-                            targetNode.getPosition().y,
-                            targetNode.getStyle().width,
-                            targetNode.getStyle().height
-                        );
-                    } else {
-                        targetPoint = targetNode.getAnchorPoint(targetAnchor.position || 'center');
-                    }
-                } else {
-                    targetPoint = targetNode.getAnchorPoint(targetAnchor.position || 'center');
-                }
-                
+            const endpoints = resolveEdgeEndpoints(edge, this.nodes);
+            if (endpoints) {
                 edgeInfos.push({
                     edge,
-                    sourcePoint,
-                    targetPoint,
+                    sourcePoint: endpoints.sourcePoint,
+                    targetPoint: endpoints.targetPoint,
                     isJumpLine: edge.getType() === EdgeType.JumpLine
                 });
             }
@@ -2378,7 +1760,7 @@ export class Graph {
                 if (otherInfo.isJumpLine) return;
                 
                 // 计算两条线段的交叉点
-                const intersection = this.getLineSegmentIntersection(
+                const intersection = getLineSegmentIntersection(
                     jumpLineInfo.sourcePoint, jumpLineInfo.targetPoint,
                     otherInfo.sourcePoint, otherInfo.targetPoint
                 );
@@ -2390,122 +1772,6 @@ export class Graph {
             
             // 设置跳线位置
             jumpLineInfo.edge.setJumpPoints(intersections);
-        });
-    }
-
-    /**
-     * 计算两条线段的交叉点
-     * @param p1 - 第一条线段起点
-     * @param p2 - 第一条线段终点
-     * @param p3 - 第二条线段起点
-     * @param p4 - 第二条线段终点
-     * @returns 交叉点坐标，如果不相交则返回 null
-     * @private
-     */
-    private getLineSegmentIntersection(
-        p1: Point, p2: Point,
-        p3: Point, p4: Point
-    ): Point | null {
-        const d1x = p2.x - p1.x;
-        const d1y = p2.y - p1.y;
-        const d2x = p4.x - p3.x;
-        const d2y = p4.y - p3.y;
-        
-        const cross = d1x * d2y - d1y * d2x;
-        
-        // 平行或重合
-        if (Math.abs(cross) < 1e-10) {
-            return null;
-        }
-        
-        const dx = p3.x - p1.x;
-        const dy = p3.y - p1.y;
-        
-        const t1 = (dx * d2y - dy * d2x) / cross;
-        const t2 = (dx * d1y - dy * d1x) / cross;
-        
-        // 检查交叉点是否在两条线段上（不包括端点）
-        const epsilon = 0.01;
-        if (t1 > epsilon && t1 < 1 - epsilon && t2 > epsilon && t2 < 1 - epsilon) {
-            return {
-                x: p1.x + t1 * d1x,
-                y: p1.y + t1 * d1y
-            };
-        }
-        
-        return null;
-    }
-
-    /**
-     * 渲染所有边
-     * @protected
-     */
-    protected renderEdges(): void {
-        // 检查是否有带动画的边
-        const hasAnimated = this.checkAnimatedEdges();
-        
-        // 如果有动画边但没有启动动画循环，启动它
-        if (hasAnimated && this.edgeAnimationId === null) {
-            this.startEdgeAnimation();
-        } else if (!hasAnimated && this.edgeAnimationId !== null) {
-            // 如果没有动画边但循环在运行，停止它
-            this.stopEdgeAnimation();
-        }
-
-        // 按 zIndex 排序后绘制（zIndex 小的先绘制，大的在上面）
-        const sortedEdges = Array.from(this.edges.values()).sort((a, b) => a.getZIndex() - b.getZIndex());
-
-        sortedEdges.forEach((edge) => {
-            const sourceNode = this.nodes.get(edge.getSourceId());
-            const targetNode = this.nodes.get(edge.getTargetId());
-
-            if (sourceNode && targetNode) {
-                const sourceAnchor = edge.getSourceAnchor();
-                const targetAnchor = edge.getTargetAnchor();
-
-                // 获取源连接点
-                let sourcePoint: { x: number; y: number };
-                if (sourceAnchor.portId) {
-                    const port = sourceNode.getPort(sourceAnchor.portId);
-                    if (port) {
-                        sourcePoint = port.getConnectionPoint(
-                            sourceNode.getPosition().x,
-                            sourceNode.getPosition().y,
-                            sourceNode.getStyle().width,
-                            sourceNode.getStyle().height
-                        );
-                    } else {
-                        // 连接桩不存在，使用位置
-                        sourcePoint = sourceNode.getAnchorPoint(sourceAnchor.position || 'center');
-                    }
-                } else {
-                    // 没有指定连接桩，使用位置
-                    sourcePoint = sourceNode.getAnchorPoint(sourceAnchor.position || 'center');
-                }
-
-                // 获取目标连接点
-                let targetPoint: { x: number; y: number };
-                if (targetAnchor.portId) {
-                    const port = targetNode.getPort(targetAnchor.portId);
-                    if (port) {
-                        targetPoint = port.getConnectionPoint(
-                            targetNode.getPosition().x,
-                            targetNode.getPosition().y,
-                            targetNode.getStyle().width,
-                            targetNode.getStyle().height
-                        );
-                    } else {
-                        // 连接桩不存在，使用位置
-                        targetPoint = targetNode.getAnchorPoint(targetAnchor.position || 'center');
-                    }
-                } else {
-                    // 没有指定连接桩，使用位置
-                    targetPoint = targetNode.getAnchorPoint(targetAnchor.position || 'center');
-                }
-
-                // 传递时间戳用于动画
-                edge.draw(this.edgeCtx, sourcePoint, targetPoint, this.animationTime);
-            }
         });
     }
 
@@ -2539,49 +1805,10 @@ export class Graph {
 
         // 收集所有边
         this.edges.forEach((edge) => {
-            const sourceNode = this.nodes.get(edge.getSourceId());
-            const targetNode = this.nodes.get(edge.getTargetId());
+            const endpoints = resolveEdgeEndpoints(edge, this.nodes);
 
-            if (sourceNode && targetNode) {
-                const sourceAnchor = edge.getSourceAnchor();
-                const targetAnchor = edge.getTargetAnchor();
-
-                // 获取源连接点
-                let sourcePoint: { x: number; y: number };
-                if (sourceAnchor.portId) {
-                    const port = sourceNode.getPort(sourceAnchor.portId);
-                    if (port) {
-                        sourcePoint = port.getConnectionPoint(
-                            sourceNode.getPosition().x,
-                            sourceNode.getPosition().y,
-                            sourceNode.getStyle().width,
-                            sourceNode.getStyle().height
-                        );
-                    } else {
-                        sourcePoint = sourceNode.getAnchorPoint(sourceAnchor.position || 'center');
-                    }
-                } else {
-                    sourcePoint = sourceNode.getAnchorPoint(sourceAnchor.position || 'center');
-                }
-
-                // 获取目标连接点
-                let targetPoint: { x: number; y: number };
-                if (targetAnchor.portId) {
-                    const port = targetNode.getPort(targetAnchor.portId);
-                    if (port) {
-                        targetPoint = port.getConnectionPoint(
-                            targetNode.getPosition().x,
-                            targetNode.getPosition().y,
-                            targetNode.getStyle().width,
-                            targetNode.getStyle().height
-                        );
-                    } else {
-                        targetPoint = targetNode.getAnchorPoint(targetAnchor.position || 'center');
-                    }
-                } else {
-                    targetPoint = targetNode.getAnchorPoint(targetAnchor.position || 'center');
-                }
-
+            if (endpoints) {
+                const { sourcePoint, targetPoint } = endpoints;
                 drawItems.push({
                     type: 'edge',
                     zIndex: edge.getZIndex(),
@@ -2600,7 +1827,7 @@ export class Graph {
             // 判断是否应该显示连接桩：
             // 1. 如果 portsAlwaysVisible 为 true（默认），始终显示
             // 2. 如果 portsAlwaysVisible 为 false，仅在鼠标悬停在该节点上时显示
-            const shouldShowPorts = node.portsAlwaysVisible || node === this.lastMouseOverNode;
+            const shouldShowPorts = node.portsAlwaysVisible || node === this.eventDispatcher.getHoveredNode();
             
             if (!shouldShowPorts) {
                 return; // 跳过此节点的连接桩绘制
@@ -2659,8 +1886,8 @@ export class Graph {
      */
     getTransform(): { offset: Point; scale: number } {
         return {
-            offset: { ...this.state.offset },
-            scale: this.state.scale,
+            offset: { ...this.viewport.offset },
+            scale: this.viewport.scale,
         };
     }
 
@@ -2668,7 +1895,7 @@ export class Graph {
      * 设置偏移量
      */
     setOffset(offset: Point): void {
-        this.state.offset = { ...offset };
+        this.viewport.offset = { ...offset };
         this.scheduleRender();
     }
 
@@ -2676,7 +1903,7 @@ export class Graph {
      * 设置缩放比例
      */
     setScale(scale: number): void {
-        this.state.scale = Math.max(
+        this.viewport.scale = Math.max(
             this.options.minZoom,
             Math.min(this.options.maxZoom, scale)
         );
@@ -2693,7 +1920,7 @@ export class Graph {
             t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t
     ): Promise<void> {
         return new Promise((resolve) => {
-            const startOffset = { ...this.state.offset };
+            const startOffset = { ...this.viewport.offset };
             const startTime = performance.now();
 
             const animate = (currentTime: number) => {
@@ -2701,9 +1928,9 @@ export class Graph {
                 const progress = Math.min(elapsed / duration, 1);
                 const easedProgress = easing(progress);
 
-                this.state.offset.x =
+                this.viewport.offset.x =
                     startOffset.x + (offset.x - startOffset.x) * easedProgress;
-                this.state.offset.y =
+                this.viewport.offset.y =
                     startOffset.y + (offset.y - startOffset.y) * easedProgress;
 
                 this.render();
@@ -2711,7 +1938,7 @@ export class Graph {
                 if (progress < 1) {
                     requestAnimationFrame(animate);
                 } else {
-                    this.options.onDragEnd({ ...this.state.offset });
+                    this.options.onDragEnd({ ...this.viewport.offset });
                     resolve();
                 }
             };
@@ -2730,7 +1957,7 @@ export class Graph {
             t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t
     ): Promise<void> {
         return new Promise((resolve) => {
-            const startScale = this.state.scale;
+            const startScale = this.viewport.scale;
             const targetScale = Math.max(
                 this.options.minZoom,
                 Math.min(this.options.maxZoom, scale)
@@ -2742,7 +1969,7 @@ export class Graph {
                 const progress = Math.min(elapsed / duration, 1);
                 const easedProgress = easing(progress);
 
-                this.state.scale =
+                this.viewport.scale =
                     startScale + (targetScale - startScale) * easedProgress;
 
                 this.render();
@@ -2750,7 +1977,7 @@ export class Graph {
                 if (progress < 1) {
                     requestAnimationFrame(animate);
                 } else {
-                    this.options.onZoom(this.state.scale, { ...this.state.offset });
+                    this.options.onZoom(this.viewport.scale, { ...this.viewport.offset });
                     resolve();
                 }
             };
@@ -2763,11 +1990,10 @@ export class Graph {
      * 重置视图
      */
     reset(): void {
-        this.state.offset = {
+        this.viewport.reset({
             x: this.options.initialOffsetX,
             y: this.options.initialOffsetY,
-        };
-        this.state.scale = 1;
+        });
         this.render();
     }
 
@@ -2778,14 +2004,14 @@ export class Graph {
     resetToCenter(): void {
         const { width, height } = this.canvas.getBoundingClientRect();
         
-        this.state.offset = {
+        this.viewport.offset = {
             x: width / 2,
             y: height / 2,
         };
         this.render();
         
         // 触发拖拽完成回调
-        this.options.onDragEnd({ ...this.state.offset });
+        this.options.onDragEnd({ ...this.viewport.offset });
     }
 
     /**
@@ -2795,7 +2021,7 @@ export class Graph {
     zoomIn(factor: number = 1.1): void {
         const newScale = Math.min(
             this.options.maxZoom,
-            this.state.scale * factor
+            this.viewport.scale * factor
         );
         this.setScale(newScale);
     }
@@ -2807,7 +2033,7 @@ export class Graph {
     zoomOut(factor: number = 0.9): void {
         const newScale = Math.max(
             this.options.minZoom,
-            this.state.scale * factor
+            this.viewport.scale * factor
         );
         this.setScale(newScale);
     }
@@ -2817,7 +2043,7 @@ export class Graph {
      * @returns 当前缩放比例
      */
     getZoom(): number {
-        return this.state.scale;
+        return this.viewport.scale;
     }
 
     /**
@@ -2889,8 +2115,8 @@ export class Graph {
         const offsetY =
             (height - contentBounds.height * scale) / 2 - contentBounds.y * scale;
 
-        this.state.scale = scale;
-        this.state.offset = { x: offsetX, y: offsetY };
+        this.viewport.scale = scale;
+        this.viewport.offset = { x: offsetX, y: offsetY };
         this.render();
     }
 
@@ -2898,20 +2124,28 @@ export class Graph {
      * 将屏幕坐标转换为世界坐标
      */
     screenToWorld(screenPoint: Point): Point {
-        return {
-            x: (screenPoint.x - this.state.offset.x) / this.state.scale,
-            y: (screenPoint.y - this.state.offset.y) / this.state.scale,
-        };
+        return this.viewport.screenToWorld(screenPoint);
+    }
+
+    /**
+     * 将鼠标事件位置转换为画布屏幕坐标（相对画布左上角）
+     */
+    private eventToScreenPoint(e: { clientX: number; clientY: number }): Point {
+        return this.viewport.eventToScreenPoint(this.canvas, e);
+    }
+
+    /**
+     * 将鼠标事件位置转换为世界坐标
+     */
+    private eventToWorldPoint(e: { clientX: number; clientY: number }): Point {
+        return this.viewport.eventToWorldPoint(this.canvas, e);
     }
 
     /**
      * 将世界坐标转换为屏幕坐标
      */
     worldToScreen(worldPoint: Point): Point {
-        return {
-            x: worldPoint.x * this.state.scale + this.state.offset.x,
-            y: worldPoint.y * this.state.scale + this.state.offset.y,
-        };
+        return this.viewport.worldToScreen(worldPoint);
     }
 
     /**
@@ -2976,49 +2210,10 @@ export class Graph {
         
         // 绘制边（需要计算端点）
         this.edges.forEach((edge) => {
-            const sourceAnchor = edge.getSource();
-            const targetAnchor = edge.getTarget();
-            const sourceNode = this.nodes.get(sourceAnchor.nodeId);
-            const targetNode = this.nodes.get(targetAnchor.nodeId);
-            
-            if (!sourceNode || !targetNode) return;
-            
-            // 计算起点
-            let sourcePoint: { x: number; y: number };
-            if (sourceAnchor.portId) {
-                const port = sourceNode.getPort(sourceAnchor.portId);
-                if (port) {
-                    sourcePoint = port.getConnectionPoint(
-                        sourceNode.getPosition().x,
-                        sourceNode.getPosition().y,
-                        sourceNode.getStyle().width,
-                        sourceNode.getStyle().height
-                    );
-                } else {
-                    sourcePoint = sourceNode.getAnchorPoint(sourceAnchor.position || 'center');
-                }
-            } else {
-                sourcePoint = sourceNode.getAnchorPoint(sourceAnchor.position || 'center');
-            }
-            
-            // 计算终点
-            let targetPoint: { x: number; y: number };
-            if (targetAnchor.portId) {
-                const port = targetNode.getPort(targetAnchor.portId);
-                if (port) {
-                    targetPoint = port.getConnectionPoint(
-                        targetNode.getPosition().x,
-                        targetNode.getPosition().y,
-                        targetNode.getStyle().width,
-                        targetNode.getStyle().height
-                    );
-                } else {
-                    targetPoint = targetNode.getAnchorPoint(targetAnchor.position || 'center');
-                }
-            } else {
-                targetPoint = targetNode.getAnchorPoint(targetAnchor.position || 'center');
-            }
-            
+            const endpoints = resolveEdgeEndpoints(edge, this.nodes);
+            if (!endpoints) return;
+
+            const { sourcePoint, targetPoint } = endpoints;
             drawItems.push({
                 type: 'edge',
                 zIndex: edge.getZIndex(),
@@ -3082,56 +2277,14 @@ export class Graph {
         
         // 考虑边的端点位置
         this.edges.forEach((edge) => {
-            const sourceAnchor = edge.getSource();
-            const targetAnchor = edge.getTarget();
-            const sourceNode = this.nodes.get(sourceAnchor.nodeId);
-            const targetNode = this.nodes.get(targetAnchor.nodeId);
-            
-            if (sourceNode) {
-                let sourcePoint: { x: number; y: number };
-                if (sourceAnchor.portId) {
-                    const port = sourceNode.getPort(sourceAnchor.portId);
-                    if (port) {
-                        sourcePoint = port.getConnectionPoint(
-                            sourceNode.getPosition().x,
-                            sourceNode.getPosition().y,
-                            sourceNode.getStyle().width,
-                            sourceNode.getStyle().height
-                        );
-                    } else {
-                        sourcePoint = sourceNode.getAnchorPoint(sourceAnchor.position || 'center');
-                    }
-                } else {
-                    sourcePoint = sourceNode.getAnchorPoint(sourceAnchor.position || 'center');
-                }
-                minX = Math.min(minX, sourcePoint.x);
-                minY = Math.min(minY, sourcePoint.y);
-                maxX = Math.max(maxX, sourcePoint.x);
-                maxY = Math.max(maxY, sourcePoint.y);
-            }
-            
-            if (targetNode) {
-                let targetPoint: { x: number; y: number };
-                if (targetAnchor.portId) {
-                    const port = targetNode.getPort(targetAnchor.portId);
-                    if (port) {
-                        targetPoint = port.getConnectionPoint(
-                            targetNode.getPosition().x,
-                            targetNode.getPosition().y,
-                            targetNode.getStyle().width,
-                            targetNode.getStyle().height
-                        );
-                    } else {
-                        targetPoint = targetNode.getAnchorPoint(targetAnchor.position || 'center');
-                    }
-                } else {
-                    targetPoint = targetNode.getAnchorPoint(targetAnchor.position || 'center');
-                }
-                minX = Math.min(minX, targetPoint.x);
-                minY = Math.min(minY, targetPoint.y);
-                maxX = Math.max(maxX, targetPoint.x);
-                maxY = Math.max(maxY, targetPoint.y);
-            }
+            const endpoints = resolveEdgeEndpoints(edge, this.nodes);
+            if (!endpoints) return;
+
+            const { sourcePoint, targetPoint } = endpoints;
+            minX = Math.min(minX, sourcePoint.x, targetPoint.x);
+            minY = Math.min(minY, sourcePoint.y, targetPoint.y);
+            maxX = Math.max(maxX, sourcePoint.x, targetPoint.x);
+            maxY = Math.max(maxY, sourcePoint.y, targetPoint.y);
         });
         
         // 应用边距
@@ -3226,11 +2379,25 @@ export class Graph {
      * 销毁组件
      */
     destroy(): void {
-        // 取消正在进行的动画
+        // 停止连线流动动画的总循环（否则 destroy 后 rAF 仍每帧空转，泄漏且耗 CPU）
+        this.stopEdgeAnimation();
+
+        // 取消正在进行的渲染调度
         if (this.rafId !== null) {
             cancelAnimationFrame(this.rafId);
             this.rafId = null;
         }
+
+        // 卸载全部插件（清理各自的 DOM、document/window 级监听、键盘监听等）
+        // 需在移除画布元素之前执行，插件卸载时仍要访问 canvas / container
+        for (const plugin of [...this.plugins.values()]) {
+            try {
+                plugin.uninstall();
+            } catch {
+                // 忽略单个插件的清理失败，保证其余插件与画布继续清理
+            }
+        }
+        this.plugins.clear();
 
         // 解绑事件（包含 ResizeObserver 的清理）
         this.unbindEvents();
@@ -3304,147 +2471,96 @@ export class Graph {
     }
 
     /**
-     * 创建基础鼠标事件对象
+     * 触发 Graph 级别事件
+     * @internal 供 GraphEventDispatcher 调用
      */
-    private createMouseEvent(
-        originalEvent: globalThis.MouseEvent | globalThis.WheelEvent,
-        target: any,
-        extraData: Partial<BaseEvent> = {}
-    ): MouseEvent {
-        const rect = this.canvas.getBoundingClientRect();
-        const screenX = originalEvent.clientX - rect.left;
-        const screenY = originalEvent.clientY - rect.top;
-        const worldPoint = this.screenToWorld({ x: screenX, y: screenY });
-
-        return {
-            type: 'mouse',
-            target,
-            originalEvent,
-            x: worldPoint.x,
-            y: worldPoint.y,
-            clientX: originalEvent.clientX,
-            clientY: originalEvent.clientY,
-            ctrlKey: originalEvent.ctrlKey,
-            shiftKey: originalEvent.shiftKey,
-            altKey: originalEvent.altKey,
-            metaKey: originalEvent.metaKey,
-            button: originalEvent.button,
-            stopPropagation: () => originalEvent.stopPropagation(),
-            preventDefault: () => originalEvent.preventDefault(),
-            ...extraData,
-        };
+    emitGraphEvent(eventName: string, eventData: any): boolean {
+        return this.emit(eventName, eventData);
     }
 
     /**
-     * 分发鼠标事件到对应的元素
+     * 立即渲染画布（绕过 requestAnimationFrame 调度）
+     * @internal 供 ResizeManager 在 resize 过程中实时更新手柄位置时调用
      */
-    private dispatchMouseEvent(
-        eventType: string,
-        originalEvent: globalThis.MouseEvent
-    ): void {
-        const rect = this.canvas.getBoundingClientRect();
-        const screenPoint: Point = {
-            x: originalEvent.clientX - rect.left,
-            y: originalEvent.clientY - rect.top,
-        };
-        const worldPoint = this.screenToWorld(screenPoint);
-
-        // 调用带目标检测的版本
-        this.dispatchMouseEventWithTarget(eventType, originalEvent, worldPoint, null, null);
+    renderNow(): void {
+        this.render();
     }
 
     /**
-     * 分发鼠标事件（带已知目标，避免重复遍历）
+     * 执行连接验证回调
+     * @internal 供 ConnectionManager 调用
      */
-    private dispatchMouseEventWithTarget(
-        eventType: string,
-        originalEvent: globalThis.MouseEvent,
-        worldPoint: Point,
-        knownNode: Node | null,
-        knownPort: Port | null
-    ): void {
-        // 创建基础事件数据
-        const baseEventData = this.createMouseEvent(originalEvent, null);
+    runValidateConnection(context: ConnectionValidateContext): boolean {
+        return this.options.validateConnection(context);
+    }
 
-        // 如果提供了已知的节点和连接桩，直接使用
-        if (knownPort && knownNode) {
-            const portEventData = {
-                ...baseEventData,
-                target: knownPort,
-                port: knownPort,
-                portId: knownPort.getId(),
-                nodeId: knownNode.getId(),
-            };
-            knownPort.triggerPortEvent(eventType, originalEvent);
-            this.emit(EVENT_NAMES[`PORT_${eventType.toUpperCase()}` as keyof typeof EVENT_NAMES], portEventData);
-            return;
+    /**
+     * 开关所有 HTML 节点元素的鼠标事件捕获
+     * 连接拖拽时禁用（none），使鼠标事件能穿透到 overlay 层；结束后恢复（auto）
+     * @internal 供 ConnectionManager 调用
+     */
+    setHtmlNodesPointerEvents(enabled: boolean): void {
+        this.htmlNodeElements.forEach((element) => {
+            element.style.pointerEvents = enabled ? 'auto' : 'none';
+        });
+    }
+
+    /**
+     * 获取视口状态对象（可直接修改 offset/scale）
+     * @internal 供 DragManager 调用
+     */
+    getViewportState(): Viewport {
+        return this.viewport;
+    }
+
+    /**
+     * 获取画布拖拽时的光标样式
+     * @internal 供 DragManager 调用
+     */
+    getDraggingCursor(): string {
+        return this.options.draggingCursor;
+    }
+
+    /**
+     * 触发画布拖拽完成回调（onDragEnd），载荷为当前视口偏移的副本
+     * @internal 供 DragManager 调用
+     */
+    notifyDragEnd(): void {
+        this.options.onDragEnd({ ...this.viewport.offset });
+    }
+
+    /**
+     * 触发延迟的 node:unselected 事件（如果存在待取消选中的节点）
+     * @internal 供 DragManager 在节点拖拽结束时调用
+     */
+    flushPendingNodeUnselected(x?: number, y?: number, originalEvent?: globalThis.MouseEvent): void {
+        if (this.nodeToUnselect) {
+            this.triggerNodeUnselected(this.nodeToUnselect, x, y, originalEvent);
+            this.nodeToUnselect = null;
         }
+    }
 
-        if (knownNode) {
-            const nodeEventData = {
-                ...baseEventData,
-                target: knownNode,
-                node: knownNode,
-            };
-            knownNode.triggerNodeEvent(eventType, originalEvent, { x: worldPoint.x, y: worldPoint.y });
-            this.emit(EVENT_NAMES[`NODE_${eventType.toUpperCase()}` as keyof typeof EVENT_NAMES], nodeEventData);
-            return;
-        }
+    /**
+     * 是否存在悬停节点（用于拖拽结束后恢复光标）
+     * @internal 供 DragManager 调用
+     */
+    hasHoveredNode(): boolean {
+        return this.hoveredNode !== null;
+    }
 
-        // 没有已知目标，执行完整检测
-        // 1. 检查节点和连接桩（一次遍历，优先级：连接桩 > 节点主体）
-        const nodes = this.getAllNodes();
-        for (let i = nodes.length - 1; i >= 0; i--) {
-            const node = nodes[i];
-            
-            // 先检查连接桩
-            const port = node.getPortAtPoint(worldPoint);
-            if (port) {
-                const portEventData = {
-                    ...baseEventData,
-                    target: port,
-                    port,
-                    portId: port.getId(),
-                    nodeId: node.getId(),
-                };
-                port.triggerPortEvent(eventType, originalEvent);
-                this.emit(EVENT_NAMES[`PORT_${eventType.toUpperCase()}` as keyof typeof EVENT_NAMES], portEventData);
-                return;
-            }
-            
-            // 再检查节点主体
-            if (node.containsPoint(worldPoint)) {
-                const nodeEventData = {
-                    ...baseEventData,
-                    target: node,
-                    node,
-                };
-                node.triggerNodeEvent(eventType, originalEvent, { x: worldPoint.x, y: worldPoint.y });
-                this.emit(EVENT_NAMES[`NODE_${eventType.toUpperCase()}` as keyof typeof EVENT_NAMES], nodeEventData);
-                return;
-            }
-        }
-
-        // 2. 检查边
-        const edges = this.getAllEdges();
-        for (let i = edges.length - 1; i >= 0; i--) {
-            const edge = edges[i];
-            if (edge.containsPoint(worldPoint)) {
-                const edgeEventData = {
-                    ...baseEventData,
-                    target: edge,
-                    edge,
-                    sourceId: edge.getSourceId(),
-                    targetId: edge.getTargetId(),
-                };
-                edge.triggerEdgeEvent(eventType, originalEvent, { x: worldPoint.x, y: worldPoint.y });
-                this.emit(EVENT_NAMES[`EDGE_${eventType.toUpperCase()}` as keyof typeof EVENT_NAMES], edgeEventData);
-                return;
-            }
-        }
-
-        // 3. 空白区域 - 触发 blank 事件并取消选中
-        const blankEventName = this.getBlankEventName(eventType);
+    /**
+     * 处理空白区域事件：触发 blank:* 事件，并在需要时取消选中
+     * @internal 供 GraphEventDispatcher 调用
+     */
+    dispatchBlankAreaEvent(eventType: string, baseEventData: MouseEvent, worldPoint: Point): void {
+        const blankEventMap: Record<string, string> = {
+            click: EVENT_NAMES.BLANK_CLICK,
+            contextmenu: EVENT_NAMES.BLANK_CONTEXTMENU,
+            mousedown: EVENT_NAMES.BLANK_MOUSEDOWN,
+            mousemove: EVENT_NAMES.BLANK_MOUSEMOVE,
+            mouseup: EVENT_NAMES.BLANK_MOUSEUP,
+        };
+        const blankEventName = blankEventMap[eventType] || null;
         if (blankEventName) {
             const blankEventData = {
                 ...baseEventData,
@@ -3487,160 +2603,6 @@ export class Graph {
                 this.scheduleRender();
             }
         }
-    }
-
-    /**
-     * 处理鼠标进入/离开事件
-     */
-    private handleMouseEnterLeave(
-        originalEvent: globalThis.MouseEvent,
-        _isEnter: boolean
-    ): void {
-        const rect = this.canvas.getBoundingClientRect();
-        const screenPoint: Point = {
-            x: originalEvent.clientX - rect.left,
-            y: originalEvent.clientY - rect.top,
-        };
-        const worldPoint = this.screenToWorld(screenPoint);
-        const baseEventData = this.createMouseEvent(originalEvent, null);
-
-        // 检查当前鼠标下的元素
-        let currentNode: Node | null = null;
-        let currentEdge: Edge | null = null;
-        let currentPort: Port | null = null;
-
-        const nodes = this.getAllNodes();
-        for (let i = nodes.length - 1; i >= 0; i--) {
-            const node = nodes[i];
-            
-            // 检查连接桩
-            const port = node.getPortAtPoint(worldPoint);
-            if (port) {
-                currentPort = port;
-                currentNode = node;
-                break;
-            }
-            
-            // 检查节点
-            if (node.containsPoint(worldPoint)) {
-                currentNode = node;
-                break;
-            }
-        }
-
-        // 如果没有在节点上，检查边
-        if (!currentNode) {
-            const edges = this.getAllEdges();
-            for (let i = edges.length - 1; i >= 0; i--) {
-                if (edges[i].containsPoint(worldPoint)) {
-                    currentEdge = edges[i];
-                    break;
-                }
-            }
-        }
-
-        // 处理 Port 的 mouseenter/mouseleave
-        if (currentPort !== this.lastMouseOverPort) {
-            // mouseleave port
-            if (this.lastMouseOverPort) {
-                const eventData = {
-                    ...baseEventData,
-                    target: this.lastMouseOverPort,
-                    port: this.lastMouseOverPort,
-                    portId: this.lastMouseOverPort.getId(),
-                    nodeId: this.lastMouseOverPort.getNodeId(),
-                };
-                this.lastMouseOverPort.emit(EVENT_NAMES.PORT_MOUSELEAVE, eventData);
-                this.emit(EVENT_NAMES.PORT_MOUSELEAVE, eventData);
-                // 恢复光标：如果仍在节点上则显示 grab，否则显示 default
-                this.canvas.style.cursor = currentNode ? 'grab' : 'default';
-            }
-            // mouseenter port
-            if (currentPort) {
-                const eventData = {
-                    ...baseEventData,
-                    target: currentPort,
-                    port: currentPort,
-                    portId: currentPort.getId(),
-                    nodeId: currentNode?.getId() || '',
-                };
-                currentPort.emit(EVENT_NAMES.PORT_MOUSEENTER, eventData);
-                this.emit(EVENT_NAMES.PORT_MOUSEENTER, eventData);
-                // 设置为十字光标
-                this.canvas.style.cursor = 'crosshair';
-            }
-            this.lastMouseOverPort = currentPort;
-        }
-
-        // 处理 Node 的 mouseenter/mouseleave
-        if (currentNode !== this.lastMouseOverNode) {
-            // 鼠标离开上一个节点（无论是从节点移到空白，还是从节点A移到节点B，或者鼠标离开canvas）
-            if (this.lastMouseOverNode) {
-                // 使用 triggerNodeEvent 确保同时触发 cell:mouseleave 和 node:mouseleave
-                this.lastMouseOverNode.triggerNodeEvent('mouseleave', originalEvent, { x: worldPoint.x, y: worldPoint.y });
-                const eventData = { ...baseEventData, target: this.lastMouseOverNode, node: this.lastMouseOverNode };
-                this.emit(EVENT_NAMES.NODE_MOUSELEAVE, eventData);
-                // 恢复默认光标（如果不在 Port 上）
-                if (!currentPort) {
-                    this.canvas.style.cursor = 'default';
-                }
-                // 如果节点设置了 portsAlwaysVisible 为 false，鼠标离开时需要重新渲染以隐藏连接桩
-                if (!this.lastMouseOverNode.portsAlwaysVisible) {
-                    this.scheduleRender();
-                }
-            }
-            // 鼠标进入新节点
-            if (currentNode) {
-                // 使用 triggerNodeEvent 确保同时触发 cell:mouseenter 和 node:mouseenter
-                currentNode.triggerNodeEvent('mouseenter', originalEvent, { x: worldPoint.x, y: worldPoint.y });
-                const eventData = { ...baseEventData, target: currentNode, node: currentNode };
-                this.emit(EVENT_NAMES.NODE_MOUSEENTER, eventData);
-                // 设置为抓取光标（如果不在 Port 上）
-                if (!currentPort) {
-                    this.canvas.style.cursor = 'grab';
-                }
-                // 如果节点设置了 portsAlwaysVisible 为 false，鼠标进入时需要重新渲染以显示连接桩
-                if (!currentNode.portsAlwaysVisible) {
-                    this.scheduleRender();
-                }
-            }
-            this.lastMouseOverNode = currentNode;
-        }
-
-        // 处理 Edge 的 mouseenter/mouseleave
-        if (currentEdge !== this.lastMouseOverEdge) {
-            // mouseleave edge
-            if (this.lastMouseOverEdge) {
-                const eventData = { ...baseEventData, target: this.lastMouseOverEdge, edge: this.lastMouseOverEdge };
-                this.lastMouseOverEdge.emit(EVENT_NAMES.EDGE_MOUSELEAVE, eventData);
-                this.emit(EVENT_NAMES.EDGE_MOUSELEAVE, eventData);
-                // 恢复默认光标
-                this.canvas.style.cursor = 'default';
-            }
-            // mouseenter edge
-            if (currentEdge) {
-                const eventData = { ...baseEventData, target: currentEdge, edge: currentEdge };
-                currentEdge.emit(EVENT_NAMES.EDGE_MOUSEENTER, eventData);
-                this.emit(EVENT_NAMES.EDGE_MOUSEENTER, eventData);
-                // 设置为移动光标，表示可以移动边
-                this.canvas.style.cursor = 'move';
-            }
-            this.lastMouseOverEdge = currentEdge;
-        }
-    }
-
-    /**
-     * 检查事件名称映射
-     */
-    private getBlankEventName(eventType: string): string | null {
-        const map: Record<string, string> = {
-            click: EVENT_NAMES.BLANK_CLICK,
-            contextmenu: EVENT_NAMES.BLANK_CONTEXTMENU,
-            mousedown: EVENT_NAMES.BLANK_MOUSEDOWN,
-            mousemove: EVENT_NAMES.BLANK_MOUSEMOVE,
-            mouseup: EVENT_NAMES.BLANK_MOUSEUP,
-        };
-        return map[eventType] || null;
     }
 
     // ==================== 插件系统 ====================
@@ -3693,35 +2655,30 @@ export class Graph {
         return this.plugins.has(pluginName);
     }
 
-    // ==================== DynamicHeightNode 行悬停处理 ====================
+    // ==================== 行级悬停节点处理 ====================
 
-    private hoveredDynamicNode: DynamicHeightNode | null = null;
+    private hoveredDynamicNode: (Node & RowHoverable) | null = null;
     private lastHoveredRowIndex: number = -1;
 
     /**
-     * 处理 DynamicHeightNode 的行悬停状态
+     * 处理支持行级悬停的节点（如 DynamicHeightNode）的悬停状态
      */
     private handleDynamicNodeRowHover(e: globalThis.MouseEvent): void {
-        const rect = this.canvas.getBoundingClientRect();
-        const screenPoint: Point = {
-            x: e.clientX - rect.left,
-            y: e.clientY - rect.top,
-        };
-        const worldPoint = this.screenToWorld(screenPoint);
+        const worldPoint = this.eventToWorldPoint(e);
 
-        // 查找鼠标下的 DynamicHeightNode
-        let hoveredNode: DynamicHeightNode | null = null;
+        // 查找鼠标下的行级悬停节点
+        let hoveredNode: (Node & RowHoverable) | null = null;
         const nodes = this.getAllNodes();
         
         for (let i = nodes.length - 1; i >= 0; i--) {
             const node = nodes[i];
-            if (node instanceof DynamicHeightNode && node.containsPoint(worldPoint)) {
+            if (isRowHoverable(node) && node.containsPoint(worldPoint)) {
                 hoveredNode = node;
                 break;
             }
         }
 
-        // 如果离开了之前的 DynamicHeightNode，清除其行悬停状态
+        // 如果离开了之前的节点，清除其行悬停状态
         if (this.hoveredDynamicNode && this.hoveredDynamicNode !== hoveredNode) {
             this.hoveredDynamicNode.setHoveredRow(-1);
             this.scheduleRender();
@@ -3729,7 +2686,7 @@ export class Graph {
 
         this.hoveredDynamicNode = hoveredNode;
 
-        // 如果在 DynamicHeightNode 上，计算悬停的行
+        // 如果在节点上，计算悬停的行
         if (hoveredNode) {
             const rowIndex = hoveredNode.getRowIndexAtPoint(worldPoint);
             if (rowIndex !== this.lastHoveredRowIndex) {

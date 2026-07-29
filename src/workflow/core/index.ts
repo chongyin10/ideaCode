@@ -14,9 +14,22 @@ export {
     type ConnectionValidator,
 } from './Graph';
 
+// 视口
+export { Viewport } from './Viewport';
+
+// 事件分发器
+export { GraphEventDispatcher } from './GraphEventDispatcher';
+
+// 鼠标交互状态机
+export { ConnectionManager } from './interactions/ConnectionManager';
+export { ResizeManager } from './interactions/ResizeManager';
+export { DragManager } from './interactions/DragManager';
+
 // 节点
 export {
   Node,
+  isRowHoverable,
+  type RowHoverable,
   type NodeOptions,
   type NodeStyle,
   type NodePosition,

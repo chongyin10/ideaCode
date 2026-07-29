@@ -11,64 +11,55 @@ import {
   Dnd,
   Tools,
 } from '../../workflow';
-import { setWorkflowRuntime } from '../../services/workflowRuntime';
+import { setWorkflowRuntime, getWorkflowInstance, setWorkflowInstance, type WorkflowInstance } from '../../services/workflowRuntime';
+import WorkflowPanel from '../WorkflowPanel';
 import {
-  getWorkflowStyleConfig,
-  subscribeWorkflowStyleConfig,
+  getEffectiveConfig,
+  subscribeEffectiveConfig,
   type WorkflowStyleConfig,
 } from '../../services/workflowStyleConfig';
+import {
+  addDefaultPorts,
+  applyCanvasBasics,
+  applyEdgeConfig,
+  applyStyleConfig,
+} from '../../services/workflowStyleApply';
 import './WorkflowCanvas.css';
 
-/** 默认连接桩方位：上下左右各一个 */
-const DEFAULT_PORT_POSITIONS = ['top', 'right', 'bottom', 'left'] as const;
-
-/** 为节点挂载默认的 4 向连接桩 */
-function addDefaultPorts(node: Node): void {
-  const { portColor } = getWorkflowStyleConfig();
-  for (const position of DEFAULT_PORT_POSITIONS) {
-    node.addPort({
-      id: `${node.getId()}-port-${position}`,
-      position,
-      style: { fillColor: portColor },
-    });
-  }
+/** 画布级配置：背景 / 网格 / 插件开关（插件实例经闭包传入） */
+interface CanvasPlugins {
+  snapline: Snapline;
+  selection: Selection;
+  clipboard: Clipboard;
+  history: History;
+  tools: Tools;
+  minimap: MiniMap;
 }
 
-/** 把样式配置应用到画布上已有的全部节点 / 连线 / 连接桩 */
-function applyStyleConfig(graph: Graph, config: WorkflowStyleConfig): void {
-  for (const node of graph.getAllNodes()) {
-    node.updateStyle({
-      borderColor: config.nodeBorderColor,
-      backgroundColor: config.nodeBackgroundColor,
-    });
-    for (const port of node.getAllPorts()) {
-      port.updateStyle({ fillColor: config.portColor });
-    }
-  }
-  for (const edge of graph.getAllEdges()) {
-    edge.setType(config.edgeType);
-    edge.updateStyle({ stroke: config.edgeColor, strokeWidth: config.edgeWidth });
-  }
+function applyCanvasConfig(
+  graph: Graph,
+  host: HTMLElement,
+  plugins: CanvasPlugins,
+  config: WorkflowStyleConfig
+): void {
+  applyCanvasBasics(graph, host, config);
+  // 插件开关
+  if (config.snaplineEnabled) plugins.snapline.enable(); else plugins.snapline.disable();
+  if (config.selectionEnabled) plugins.selection.enable(); else plugins.selection.disable();
+  if (config.clipboardEnabled) plugins.clipboard.enable(); else plugins.clipboard.disable();
+  if (config.historyEnabled) plugins.history.enable(); else plugins.history.disable();
+  if (config.toolsEnabled) plugins.tools.enable(); else plugins.tools.disable();
+  if (config.minimapEnabled) plugins.minimap.show(); else plugins.minimap.hide();
 }
 
 /**
- * 持久化的画布实例与宿主 DOM（模块级单例）。
- *
- * tab 切换会导致本组件卸载重挂载，若每次挂载都新建 Graph，
- * 画布上的节点/连线将全部丢失。因此 Graph 只创建一次，
- * 组件挂载时仅把宿主 DOM 重新挂到容器上，卸载时不销毁，
- * 节点数据、撤销历史、小地图、工具栏全部跨 tab 切换保留。
+ * 创建某个工作流 scope 的 Graph 实例（每个画布 tab 一个实例，数据相互独立）。
+ * 实例缓存在 workflowRuntime 注册表中，tab 切换只 reparent 宿主 DOM，不销毁。
  */
-let persistentHost: HTMLDivElement | null = null;
-let persistentGraph: Graph | null = null;
-let persistentDnd: Dnd | null = null;
-
-/** 创建持久化的 Graph 实例（仅首次挂载时执行一次） */
-function createPersistentGraph(parent: HTMLElement): void {
+function createGraphInstance(scope: string, parent: HTMLElement): WorkflowInstance {
   const host = document.createElement('div');
   host.className = 'workflow-canvas__host';
   parent.appendChild(host);
-  persistentHost = host;
 
   const graph = new Graph({
     container: host,
@@ -113,83 +104,102 @@ function createPersistentGraph(parent: HTMLElement): void {
   });
 
   // 撤销重做需先于 Tools 安装（Tools 安装时查找 History 插件）
-  graph.use(new History({ enabled: true, keyboardShortcuts: true }));
-  graph.use(new Snapline({ enabled: true }));
-  graph.use(new Selection({ enabled: true }));
-  graph.use(new Clipboard({ enabled: true }));
-  graph.use(new MiniMap({ enabled: true, position: 'bottom-right' }));
+  const history = new History({ enabled: true, keyboardShortcuts: true });
+  const snapline = new Snapline({ enabled: true });
+  const selection = new Selection({ enabled: true });
+  const clipboard = new Clipboard({ enabled: true });
+  const minimap = new MiniMap({ enabled: true, position: 'bottom-right' });
+  const tools = new Tools({
+    enabled: true,
+    position: 'top-right',
+    showSearch: false,
+    backgroundColor: '#252526',
+    borderColor: '#3c3c3c',
+  });
+  graph.use(history);
+  graph.use(snapline);
+  graph.use(selection);
+  graph.use(clipboard);
+  graph.use(minimap);
+  graph.use(tools);
 
-  // 工具栏：缩放 / 拖拽切换 / 撤销重做（暗色主题）
-  graph.use(
-    new Tools({
-      enabled: true,
-      position: 'top-right',
-      showSearch: false,
-      backgroundColor: '#252526',
-      borderColor: '#3c3c3c',
-    })
-  );
-
-  // 拖拽插件：接收左侧物料面板拖入的节点
+  // 拖拽插件：接收物料面板拖入的节点
   const dnd = new Dnd({
     enabled: true,
     onDrop: (e) => {
       // 接管节点创建：统一挂载默认 4 向 Port，返回 false 阻止默认创建
       if (e.nodeOptions) {
-        addDefaultPorts(e.target.addNode(e.nodeOptions));
+        addDefaultPorts(e.target.addNode(e.nodeOptions), getEffectiveConfig(scope));
       }
       return false;
     },
   });
   graph.use(dnd);
 
+  const plugins: CanvasPlugins = { snapline, selection, clipboard, history, tools, minimap };
+
   // ── 样式配置接线（随 Graph 生命周期只注册一次）──
-  // 1. 新连接的边：创建时应用当前的连线类型 / 颜色 / 宽度
+  // 1. 新连接的边：创建时应用当前的有效连线样式
   graph.on('edge:add', (data: { edge?: Edge }) => {
-    if (!data.edge) return;
-    const config = getWorkflowStyleConfig();
-    data.edge.setType(config.edgeType);
-    data.edge.updateStyle({ stroke: config.edgeColor, strokeWidth: config.edgeWidth });
+    if (data.edge) applyEdgeConfig(data.edge, getEffectiveConfig(scope));
   });
-  // 2. 已有图元：应用一次当前配置，并订阅「样式配置」的后续修改
-  applyStyleConfig(graph, getWorkflowStyleConfig());
-  subscribeWorkflowStyleConfig((config) => {
+  // 2. 已有图元 + 画布 + 插件：应用一次当前配置，并订阅后续修改
+  const initialConfig = getEffectiveConfig(scope);
+  applyStyleConfig(graph, initialConfig);
+  applyCanvasConfig(graph, host, plugins, initialConfig);
+  const unsubscribeStyle = subscribeEffectiveConfig(scope, (config) => {
     applyStyleConfig(graph, config);
+    applyCanvasConfig(graph, host, plugins, config);
   });
 
-  persistentGraph = graph;
-  persistentDnd = dnd;
+  return { graph, dnd, host, dispose: unsubscribeStyle };
 }
 
 /**
  * 工作流画布（主编辑区 tab 内容）
  *
- * Graph 实例为模块级单例（见上），本组件只负责把宿主 DOM
- * 挂到当前容器，并把实例注册到 workflowRuntime 供左侧面板使用。
+ * 每个工作流 tab 一个独立 Graph 实例（注册在 workflowRuntime），
+ * 本组件只负责把宿主 DOM 挂到当前容器，并把实例注册为当前运行时，
+ * 供画布内嵌的物料面板使用。物料面板（WorkflowPanel）以浮动卡片
+ * 形式内嵌在画布内部。
  */
-const WorkflowCanvas = () => {
+const WorkflowCanvas = ({ tabId }: { tabId: string }) => {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
-    if (!persistentGraph) {
-      createPersistentGraph(container);
-    } else if (persistentHost && persistentHost.parentElement !== container) {
+    let instance = getWorkflowInstance(tabId);
+    if (!instance) {
+      instance = createGraphInstance(tabId, container);
+      setWorkflowInstance(tabId, instance);
+    } else if (instance.host.parentElement !== container) {
       // 重挂载（tab 切换回来）：把已有画布宿主 DOM 挂到新容器
-      container.appendChild(persistentHost);
+      container.appendChild(instance.host);
+    }
+    const current = instance;
+
+    setWorkflowRuntime({ graph: current.graph, dnd: current.dnd, scope: tabId });
+
+    // tab 隐藏期间 cleanup 会停止连线流动动画的总循环；
+    // 重新挂载时按当前配置恢复，避免未挂载的画布在后台每帧空转
+    if (getEffectiveConfig(tabId).edgeAnimated) {
+      current.graph.startEdgeAnimation();
     }
 
-    setWorkflowRuntime({ graph: persistentGraph!, dnd: persistentDnd! });
-
-    // 卸载时只摘除运行时引用，不销毁 Graph（数据跨 tab 切换保留）
+    // 卸载时只摘除运行时引用并暂停动画，不销毁 Graph（数据跨 tab 切换保留）
     return () => {
+      current.graph.stopEdgeAnimation();
       setWorkflowRuntime(null);
     };
-  }, []);
+  }, [tabId]);
 
-  return <div ref={containerRef} className="workflow-canvas" />;
+  return (
+    <div ref={containerRef} className="workflow-canvas">
+      <WorkflowPanel />
+    </div>
+  );
 };
 
 export default WorkflowCanvas;

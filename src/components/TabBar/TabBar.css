@@ -303,3 +303,26 @@
 .tab-bar__item[draggable="true"]:active {
   cursor: grabbing;
 }
+
+/* 工作流 tab 右侧的「+」新建按钮 */
+.tab-bar__add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+  width: 24px;
+  height: 24px;
+  margin-left: 2px;
+  padding: 0;
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: #9d9d9d;
+  cursor: pointer;
+}
+
+.tab-bar__add:hover {
+  background-color: #37373d;
+  color: #e8e8e8;
+}

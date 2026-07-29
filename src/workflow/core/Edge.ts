@@ -186,6 +186,38 @@ export class Edge extends Cell {
     // 动画状态
     private isAnimating: boolean = false;
 
+    /**
+     * 各类型边的路径绘制策略表
+     * DashedStep / DashedRounded 分别复用 StepDown / RoundedStepDown 的路径形状
+     */
+    private static readonly DRAW_STRATEGIES: Record<
+        EdgeType,
+        (this: Edge, ctx: CanvasRenderingContext2D, source: Point, target: Point) => void
+    > = {
+        [EdgeType.Straight]: Edge.prototype.drawStraight,
+        [EdgeType.Horizontal]: Edge.prototype.drawHorizontal,
+        [EdgeType.Vertical]: Edge.prototype.drawVertical,
+        [EdgeType.Bezier]: Edge.prototype.drawBezier,
+        [EdgeType.Arc]: Edge.prototype.drawArc,
+        [EdgeType.StepRight]: Edge.prototype.drawStepRight,
+        [EdgeType.StepDown]: Edge.prototype.drawStepDown,
+        [EdgeType.RoundedStepRight]: Edge.prototype.drawRoundedStepRight,
+        [EdgeType.RoundedStepDown]: Edge.prototype.drawRoundedStepDown,
+        [EdgeType.SmoothStep]: Edge.prototype.drawSmoothStep,
+        [EdgeType.Orthogonal]: Edge.prototype.drawOrthogonal,
+        [EdgeType.DashedStep]: Edge.prototype.drawStepDown,
+        [EdgeType.DashedRounded]: Edge.prototype.drawRoundedStepDown,
+        [EdgeType.JumpLine]: Edge.prototype.drawJumpLine,
+    };
+
+    /** 圆角类边类型集合（路径长度近似时乘以 1.05 系数） */
+    private static readonly ROUNDED_TYPES: ReadonlySet<EdgeType> = new Set([
+        EdgeType.RoundedStepRight,
+        EdgeType.RoundedStepDown,
+        EdgeType.SmoothStep,
+        EdgeType.DashedRounded,
+    ]);
+
     // 跳线交叉点位置（用于 JumpLine 类型）
     private jumpPoints: Point[] = [];
 
@@ -428,50 +460,7 @@ export class Edge extends Cell {
 
         // 根据类型绘制路径（用于碰撞检测和波浪动画路径计算）
         ctx.beginPath();
-        switch (this.type) {
-            case EdgeType.Straight:
-                this.drawStraight(ctx, sourcePoint, targetPoint);
-                break;
-            case EdgeType.Horizontal:
-                this.drawHorizontal(ctx, sourcePoint, targetPoint);
-                break;
-            case EdgeType.Vertical:
-                this.drawVertical(ctx, sourcePoint, targetPoint);
-                break;
-            case EdgeType.Bezier:
-                this.drawBezier(ctx, sourcePoint, targetPoint);
-                break;
-            case EdgeType.Arc:
-                this.drawArc(ctx, sourcePoint, targetPoint);
-                break;
-            case EdgeType.StepRight:
-                this.drawStepRight(ctx, sourcePoint, targetPoint);
-                break;
-            case EdgeType.StepDown:
-                this.drawStepDown(ctx, sourcePoint, targetPoint);
-                break;
-            case EdgeType.RoundedStepRight:
-                this.drawRoundedStepRight(ctx, sourcePoint, targetPoint);
-                break;
-            case EdgeType.RoundedStepDown:
-                this.drawRoundedStepDown(ctx, sourcePoint, targetPoint);
-                break;
-            case EdgeType.SmoothStep:
-                this.drawSmoothStep(ctx, sourcePoint, targetPoint);
-                break;
-            case EdgeType.Orthogonal:
-                this.drawOrthogonal(ctx, sourcePoint, targetPoint);
-                break;
-            case EdgeType.DashedStep:
-                this.drawStepDown(ctx, sourcePoint, targetPoint);
-                break;
-            case EdgeType.DashedRounded:
-                this.drawRoundedStepDown(ctx, sourcePoint, targetPoint);
-                break;
-            case EdgeType.JumpLine:
-                this.drawJumpLine(ctx, sourcePoint, targetPoint);
-                break;
-        }
+        Edge.DRAW_STRATEGIES[this.type].call(this, ctx, sourcePoint, targetPoint);
 
         // 如果启用了波浪动画，先绘制虚线轨道，再绘制波浪效果
         // 使用 isAnimating 判断，确保动画状态一致
@@ -1191,10 +1180,7 @@ export class Edge extends Cell {
                     const seg1 = Math.sqrt(Math.pow(this.lastMidPoint.x - source.x, 2) + Math.pow(this.lastMidPoint.y - source.y, 2));
                     const seg2 = Math.sqrt(Math.pow(target.x - this.lastMidPoint.x, 2) + Math.pow(target.y - this.lastMidPoint.y, 2));
                     // 圆角版本稍微长一点
-                    const isRounded = this.type === EdgeType.RoundedStepRight ||
-                                     this.type === EdgeType.RoundedStepDown ||
-                                     this.type === EdgeType.SmoothStep ||
-                                     this.type === EdgeType.DashedRounded;
+                    const isRounded = Edge.ROUNDED_TYPES.has(this.type);
                     return isRounded ? (seg1 + seg2) * 1.05 : seg1 + seg2;
                 }
                 return Math.sqrt(Math.pow(target.x - source.x, 2) + Math.pow(target.y - source.y, 2));

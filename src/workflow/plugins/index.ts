@@ -48,12 +48,6 @@ export {
     type MiniMapPosition,
 } from './MiniMap';
 
-// 侧边栏插件
-export {
-    SiderPane,
-    type SiderPaneOptions,
-} from './SiderPane';
-
 // 下拉菜单插件
 export {
     Dropdown,
@@ -79,31 +73,9 @@ export {
     type SelectionEvent,
 } from './Selection';
 
-// 导出插件
-export {
-    Export,
-    type ExportOptions,
-    type ExportFormat,
-    type SVGExportOptions,
-} from './Export';
-
 // 工具栏插件
 export {
     Tools,
     type ToolsOptions,
     type SearchResults,
 } from './Tools';
-
-// 力导向布局插件
-export {
-    ForceDirected,
-    type ForceDirectedOptions,
-    type NodePhysics,
-    type EdgePhysics,
-} from './ForceDirected';
-
-// 群组单元格插件
-export {
-    GroupCell,
-    type GroupCellOptions,
-} from './GroupCell';

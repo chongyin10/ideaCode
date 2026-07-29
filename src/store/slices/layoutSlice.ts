@@ -9,7 +9,7 @@ export interface DockableItem {
   title: string;
   icon: string;
   location: DockLocation;
-  type: 'explorer' | 'search' | 'debug' | 'extensions' | 'terminal' | 'output' | 'problems' | 'debug-console' | 'ports' | 'viewContainer' | 'workflow' | 'custom';
+  type: 'explorer' | 'search' | 'debug' | 'extensions' | 'terminal' | 'output' | 'problems' | 'debug-console' | 'ports' | 'viewContainer' | 'custom';
   sourceContainerId?: string;
   sourceViewId?: string;
   badge?: number;
@@ -42,7 +42,7 @@ function persistSidePanelVisible(visible: boolean) {
 }
 
 /** ActivityBar 面板默认顺序 */
-export const DEFAULT_PANEL_ORDER: PanelId[] = ['explorer', 'search', 'debug', 'extensions', 'workflow'];
+export const DEFAULT_PANEL_ORDER: PanelId[] = ['explorer', 'search', 'debug', 'extensions'];
 
 /** 底部面板 tab 默认顺序 */
 export const DEFAULT_BOTTOM_TAB_ORDER: BottomTabId[] = ['problems', 'output', 'debug-console', 'terminal', 'ports'];
@@ -54,8 +54,8 @@ const DEFAULT_DOCKABLE_ITEMS: DockableItem[] = [
   // Source Control 由 web/git 扩展提供（contributes.viewsContainers.activitybar）
   { id: 'debug', title: 'activityBar.runAndDebug', icon: '$(bug)', location: 'left', type: 'debug' },
   { id: 'extensions', title: 'activityBar.extensions', icon: '$(blocks)', location: 'left', type: 'extensions' },
-  // 工作流画布：内置功能（src/workflow 画布引擎），非扩展贡献
-  { id: 'workflow', title: 'activityBar.workflow', icon: '$(workflow)', location: 'left', type: 'workflow' },
+  // 工作流画布：内置功能（src/workflow 画布引擎），入口为 ActivityBar 固定按钮，
+  // 不再注册为侧栏面板——物料面板内嵌在画布 tab 内部
 
   { id: 'right-kimi-code', title: 'KIMI CODE', icon: '$(sparkles)', location: 'right', type: 'custom' },
 
@@ -143,8 +143,29 @@ const layoutSlice = createSlice({
         state.sidePanelWidth = DEFAULT_SIDEBAR_WIDTH;
       }
     },
+    /**
+     * 激活一个「虚拟左侧面板」：只记录选中态（activePanel），不展开侧栏。
+     * 用于工作流这类没有侧栏内容、点击后编辑器全屏显示的入口，
+     * 让图标栏选中态仍由 activePanel 一套机制驱动，天然互斥。
+     */
+    activateVirtualPanel: (state, action) => {
+      state.activePanel = action.payload as PanelId;
+      state.sidePanelVisible = false;
+      persistSidePanelVisible(false);
+      // 右侧面板全屏时，点击任意菜单 → 退出全屏，恢复半屏
+      if (state.rightPanelMaximized) {
+        state.rightPanelMaximized = false;
+      }
+    },
     toggleRightPanel: (state) => {
       state.rightPanelVisible = !state.rightPanelVisible;
+      // 关闭面板时同时退出全屏
+      if (!state.rightPanelVisible) {
+        state.rightPanelMaximized = false;
+      }
+    },
+    setRightPanelVisible: (state, action) => {
+      state.rightPanelVisible = action.payload as boolean;
       // 关闭面板时同时退出全屏
       if (!state.rightPanelVisible) {
         state.rightPanelMaximized = false;
@@ -332,7 +353,9 @@ export const {
   switchPanel,
   setSidePanelWidth,
   setSidePanelVisible,
+  activateVirtualPanel,
   toggleRightPanel,
+  setRightPanelVisible,
   setRightPanelMaximized,
   toggleBottomPanel,
   setBottomPanelVisible,

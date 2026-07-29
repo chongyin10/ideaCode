@@ -163,7 +163,8 @@
     "settings": "Settings"
   },
   "workflow": {
-    "styleConfig": "Style Config"
+    "styleConfig": "Style Config",
+    "newCanvas": "New Workflow"
   },
   "topBar": {
     "searchFilesTooltip": "Search files (Ctrl+P)",

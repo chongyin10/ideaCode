@@ -1379,4 +1379,26 @@ export class Node extends Cell {
     }
 }
 
+/**
+ * 支持行级悬停能力的节点接口
+ * 实现该接口的节点（如 DynamicHeightNode）可响应行级鼠标悬停
+ */
+export interface RowHoverable {
+    /** 获取指定世界坐标点所在的行索引，未命中返回 -1 */
+    getRowIndexAtPoint(point: { x: number; y: number }): number;
+    /** 设置当前悬停的行索引，-1 表示清除悬停 */
+    setHoveredRow(index: number): void;
+}
+
+/**
+ * 判断节点是否支持行级悬停
+ */
+export function isRowHoverable(node: Node): node is Node & RowHoverable {
+    const candidate = node as unknown as Partial<RowHoverable>;
+    return (
+        typeof candidate.getRowIndexAtPoint === 'function' &&
+        typeof candidate.setHoveredRow === 'function'
+    );
+}
+
 export default Node;

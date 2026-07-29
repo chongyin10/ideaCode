@@ -312,8 +312,6 @@ export class Clipboard implements Plugin {
         // 调用复制后回调
         this.options.onCopy(data);
         
-        console.log('📋 已复制:', nodes.length, '个节点,', edges.length, '条边');
-        
         return data;
     }
     
@@ -324,7 +322,6 @@ export class Clipboard implements Plugin {
         if (!this.options.enabled || !this.graph) return null;
         
         if (!this.clipboardData || this.clipboardData.nodes.length === 0) {
-            console.log('📋 剪贴板为空');
             return null;
         }
         
@@ -421,8 +418,6 @@ export class Clipboard implements Plugin {
         // 调用粘贴后回调
         this.options.onPaste(newNodes, newEdges);
         
-        console.log('📋 已粘贴:', newNodes.length, '个节点,', newEdges.length, '条边');
-        
         return { nodes: newNodes, edges: newEdges };
     }
     
@@ -449,8 +444,6 @@ export class Clipboard implements Plugin {
         
         // 调用剪切后回调
         this.options.onCut(data);
-        
-        console.log('✂️ 已剪切:', data.nodes.length, '个节点,', data.edges.length, '条边');
         
         return data;
     }
@@ -483,8 +476,6 @@ export class Clipboard implements Plugin {
         
         // 调用删除后回调
         this.options.onDelete(nodeIds, edgeIds);
-        
-        console.log('🗑️ 已删除:', nodeIds.length, '个节点,', edgeIds.length, '条边');
         
         return { nodeIds, edgeIds };
     }

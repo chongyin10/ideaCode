@@ -1,12 +1,12 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, Fragment } from 'react';
 import { useTranslation } from 'react-i18next';
-import { X, Columns2, Loader2, Lock, Unlock } from 'lucide-react';
+import { X, Columns2, Loader2, Lock, Unlock, Plus } from 'lucide-react';
 import './TabBar.css';
 
 export type TabType = 'file' | 'structure' | 'image' | 'terminal' | 'extension' | 'other';
 
 interface TabBarProps {
-  tabs: { id: string; name: string; isDirty?: boolean; isPreview?: boolean; readOnly?: boolean; gitStatus?: string; type?: TabType }[];
+  tabs: { id: string; name: string; isDirty?: boolean; isPreview?: boolean; readOnly?: boolean; gitStatus?: string; type?: TabType; language?: string }[];
   activeId: string | null;
   onActivate: (id: string) => void;
   onClose: (id: string) => void;
@@ -16,6 +16,8 @@ interface TabBarProps {
   onContextMenu?: (e: React.MouseEvent, id: string) => void;
   /** 拖拽重排：将 fromId 移动到 toId 的 before/after 位置 */
   onReorder?: (fromId: string, toId: string, position: 'before' | 'after') => void;
+  /** 新建工作流 tab：存在时，在最后一个工作流 tab 右侧渲染「+」按钮 */
+  onAddWorkflow?: () => void;
   splitActive?: boolean;
   focused?: boolean;
   /** 正在加载中的文件 ID 集合 */
@@ -30,7 +32,7 @@ type DisplayTab = TabBarProps['tabs'][number] & { phase: TabPhase };
 
 const TRANSITION_MS = 200;
 
-const TabBar = ({ tabs, activeId, onActivate, onClose, onPin, onToggleReadOnly, onSplitView, onContextMenu, onReorder, splitActive, focused = true, loadingFiles, missingFileIds }: TabBarProps) => {
+const TabBar = ({ tabs, activeId, onActivate, onClose, onPin, onToggleReadOnly, onSplitView, onContextMenu, onReorder, onAddWorkflow, splitActive, focused = true, loadingFiles, missingFileIds }: TabBarProps) => {
   const { t } = useTranslation();
   const [displayTabs, setDisplayTabs] = useState<DisplayTab[]>([]);
   const prevTabsRef = useRef(tabs);
@@ -156,6 +158,11 @@ const TabBar = ({ tabs, activeId, onActivate, onClose, onPin, onToggleReadOnly, 
     draggingIdRef.current = null;
   };
 
+  // 「+」按钮只挂在最后一个工作流 tab 右侧
+  const lastWorkflowTabId = onAddWorkflow
+    ? [...displayTabs].reverse().find((t) => t.language === 'workflow')?.id
+    : undefined;
+
   return (
     <div className="tab-bar">
       <div className="tab-bar__tabs">
@@ -163,8 +170,8 @@ const TabBar = ({ tabs, activeId, onActivate, onClose, onPin, onToggleReadOnly, 
           const isDragging = draggingId === tab.id;
           const isDragOver = dragOverId === tab.id;
           return (
+            <Fragment key={tab.id}>
             <div
-              key={tab.id}
               className={`tab-bar__item tab-bar__item--${tab.phase} ${focused && activeId === tab.id ? 'active' : ''} ${tab.isPreview ? 'preview' : ''} ${missingFileIds?.has(tab.id) ? 'deleted' : ''} ${isDragging ? 'tab-bar__item--dragging' : ''} ${isDragOver ? `tab-bar__item--drag-over tab-bar__item--drag-${dragOverPos}` : ''}`}
               draggable={!!onReorder}
               onDragStart={(e) => handleDragStart(e, tab.id)}
@@ -208,6 +215,20 @@ const TabBar = ({ tabs, activeId, onActivate, onClose, onPin, onToggleReadOnly, 
                 <X size={14} strokeWidth={1.5} />
               </span>
             </div>
+            {tab.id === lastWorkflowTabId && (
+              <button
+                type="button"
+                className="tab-bar__add"
+                title={t('workflow.newCanvas')}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onAddWorkflow?.();
+                }}
+              >
+                <Plus size={14} strokeWidth={1.5} />
+              </button>
+            )}
+            </Fragment>
           );
         })}
       </div>

@@ -6,7 +6,6 @@ import ExplorerContent from './SidePanel/ExplorerContent';
 import SearchPanel from './SearchPanel';
 import ExtensionsPanel from './ExtensionsPanel';
 import WebViewPanel from './WebViewPanel';
-import WorkflowPanel from './WorkflowPanel';
 import type { DockableItem } from '../store/slices/layoutSlice';
 import type { ExtensionView, ExtensionViewAction, ExtensionWebViewPanel } from '../store/slices/extensionUISlice';
 
@@ -157,8 +156,6 @@ export function DockableContent({ item, showViewHeader = true }: DockableContent
       return <SearchPanel />;
     case 'extensions':
       return <ExtensionsPanel />;
-    case 'workflow':
-      return <WorkflowPanel />;
     case 'debug':
       return (
         <div className="panel-placeholder">
