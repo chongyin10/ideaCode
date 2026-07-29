@@ -1,0 +1,48 @@
+.dependency-graph-canvas {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+  background-color: #1e1e1e;
+}
+
+/* 持久化画布宿主（Graph 的实际容器，跨 tab 切换被重新挂载） */
+.dependency-graph-canvas__host {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+}
+
+/* 左上角的视图模式切换（分段按钮：按子目录聚合 / 全部文件） */
+.dependency-graph-canvas__mode-switch {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 10;
+  display: flex;
+  background: #252526;
+  border: 1px solid #3c3c3c;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.dependency-graph-canvas__mode-switch button {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: #999999;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+
+.dependency-graph-canvas__mode-switch button:hover {
+  color: #cccccc;
+}
+
+.dependency-graph-canvas__mode-switch button.is-active {
+  background: #094771;
+  color: #ffffff;
+}

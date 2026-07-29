@@ -129,6 +129,14 @@ export interface GraphState {
     lastMousePosition: Point | null;
 }
 
+/** 可视区域的世界坐标包围盒（节点/边的视口裁剪用） */
+interface ViewBounds {
+    left: number;
+    top: number;
+    right: number;
+    bottom: number;
+}
+
 /**
  * Graph - 可拖拽、可缩放的画布组件
  *
@@ -1081,11 +1089,19 @@ export class Graph {
             this.drawGrid(width, height);
         }
 
+        // 可视区域的世界坐标包围盒（节点/边的视口裁剪用）
+        const viewBounds: ViewBounds = {
+            left: -this.viewport.offset.x / this.viewport.scale - Graph.CULL_MARGIN,
+            top: -this.viewport.offset.y / this.viewport.scale - Graph.CULL_MARGIN,
+            right: (width - this.viewport.offset.x) / this.viewport.scale + Graph.CULL_MARGIN,
+            bottom: (height - this.viewport.offset.y) / this.viewport.scale + Graph.CULL_MARGIN,
+        };
+
         // 绘制所有节点（在主画布上）
-        this.renderNodes();
+        this.renderNodes(viewBounds);
 
         // 绘制所有边和连接桩（在边线层上，按 zIndex 排序混合绘制）
-        this.renderEdgesAndPorts();
+        this.renderEdgesAndPorts(viewBounds);
 
         // 绘制连接中的临时连线（在边线层上）
         this.connectionManager.renderConnectingEdge(this.edgeCtx);
@@ -1249,6 +1265,7 @@ export class Graph {
             node: node,
         });
         
+        this.jumpIntersectionsDirty = true;
         this.scheduleRender();
         return node;
     }
@@ -1420,6 +1437,7 @@ export class Graph {
                 connectedEdges: connectedEdges,
             });
             
+            this.jumpIntersectionsDirty = true;
             this.scheduleRender();
             return true;
         }
@@ -1530,6 +1548,7 @@ export class Graph {
         });
         this.htmlNodeElements.clear();
         this.nodes.clear();
+        this.jumpIntersectionsDirty = true;
         this.scheduleRender();
     }
 
@@ -1585,6 +1604,7 @@ export class Graph {
             edge: edge,
         });
         
+        this.jumpIntersectionsDirty = true;
         this.scheduleRender();
         return edge;
     }
@@ -1609,6 +1629,7 @@ export class Graph {
                 edge: edge,
             });
             
+            this.jumpIntersectionsDirty = true;
             this.scheduleRender();
             return true;
         }
@@ -1669,6 +1690,7 @@ export class Graph {
     clearEdges(): void {
         this.edges.clear();
         this.selectedEdge = null;
+        this.jumpIntersectionsDirty = true;
         this.scheduleRender();
     }
 
@@ -1719,12 +1741,45 @@ export class Graph {
         return false;
     }
 
+    /** LOD 阈值：缩放低于该值时，连线降级为简化直线绘制（不采样、不画跳线拱/箭头/标签） */
+    private static readonly LOD_SCALE_THRESHOLD = 0.4;
+
+    /** 视口裁剪的外扩边距（世界坐标像素），避免可视区边缘的图元被误裁 */
+    private static readonly CULL_MARGIN = 80;
+
+    /** 跳线交叉点缓存脏标记：几何变化（节点/边增删、节点拖拽、resize、边偏移）时置 true */
+    private jumpIntersectionsDirty = true;
+
+    /** 上次计算时的跳线边集合签名（setType 不经过 Graph，用它兜底检测连线类型变化） */
+    private lastJumpEdgeSignature = '';
+
+    /**
+     * 标记跳线交叉点缓存失效
+     * @internal 供 DragManager / ResizeManager 在几何变化时调用
+     */
+    markJumpIntersectionsDirty(): void {
+        this.jumpIntersectionsDirty = true;
+    }
+
     /**
      * 更新跳线边的交叉点位置
-     * 计算每条 JumpLine 类型边与其他边的交叉点，并设置跳线位置
+     * 计算每条跳线类边（JumpLine / BezierJump）与其他边的交叉点，并设置跳线位置。
+     * 带缓存：仅在几何变化（脏标记）后重算（O(E²)），平移/缩放等纯视图操作直接复用上次结果
      * @private
      */
     private updateJumpLineIntersections(): void {
+        // setType 不经过 Graph，无法挂脏标记：每帧用 O(E) 的跳线边集合签名兜底检测类型变化
+        let signature = '';
+        this.edges.forEach((edge) => {
+            const t = edge.getType();
+            if (t === EdgeType.JumpLine || t === EdgeType.BezierJump) {
+                signature += `${edge.getId()}|`;
+            }
+        });
+        // 缓存有效且跳线边集合未变时跳过：重算是 O(E²)，不能每帧跑
+        if (!this.jumpIntersectionsDirty && signature === this.lastJumpEdgeSignature) return;
+        this.jumpIntersectionsDirty = false;
+        this.lastJumpEdgeSignature = signature;
         // 收集所有边的连接点信息
         interface EdgeInfo {
             edge: Edge;
@@ -1742,7 +1797,7 @@ export class Graph {
                     edge,
                     sourcePoint: endpoints.sourcePoint,
                     targetPoint: endpoints.targetPoint,
-                    isJumpLine: edge.getType() === EdgeType.JumpLine
+                    isJumpLine: edge.getType() === EdgeType.JumpLine || edge.getType() === EdgeType.BezierJump
                 });
             }
         });
@@ -1779,7 +1834,7 @@ export class Graph {
      * 渲染所有边和连接桩（按 zIndex 混合排序绘制）
      * @protected
      */
-    protected renderEdgesAndPorts(): void {
+    protected renderEdgesAndPorts(viewBounds?: ViewBounds): void {
         // 检查是否有带动画的边
         const hasAnimated = this.checkAnimatedEdges();
         
@@ -1791,8 +1846,12 @@ export class Graph {
             this.stopEdgeAnimation();
         }
 
-        // 计算跳线边的交叉点
+        // 计算跳线边的交叉点（带缓存，仅几何变化后重算）
         this.updateJumpLineIntersections();
+
+        // LOD：低缩放级别（全局视图）下连线降级为简化直线，
+        // 此时曲线采样/跳线拱/箭头/标签在屏幕上都不可辨，不值得逐帧绘制
+        const lowDetail = this.viewport.scale < Graph.LOD_SCALE_THRESHOLD;
 
         // 收集所有需要绘制的元素（边和连接桩）
         interface DrawItem {
@@ -1807,20 +1866,45 @@ export class Graph {
         this.edges.forEach((edge) => {
             const endpoints = resolveEdgeEndpoints(edge, this.nodes);
 
-            if (endpoints) {
-                const { sourcePoint, targetPoint } = endpoints;
-                drawItems.push({
-                    type: 'edge',
-                    zIndex: edge.getZIndex(),
-                    draw: () => {
-                        edge.draw(this.edgeCtx, sourcePoint, targetPoint, this.animationTime);
-                    }
-                });
+            if (!endpoints) return;
+            const { sourcePoint, targetPoint } = endpoints;
+
+            // 视口裁剪：端点包围盒外扩（覆盖曲线鼓出部分）后与可视区域无交则跳过
+            if (viewBounds) {
+                const dx = targetPoint.x - sourcePoint.x;
+                const dy = targetPoint.y - sourcePoint.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                const margin = 60 + dist * 0.5;
+                const minX = Math.min(sourcePoint.x, targetPoint.x) - margin;
+                const maxX = Math.max(sourcePoint.x, targetPoint.x) + margin;
+                const minY = Math.min(sourcePoint.y, targetPoint.y) - margin;
+                const maxY = Math.max(sourcePoint.y, targetPoint.y) + margin;
+                if (minX > viewBounds.right || maxX < viewBounds.left ||
+                    minY > viewBounds.bottom || maxY < viewBounds.top) {
+                    return;
+                }
             }
+
+            drawItems.push({
+                type: 'edge',
+                zIndex: edge.getZIndex(),
+                draw: lowDetail
+                    ? () => edge.drawLowDetail(this.edgeCtx, sourcePoint, targetPoint)
+                    : () => edge.draw(this.edgeCtx, sourcePoint, targetPoint, this.animationTime),
+            });
         });
 
         // 收集所有节点的连接桩
         this.nodes.forEach((node) => {
+            // 视口裁剪：节点在可视区域外则跳过其连接桩
+            if (viewBounds) {
+                const b = node.getBounds();
+                if (b.x > viewBounds.right || b.x + b.width < viewBounds.left ||
+                    b.y > viewBounds.bottom || b.y + b.height < viewBounds.top) {
+                    return;
+                }
+            }
+
             const nodePos = node.getPosition();
             const nodeStyle = node.getStyle();
             
@@ -1868,10 +1952,18 @@ export class Graph {
      * 渲染所有节点
      * @protected
      */
-    protected renderNodes(): void {
+    protected renderNodes(viewBounds?: ViewBounds): void {
         // 按 zIndex 排序后绘制（zIndex 小的先绘制，大的在上面）
         const sortedNodes = Array.from(this.nodes.values()).sort((a, b) => a.getZIndex() - b.getZIndex());
         sortedNodes.forEach((node) => {
+            // 视口裁剪：节点包围盒与可视区域无交则跳过绘制
+            if (viewBounds) {
+                const b = node.getBounds();
+                if (b.x > viewBounds.right || b.x + b.width < viewBounds.left ||
+                    b.y > viewBounds.bottom || b.y + b.height < viewBounds.top) {
+                    return;
+                }
+            }
             node.draw(this.ctx, this.animationTime);
         });
 

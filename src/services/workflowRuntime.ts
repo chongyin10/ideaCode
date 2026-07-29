@@ -1,4 +1,5 @@
 import type { Dnd, Graph } from '../workflow';
+import type { WorkflowFileData } from './workflowPersistence';
 
 /** 第一个工作流画布 tab 的 id（后续递增为 workflow-canvas-2、workflow-canvas-3 …） */
 export const WORKFLOW_TAB_ID = 'workflow-canvas';
@@ -69,6 +70,49 @@ export function setWorkflowSavedFilePath(scope: string, filePath: string): void 
   savedFilePaths.set(scope, filePath);
 }
 
+/** 待灌入画布的图数据：scope → 数据（如依赖可视化，画布挂载后消费一次） */
+const pendingGraphData = new Map<string, WorkflowFileData>();
+
+/** 预置要在画布挂载时灌入的图数据 */
+export function setPendingWorkflowGraphData(scope: string, data: WorkflowFileData): void {
+  pendingGraphData.set(scope, data);
+}
+
+/** 取出并清除预置图数据（一次性消费） */
+export function consumePendingWorkflowGraphData(scope: string): WorkflowFileData | undefined {
+  const data = pendingGraphData.get(scope);
+  if (data) pendingGraphData.delete(scope);
+  return data;
+}
+
+/** 依赖可视化的视图模式：按子目录聚合成组节点 / 全部文件 */
+export type DepGraphViewMode = 'aggregate' | 'files';
+
+/** 依赖可视化：文件级源数据（模式切换时据此重建画布，无需重读文件） */
+const depGraphSourceData = new Map<string, WorkflowFileData>();
+/** 依赖可视化：当前视图模式（tab 重挂载时恢复） */
+const depGraphViewModes = new Map<string, DepGraphViewMode>();
+
+/** 保存依赖可视化的文件级源数据 */
+export function setDepGraphSourceData(scope: string, data: WorkflowFileData): void {
+  depGraphSourceData.set(scope, data);
+}
+
+/** 读取依赖可视化的文件级源数据（无记录返回 undefined） */
+export function getDepGraphSourceData(scope: string): WorkflowFileData | undefined {
+  return depGraphSourceData.get(scope);
+}
+
+/** 记录依赖可视化的视图模式 */
+export function setDepGraphViewMode(scope: string, mode: DepGraphViewMode): void {
+  depGraphViewModes.set(scope, mode);
+}
+
+/** 读取依赖可视化的视图模式（无记录返回 undefined） */
+export function getDepGraphViewMode(scope: string): DepGraphViewMode | undefined {
+  return depGraphViewModes.get(scope);
+}
+
 /** 销毁某个工作流画布实例（tab 关闭时调用，释放 Graph 与宿主 DOM） */
 export function destroyWorkflowInstance(scope: string): void {
   const instance = instances.get(scope);
@@ -80,6 +124,9 @@ export function destroyWorkflowInstance(scope: string): void {
   instance.host.remove();
   instances.delete(scope);
   savedFilePaths.delete(scope);
+  pendingGraphData.delete(scope);
+  depGraphSourceData.delete(scope);
+  depGraphViewModes.delete(scope);
   if (runtime?.scope === scope) {
     setWorkflowRuntime(null);
   }

@@ -176,6 +176,10 @@
     "exportedTo": "已匯出：{{name}}",
     "imported": "匯入完成"
   },
+  "dependencyGraph": {
+    "modeAggregate": "按子目錄聚合",
+    "modeFiles": "全部檔案"
+  },
   "topBar": {
     "searchFilesTooltip": "搜尋檔案 (Ctrl+P)",
     "search": "搜尋",
@@ -218,7 +222,10 @@
       "revealInExplorer": "在磁碟中開啟",
       "findInFiles": "在檔案中尋找",
       "copyPath": "複製路徑",
-      "copyRelativePath": "複製相對路徑"
+      "copyRelativePath": "複製相對路徑",
+      "workflowVisualize": "工作流程視覺化",
+      "workflowVisualizeTab": "依賴圖：{{name}}",
+      "workflowVisualizeEmpty": "沒有可分析的程式檔案"
     },
     "empty": {
       "title": "尚未開啟資料夾",

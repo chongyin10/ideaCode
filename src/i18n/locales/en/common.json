@@ -176,6 +176,10 @@
     "exportedTo": "Exported: {{name}}",
     "imported": "Import completed"
   },
+  "dependencyGraph": {
+    "modeAggregate": "Group by directory",
+    "modeFiles": "All files"
+  },
   "topBar": {
     "searchFilesTooltip": "Search files (Ctrl+P)",
     "search": "Search",
@@ -218,7 +222,10 @@
       "revealInExplorer": "Reveal in Explorer",
       "findInFiles": "Find in Files",
       "copyPath": "Copy Path",
-      "copyRelativePath": "Copy Relative Path"
+      "copyRelativePath": "Copy Relative Path",
+      "workflowVisualize": "Workflow Visualization",
+      "workflowVisualizeTab": "Dependency Graph: {{name}}",
+      "workflowVisualizeEmpty": "No analyzable code files"
     },
     "empty": {
       "title": "No folder opened",

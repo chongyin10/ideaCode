@@ -17,6 +17,7 @@ import {
   Download,
   ChevronRight,
   Terminal as TerminalIcon,
+  Workflow as WorkflowIcon,
 } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import {
@@ -32,6 +33,7 @@ import {
   removeWorkspaceFolder,
   closeFile,
   openCommitDetail,
+  openVirtualFile,
 } from '../../store/slices/workspaceSlice';
 import type { CommitDetailData } from '../../store/slices/workspaceSlice';
 import { switchPanel } from '../../store/slices/layoutSlice';
@@ -54,6 +56,8 @@ import {
   revealInExplorer,
 } from '../../services/fileOperations';
 import type { FileClipboardState } from '../../services/fileClipboard';
+import { buildDependencyGraph, isCodeFile } from '../../services/dependencyGraph';
+import { setPendingWorkflowGraphData } from '../../services/workflowRuntime';
 import {
   getFileClipboard,
   setFileClipboard,
@@ -190,6 +194,7 @@ const ExplorerContent = () => {
   const openedFiles = useAppSelector((state) => state.workspace.openedFiles);
   const editorGroups = useAppSelector((state) => state.workspace.editorGroups);
   const activeFileId = useAppSelector((state) => state.workspace.activeFileId);
+  const allFilePaths = useAppSelector((state) => state.workspace.allFilePaths);
 
   // 打开的编辑器只显示当前被至少一个编辑器组引用的文件，保持与 Tab 栏同步
   const visibleOpenedFiles = useMemo(() => {
@@ -452,6 +457,39 @@ const ExplorerContent = () => {
     dispatch(switchPanel('search'));
     dispatch(setPendingSearchQuery(name));
   }, [dispatch]);
+
+  // §「工作流可视化」：分析目标目录/文件的 import 依赖关系，
+  //   构建图数据后开一个新的依赖可视化画布 tab 灌入渲染（节点=文件，边=依赖）
+  const handleVisualizeWorkflow = useCallback(
+    async (entry: FileEntry) => {
+      if (!rootSource || !isPath(rootSource)) return;
+      const rootStr = String(rootSource);
+      const entryStr = String(entry.source);
+      // 相对项目根的路径（posix 分隔符）
+      const rel = entryStr.startsWith(`${rootStr}/`) ? entryStr.slice(rootStr.length + 1) : entry.name;
+      const data = await buildDependencyGraph(rootSource, allFilePaths, { path: rel, kind: entry.kind });
+      if (data.nodes.length === 0) {
+        window.alert(t('explorer.contextMenu.workflowVisualizeEmpty'));
+        return;
+      }
+      const tabId = `workflow-dep-${Date.now()}`;
+      // 预置图数据，画布挂载时由 DependencyGraphCanvas 消费
+      setPendingWorkflowGraphData(tabId, data);
+      dispatch(
+        openVirtualFile({
+          id: tabId,
+          name: t('explorer.contextMenu.workflowVisualizeTab', { name: entry.name }),
+          source: `workflow://dep/${encodeURIComponent(rel)}`,
+          content: '',
+          language: 'dependency-graph',
+          isDirty: false,
+          isPreview: false,
+          readOnly: true,
+        })
+      );
+    },
+    [rootSource, allFilePaths, dispatch, t]
+  );
 
   // §时间线 commit 点击：获取该 commit 的文件列表，在编辑区创建 tab 展示
   const handleTimelineClick = useCallback(async (commit: TimelineCommit) => {
@@ -845,6 +883,22 @@ const ExplorerContent = () => {
           disabled: isMultiSelect,
           onClick: wrapWithClickTracking('find-in-files', () => handleFindInFiles(targetEntry.name)),
         },
+        // 工作流可视化：文件夹分析目录内依赖，代码文件分析其依赖闭包
+        ...(targetEntry.kind === 'directory' || isCodeFile(targetEntry.name)
+          ? [
+              {
+                id: 'workflow-visualize',
+                label: t('explorer.contextMenu.workflowVisualize'),
+                icon: <WorkflowIcon size={14} strokeWidth={1.5} />,
+                group: '2_search',
+                order: 6,
+                disabled: isMultiSelect || !rootSource,
+                onClick: wrapWithClickTracking('workflow-visualize', () => {
+                  handleVisualizeWorkflow(targetEntry);
+                }),
+              },
+            ]
+          : []),
         {
           id: 'cut',
           label: t('cut'),
@@ -978,7 +1032,7 @@ const ExplorerContent = () => {
     });
 
     return items;
-  }, [contextMenu, dispatch, rootSource, startCreate, startRename, handleFindInFiles, handlePaste, notifyChange, selectedEntries, wrapWithClickTracking, t]);
+  }, [contextMenu, dispatch, rootSource, startCreate, startRename, handleFindInFiles, handleVisualizeWorkflow, handlePaste, notifyChange, selectedEntries, wrapWithClickTracking, t]);
 
   const stableOnOpenFile = useCallback((entry: FileEntry) => {
     dispatch(openFile(entry));

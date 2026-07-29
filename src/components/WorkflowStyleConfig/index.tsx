@@ -17,7 +17,7 @@ import {
 } from '../../services/workflowStyleApply';
 import './WorkflowStyleConfig.css';
 
-/** 连线类型选项（EdgeType 全量 14 种） */
+/** 连线类型选项（EdgeType 全量 15 种） */
 const EDGE_TYPE_OPTIONS: { value: EdgeType; label: string }[] = [
   { value: EdgeType.Straight, label: '直线' },
   { value: EdgeType.Horizontal, label: '水平折线' },
@@ -33,6 +33,7 @@ const EDGE_TYPE_OPTIONS: { value: EdgeType; label: string }[] = [
   { value: EdgeType.DashedStep, label: '虚线阶梯折线' },
   { value: EdgeType.DashedRounded, label: '虚线圆角折线' },
   { value: EdgeType.JumpLine, label: '跳线' },
+  { value: EdgeType.BezierJump, label: '贝塞尔跳线' },
 ];
 
 /* ── 通用小控件 ── */

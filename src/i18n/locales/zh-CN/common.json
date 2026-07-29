@@ -176,6 +176,10 @@
     "exportedTo": "已导出：{{name}}",
     "imported": "导入完成"
   },
+  "dependencyGraph": {
+    "modeAggregate": "按子目录聚合",
+    "modeFiles": "全部文件"
+  },
   "topBar": {
     "searchFilesTooltip": "搜索文件 (Ctrl+P)",
     "search": "搜索",
@@ -218,7 +222,10 @@
       "revealInExplorer": "在磁盘中打开",
       "findInFiles": "在文件中查找",
       "copyPath": "复制路径",
-      "copyRelativePath": "复制相对路径"
+      "copyRelativePath": "复制相对路径",
+      "workflowVisualize": "工作流可视化",
+      "workflowVisualizeTab": "依赖图：{{name}}",
+      "workflowVisualizeEmpty": "没有可分析的代码文件"
     },
     "empty": {
       "title": "尚未打开文件夹",

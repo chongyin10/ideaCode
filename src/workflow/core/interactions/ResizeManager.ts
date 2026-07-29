@@ -123,6 +123,8 @@ export class ResizeManager {
                 node: this.resizingNode,
                 bounds,
             });
+            // 节点尺寸变化：跳线交叉点缓存失效
+            this.graph.markJumpIntersectionsDirty();
         }
 
         this.reset();

@@ -100,6 +100,8 @@ export class DragManager {
         const newX = this.dragNodeStartPosition.x + deltaX;
         const newY = this.dragNodeStartPosition.y + deltaY;
         node.setPosition(newX, newY);
+        // 节点位置变化：跳线交叉点缓存失效
+        this.graph.markJumpIntersectionsDirty();
 
         // 触发 node:drag 事件
         node.triggerNodeEvent('drag', e, { x: newX, y: newY });
@@ -182,6 +184,8 @@ export class DragManager {
         const newOffsetX = this.dragEdgeStartOffset.x + deltaX;
         const newOffsetY = this.dragEdgeStartOffset.y + deltaY;
         this.draggedEdge.setOffset(newOffsetX, newOffsetY);
+        // 边形状变化：跳线交叉点缓存失效
+        this.graph.markJumpIntersectionsDirty();
 
         this.graph.scheduleRender();
     }

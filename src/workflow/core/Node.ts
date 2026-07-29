@@ -100,6 +100,8 @@ export interface NodeStyle {
     selectedBorderWidth: number;
     /** 悬停状态背景色 */
     hoverBackgroundColor: string;
+    /** 整体透明度（0-1），可选，缺省为 1 */
+    opacity?: number;
     /** 形状配置 */
     shape?: ShapeConfig;
 }
@@ -464,6 +466,11 @@ export class Node extends Cell {
 
         ctx.save();
 
+        // 应用整体透明度（可选，缺省不透明）
+        if (style.opacity !== undefined) {
+            ctx.globalAlpha = style.opacity;
+        }
+
         // 绘制阴影
         if (style.shadowBlur > 0) {
             ctx.shadowColor = style.shadowColor;
@@ -512,7 +519,7 @@ export class Node extends Cell {
             ctx.setLineDash(style.animatedDashPattern);
             ctx.globalAlpha = 0.3;
             ctx.stroke();
-            ctx.globalAlpha = 1;
+            ctx.globalAlpha = style.opacity ?? 1;
             // 流动波浪层
             const offset = (animTime * style.animatedBorderSpeed / 50) % (style.animatedDashPattern[0] + style.animatedDashPattern[1]);
             ctx.lineDashOffset = -offset;

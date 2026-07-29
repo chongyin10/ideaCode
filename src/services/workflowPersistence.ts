@@ -12,7 +12,8 @@ export interface WorkflowNodeData {
   label: string;
   x: number;
   y: number;
-  style: NodeStyle;
+  /** 节点样式；内部生成图数据（如依赖可视化）时可省略，由画布配置兜底 */
+  style?: NodeStyle;
   portsAlwaysVisible: boolean;
   data: Record<string, unknown>;
 }
@@ -23,7 +24,8 @@ export interface WorkflowEdgeData {
   label: string;
   source: EdgeAnchor;
   target: EdgeAnchor;
-  type: EdgeType;
+  /** 连线类型；省略时由 edge:add 监听按当前有效配置应用 */
+  type?: EdgeType;
 }
 
 export interface WorkflowFileData {
@@ -31,6 +33,14 @@ export interface WorkflowFileData {
   version: number;
   nodes: WorkflowNodeData[];
   edges: WorkflowEdgeData[];
+}
+
+/** 构造导出数据结构（内部生成图数据时使用，如依赖可视化） */
+export function createWorkflowFileData(
+  nodes: WorkflowNodeData[],
+  edges: WorkflowEdgeData[]
+): WorkflowFileData {
+  return { app: WORKFLOW_FILE_APP, version: WORKFLOW_FILE_VERSION, nodes, edges };
 }
 
 /** 把画布序列化为可导出的 JSON 对象 */

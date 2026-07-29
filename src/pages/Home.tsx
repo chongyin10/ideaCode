@@ -52,6 +52,7 @@ const ExtensionDetail = lazy(() => import('../components/ExtensionDetail'));
 const SshFileTreePanel = lazy(() => import('../components/SshFileTreePanel'));
 const TerminalEditorView = lazy(() => import('../components/TerminalEditorView'));
 const WorkflowCanvas = lazy(() => import('../components/WorkflowCanvas'));
+const DependencyGraphCanvas = lazy(() => import('../components/DependencyGraphCanvas'));
 const WorkflowStyleConfig = lazy(() => import('../components/WorkflowStyleConfig'));
 const ConnectToModal = lazy(() => import('../components/ConnectToModal'));
 const CloneRepoModal = lazy(() => import('../components/CloneRepoModal'));
@@ -485,8 +486,8 @@ function Home() {
         terminalSDK.disposeTab(id).catch(() => {});
         return;
       }
-      // 工作流画布 tab 关闭时销毁对应的 Graph 实例，释放内存
-      if (file?.language === 'workflow') {
+      // 工作流/依赖可视化画布 tab 关闭时销毁对应的 Graph 实例，释放内存
+      if (file?.language === 'workflow' || file?.language === 'dependency-graph') {
         destroyWorkflowInstance(id);
       }
       // Diff 文件和普通文件一样按组关闭：closeFile 只从指定组移除，
@@ -538,8 +539,8 @@ function Home() {
             dispatch(removeEditorTerminal(t.id));
             terminalSDK.disposeTab(t.id).catch(() => {});
           } else {
-            // 工作流画布 tab 关闭时销毁对应的 Graph 实例，释放内存
-            if (file?.language === 'workflow') {
+            // 工作流/依赖可视化画布 tab 关闭时销毁对应的 Graph 实例，释放内存
+            if (file?.language === 'workflow' || file?.language === 'dependency-graph') {
               destroyWorkflowInstance(t.id);
             }
             dispatch(closeFile(t));
@@ -719,8 +720,8 @@ function Home() {
     const group = editorGroups[groupIndex];
     const fileIds = group?.fileIds ?? [];
     const index = fileIds.indexOf(fileId);
-    // 工作流 tab 不显示路径/引用相关的菜单项
-    const isWorkflow = openedFileMap.get(fileId)?.language === 'workflow';
+    // 工作流/依赖可视化 tab 不显示路径/引用相关的菜单项
+    const isWorkflow = ['workflow', 'dependency-graph'].includes(openedFileMap.get(fileId)?.language ?? '');
 
     return [
       {
@@ -858,7 +859,7 @@ function Home() {
             onToggleReadOnly={(id) => dispatch(toggleFileReadOnly(id))}
             onReorder={(fromId, toId, position) => dispatch(reorderTab({ fromId, toId, position }))}
             onAddWorkflow={handleAddWorkflowTab}
-            onSplitView={file?.language === 'extension' || file?.language === 'ssh-file-tree' || file?.language === 'terminal' || file?.language === 'workflow' || file?.language === 'workflow-style-config' ? undefined : () => dispatch(toggleSplitView())}
+            onSplitView={file?.language === 'extension' || file?.language === 'ssh-file-tree' || file?.language === 'terminal' || file?.language === 'workflow' || file?.language === 'workflow-style-config' || file?.language === 'dependency-graph' ? undefined : () => dispatch(toggleSplitView())}
             splitActive={splitView}
             focused={focused}
             loadingFiles={loadingFiles}
@@ -880,6 +881,8 @@ function Home() {
                 />
               ) : file.language === 'workflow' ? (
                 <WorkflowCanvas key={`workflow-${file.id}-${group.id}`} tabId={file.id} />
+              ) : file.language === 'dependency-graph' ? (
+                <DependencyGraphCanvas key={`dep-graph-${file.id}-${group.id}`} tabId={file.id} />
               ) : file.language === 'workflow-style-config' ? (
                 <WorkflowStyleConfig key={`workflow-style-${file.id}-${group.id}`} />
               ) : file.language === 'commit-detail' && file.commitDetailData ? (

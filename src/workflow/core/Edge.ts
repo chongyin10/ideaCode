@@ -87,6 +87,8 @@ export enum EdgeType {
     DashedRounded = 'dashedRounded',
     /** 跳线（带交叉跳线效果的直线） */
     JumpLine = 'jumpLine',
+    /** 贝塞尔跳线（贝塞尔曲线 + 交叉处拱形跳线效果） */
+    BezierJump = 'bezierJump',
 }
 
 /**
@@ -208,6 +210,7 @@ export class Edge extends Cell {
         [EdgeType.DashedStep]: Edge.prototype.drawStepDown,
         [EdgeType.DashedRounded]: Edge.prototype.drawRoundedStepDown,
         [EdgeType.JumpLine]: Edge.prototype.drawJumpLine,
+        [EdgeType.BezierJump]: Edge.prototype.drawBezierJump,
     };
 
     /** 圆角类边类型集合（路径长度近似时乘以 1.05 系数） */
@@ -218,7 +221,7 @@ export class Edge extends Cell {
         EdgeType.DashedRounded,
     ]);
 
-    // 跳线交叉点位置（用于 JumpLine 类型）
+    // 跳线交叉点位置（用于 JumpLine / BezierJump 类型）
     private jumpPoints: Point[] = [];
 
     /**
@@ -496,6 +499,32 @@ export class Edge extends Cell {
     }
 
     /**
+     * 简化绘制（LOD：低缩放级别的全局视图使用）
+     * 只画一条直线，不做路径采样 / 跳线拱 / 箭头 / 标签；
+     * 同步更新碰撞检测簿记（lastSourcePoint / pathPoints），保证点击检测仍然可用
+     */
+    drawLowDetail(ctx: CanvasRenderingContext2D, sourcePoint: Point, targetPoint: Point): void {
+        // 如果边已断开，不绘制
+        if (!this.connected) {
+            return;
+        }
+
+        this.lastSourcePoint = sourcePoint;
+        this.lastTargetPoint = targetPoint;
+        this.pathPoints = [sourcePoint, targetPoint];
+
+        ctx.save();
+        ctx.strokeStyle = this.getStrokeColor();
+        ctx.lineWidth = this.getStrokeWidth();
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(sourcePoint.x, sourcePoint.y);
+        ctx.lineTo(targetPoint.x, targetPoint.y);
+        ctx.stroke();
+        ctx.restore();
+    }
+
+    /**
      * 绘制直线
      * 当有偏移量时，将直线的中点偏移形成弧线效果
      * 偏移量直接应用到控制点，端点保持连接到节点
@@ -742,7 +771,8 @@ export class Edge extends Cell {
     /**
      * 绘制贝塞尔曲线
      */
-    private drawBezier(ctx: CanvasRenderingContext2D, source: Point, target: Point): void {
+    /** 计算三次贝塞尔的两个控制点（drawBezier / drawBezierJump 共用，保证曲线形状一致） */
+    private getBezierControlPoints(source: Point, target: Point): { cp1: Point; cp2: Point } {
         const dx = target.x - source.x;
         const dy = target.y - source.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
@@ -753,12 +783,12 @@ export class Edge extends Cell {
         // 根据连接点位置确定控制点方向
         // 对于垂直排列的节点（x 坐标接近），使用固定的水平偏移来产生曲线效果
         const isVertical = Math.abs(dx) < 20; // x 坐标差小于20视为垂直排列
-        
+
         let sourceDirX: number;
         let sourceDirY: number;
         let targetDirX: number;
         let targetDirY: number;
-        
+
         if (isVertical) {
             // 垂直排列时，使用固定的水平偏移产生S形曲线
             sourceDirX = 0.5;  // 向右偏移
@@ -773,23 +803,122 @@ export class Edge extends Cell {
             targetDirY = this.getDirectionY(this.target.position) ?? (Math.abs(dy) >= Math.abs(dx) ? (dy > 0 ? -1 : 1) : 0);
         }
 
-        const cp1x = source.x + sourceDirX * minControlDist;
-        const cp1y = source.y + sourceDirY * minControlDist;
-        const cp2x = target.x + targetDirX * minControlDist;
-        const cp2y = target.y + targetDirY * minControlDist;
+        return {
+            cp1: { x: source.x + sourceDirX * minControlDist, y: source.y + sourceDirY * minControlDist },
+            cp2: { x: target.x + targetDirX * minControlDist, y: target.y + targetDirY * minControlDist },
+        };
+    }
 
-        // 保存路径点（用于波浪动画）- 贝塞尔曲线使用采样点
-        this.pathPoints = this.sampleBezierCurve(source, { x: cp1x, y: cp1y }, { x: cp2x, y: cp2y }, target, 20);
-
-        ctx.moveTo(source.x, source.y);
-        ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, target.x, target.y);
-
-        // 计算终点处的切线角度
+    /** 计算贝塞尔终点处的切线角度（与 drawBezier 的取点方式一致，供箭头使用） */
+    private getBezierEndAngle(source: Point, target: Point, cp1: Point, cp2: Point): number {
         const t = 0.95; // 接近终点的位置
         const mt = 1 - t;
-        const x = mt * mt * mt * source.x + 3 * mt * mt * t * cp1x + 3 * mt * t * t * cp2x + t * t * t * target.x;
-        const y = mt * mt * mt * source.y + 3 * mt * mt * t * cp1y + 3 * mt * t * t * cp2y + t * t * t * target.y;
-        this.lastSegmentAngle = Math.atan2(target.y - y, target.x - x);
+        const x = mt * mt * mt * source.x + 3 * mt * mt * t * cp1.x + 3 * mt * t * t * cp2.x + t * t * t * target.x;
+        const y = mt * mt * mt * source.y + 3 * mt * mt * t * cp1.y + 3 * mt * t * t * cp2.y + t * t * t * target.y;
+        return Math.atan2(target.y - y, target.x - x);
+    }
+
+    private drawBezier(ctx: CanvasRenderingContext2D, source: Point, target: Point): void {
+        const { cp1, cp2 } = this.getBezierControlPoints(source, target);
+
+        // 保存路径点（用于波浪动画）- 贝塞尔曲线使用采样点
+        this.pathPoints = this.sampleBezierCurve(source, cp1, cp2, target, 20);
+
+        ctx.moveTo(source.x, source.y);
+        ctx.bezierCurveTo(cp1.x, cp1.y, cp2.x, cp2.y, target.x, target.y);
+
+        // 计算终点处的切线角度
+        this.lastSegmentAngle = this.getBezierEndAngle(source, target, cp1, cp2);
+    }
+
+    /**
+     * 绘制贝塞尔跳线（贝塞尔曲线 + 交叉处拱形跳线效果）
+     * 曲线形状与 drawBezier 一致；在 Graph 计算的交叉点位置沿曲线法线拱起，
+     * 交叉点通过最近采样点映射到曲线弧长上；无交叉点时退化为普通贝塞尔
+     */
+    private drawBezierJump(ctx: CanvasRenderingContext2D, source: Point, target: Point): void {
+        const { jumpHeight, jumpWidth } = this.style;
+        const { cp1, cp2 } = this.getBezierControlPoints(source, target);
+        const halfWidth = jumpWidth / 2;
+
+        // 细采样曲线并累计弧长（跳线位置按弧长定位）
+        const segmentCount = 120;
+        const samples = this.sampleBezierCurve(source, cp1, cp2, target, segmentCount);
+        const cumulative: number[] = [0];
+        for (let s = 1; s <= segmentCount; s++) {
+            const dx = samples[s].x - samples[s - 1].x;
+            const dy = samples[s].y - samples[s - 1].y;
+            cumulative.push(cumulative[s - 1] + Math.sqrt(dx * dx + dy * dy));
+        }
+        const length = cumulative[segmentCount];
+
+        // 交叉点映射到曲线弧长：取距离交叉点最近的采样点的弧长
+        const jumpDistances = this.jumpPoints
+            .map((point) => {
+                let bestDist = -1;
+                let bestSq = Infinity;
+                for (let s = 0; s <= segmentCount; s++) {
+                    const dx = samples[s].x - point.x;
+                    const dy = samples[s].y - point.y;
+                    const sq = dx * dx + dy * dy;
+                    if (sq < bestSq) {
+                        bestSq = sq;
+                        bestDist = cumulative[s];
+                    }
+                }
+                return bestDist;
+            })
+            .filter((dist) => dist > halfWidth && dist < length - halfWidth)
+            .sort((a, b) => a - b);
+
+        // 曲线太短或无交叉点：退化为普通贝塞尔
+        if (length < jumpWidth * 2 || jumpDistances.length === 0) {
+            this.pathPoints = this.sampleBezierCurve(source, cp1, cp2, target, 20);
+            ctx.moveTo(source.x, source.y);
+            ctx.bezierCurveTo(cp1.x, cp1.y, cp2.x, cp2.y, target.x, target.y);
+            this.lastSegmentAngle = this.getBezierEndAngle(source, target, cp1, cp2);
+            return;
+        }
+
+        // 沿曲线逐段绘制，交叉点附近沿法线方向拱起（与 drawJumpLine 相同的抛物线拱形）
+        const pathPoints: Point[] = [source];
+        for (let s = 0; s <= segmentCount; s++) {
+            const dist = cumulative[s];
+
+            // 由相邻采样点估计切线，法线 = 切线旋转 90°
+            const prev = samples[Math.max(0, s - 1)];
+            const next = samples[Math.min(segmentCount, s + 1)];
+            const tx = next.x - prev.x;
+            const ty = next.y - prev.y;
+            const tLen = Math.sqrt(tx * tx + ty * ty) || 1;
+            const perpX = -ty / tLen;
+            const perpY = tx / tLen;
+
+            let offset = 0;
+            for (const jumpCenter of jumpDistances) {
+                if (dist >= jumpCenter - halfWidth && dist <= jumpCenter + halfWidth) {
+                    const localPos = (dist - jumpCenter) / halfWidth;
+                    const arch = 1 - localPos * localPos;
+                    offset = Math.max(offset, arch * jumpHeight);
+                }
+            }
+
+            const x = samples[s].x + perpX * offset;
+            const y = samples[s].y + perpY * offset;
+            if (s === 0) {
+                ctx.moveTo(x, y);
+            } else {
+                ctx.lineTo(x, y);
+            }
+            // 记录路径点（用于碰撞检测）
+            if (s % 5 === 0) {
+                pathPoints.push({ x, y });
+            }
+        }
+
+        pathPoints.push(target);
+        this.pathPoints = pathPoints;
+        this.lastSegmentAngle = this.getBezierEndAngle(source, target, cp1, cp2);
     }
 
     /**
@@ -1810,7 +1939,7 @@ export class Edge extends Cell {
     }
 
     /**
-     * 设置跳线交叉点位置（用于 JumpLine 类型）
+     * 设置跳线交叉点位置（用于 JumpLine / BezierJump 类型）
      * @param points - 交叉点位置数组
      */
     setJumpPoints(points: Point[]): void {
