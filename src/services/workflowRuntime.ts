@@ -113,6 +113,31 @@ export function getDepGraphViewMode(scope: string): DepGraphViewMode | undefined
   return depGraphViewModes.get(scope);
 }
 
+/** 依赖可视化：聚合模式下已双击下钻的组 id（tab 重挂载时恢复） */
+const depGraphExpandedGroups = new Map<string, Set<string>>();
+const EMPTY_GROUPS: ReadonlySet<string> = new Set();
+
+/** 读取聚合模式下已展开的组 id 集合 */
+export function getDepGraphExpandedGroups(scope: string): ReadonlySet<string> {
+  return depGraphExpandedGroups.get(scope) ?? EMPTY_GROUPS;
+}
+
+/** 切换某个组的展开/收起状态 */
+export function toggleDepGraphExpandedGroup(scope: string, groupId: string): void {
+  let set = depGraphExpandedGroups.get(scope);
+  if (!set) {
+    set = new Set();
+    depGraphExpandedGroups.set(scope, set);
+  }
+  if (set.has(groupId)) set.delete(groupId);
+  else set.add(groupId);
+}
+
+/** 收起全部已展开的组（回到初始聚合视图） */
+export function resetDepGraphExpandedGroups(scope: string): void {
+  depGraphExpandedGroups.delete(scope);
+}
+
 /** 销毁某个工作流画布实例（tab 关闭时调用，释放 Graph 与宿主 DOM） */
 export function destroyWorkflowInstance(scope: string): void {
   const instance = instances.get(scope);
@@ -127,6 +152,7 @@ export function destroyWorkflowInstance(scope: string): void {
   pendingGraphData.delete(scope);
   depGraphSourceData.delete(scope);
   depGraphViewModes.delete(scope);
+  depGraphExpandedGroups.delete(scope);
   if (runtime?.scope === scope) {
     setWorkflowRuntime(null);
   }

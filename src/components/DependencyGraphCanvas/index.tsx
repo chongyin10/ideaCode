@@ -32,6 +32,9 @@ import {
   getDepGraphSourceData,
   setDepGraphViewMode,
   getDepGraphViewMode,
+  getDepGraphExpandedGroups,
+  toggleDepGraphExpandedGroup,
+  resetDepGraphExpandedGroups,
   type DepGraphViewMode,
   type WorkflowInstance,
 } from '../../services/workflowRuntime';
@@ -47,6 +50,8 @@ import './DependencyGraphCanvas.css';
 interface DepGraphMenuActions {
   /** 节点 id → 文件的项目相对路径；非文件节点（聚合组）返回 null（不弹菜单） */
   resolveFilePath: (nodeId: string) => string | null;
+  /** 双击组节点：下钻展开一层（仅聚合模式生效） */
+  onToggleGroup: (groupId: string) => void;
   /** 打开文件（编辑区 tab） */
   onOpenFile: (rel: string) => void;
   /** 在资源管理器中定位（展开所有父目录） */
@@ -215,6 +220,15 @@ function createDepGraphInstance(
     }
   });
 
+  // 双击：文件节点 → 打开文件 tab；组节点（聚合模式）→ 下钻展开一层目录/文件结构
+  graph.on('node:dblclick', (data: { node?: Node }) => {
+    const id = data.node?.getId();
+    if (!id) return;
+    const rel = menuActions.resolveFilePath(id);
+    if (rel) menuActions.onOpenFile(rel);
+    else menuActions.onToggleGroup(id);
+  });
+
   // 点击连线时同款处理：高亮该连线、压暗其余连线，仅两端节点保持不透明
   graph.on('edge:click', (data: { edge?: Edge }) => {
     const clickedId = data.edge?.getId();
@@ -299,6 +313,8 @@ const DependencyGraphCanvas = ({ tabId }: { tabId: string }) => {
   // 重命名弹窗：目标文件的项目相对路径 + 输入中的新文件名
   const [renameTarget, setRenameTarget] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
+  // renderMode 声明在 menuActions 之后，用 ref 打通（双击下钻组节点时触发画布重建）
+  const renderModeRef = useRef<((graph: Graph, nextMode: DepGraphViewMode) => void) | null>(null);
 
   /** 节点右键菜单动作（节点 id = 文件的项目相对路径，绝对路径 = 根路径 + rel） */
   const menuActions = useMemo<DepGraphMenuActions>(
@@ -306,6 +322,12 @@ const DependencyGraphCanvas = ({ tabId }: { tabId: string }) => {
       resolveFilePath: (nodeId) => {
         const source = getDepGraphSourceData(tabId);
         return source && source.nodes.some((n) => n.id === nodeId) ? nodeId : null;
+      },
+      onToggleGroup: (groupId) => {
+        if ((getDepGraphViewMode(tabId) ?? 'aggregate') !== 'aggregate') return;
+        toggleDepGraphExpandedGroup(tabId, groupId);
+        const instance = getWorkflowInstance(tabId);
+        if (instance) renderModeRef.current?.(instance.graph, 'aggregate');
       },
       onOpenFile: (rel) => {
         const root = rootSourceRef.current;
@@ -410,7 +432,10 @@ const DependencyGraphCanvas = ({ tabId }: { tabId: string }) => {
     (graph: Graph, nextMode: DepGraphViewMode) => {
       const source = getDepGraphSourceData(tabId);
       if (!source) return;
-      const data = nextMode === 'aggregate' ? aggregateByDirectory(source) : source;
+      const data =
+        nextMode === 'aggregate'
+          ? aggregateByDirectory(source, getDepGraphExpandedGroups(tabId))
+          : source;
       graph.clearEdges();
       graph.clearNodes();
       loadGraphFromData(graph, data, tabId);
@@ -423,6 +448,7 @@ const DependencyGraphCanvas = ({ tabId }: { tabId: string }) => {
     },
     [tabId]
   );
+  renderModeRef.current = renderMode;
 
   /** 重命名确认：磁盘改名 + 同步改写全部引入，再更新图数据并重建画布、刷新资源管理器 */
   const handleRenameConfirm = useCallback(async () => {
@@ -495,7 +521,15 @@ const DependencyGraphCanvas = ({ tabId }: { tabId: string }) => {
   }, [tabId, renderMode, menuActions]);
 
   const handleModeChange = (nextMode: DepGraphViewMode) => {
-    if (nextMode === mode) return;
+    // 已处于聚合模式时再点一次 = 收起全部已下钻的组，回到初始聚合视图
+    if (nextMode === mode) {
+      if (nextMode === 'aggregate') {
+        resetDepGraphExpandedGroups(tabId);
+        const instance = getWorkflowInstance(tabId);
+        if (instance) renderMode(instance.graph, 'aggregate');
+      }
+      return;
+    }
     setMode(nextMode);
     setDepGraphViewMode(tabId, nextMode);
     const instance = getWorkflowInstance(tabId);

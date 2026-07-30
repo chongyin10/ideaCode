@@ -375,34 +375,60 @@ function commonDirPrefix(ids: string[]): string {
 }
 
 /**
- * 把文件级依赖图按目标根下的第一级子目录聚合成组节点（纯数据推导，不重读文件）：
- * - 先剥离节点 ID 的最长公共目录前缀，再按第一级子目录分组，
- *   标签 = 目录名（文件数），目标根下的散文件归为一组；
- * - 组间连线 = 组内任一文件依赖另一组内文件（去重，忽略组内自连）；
- * - 没有任何组间依赖的孤立组不进入画布（与文件级的孤立过滤一致）。
+ * 把文件级依赖图按目录聚合成组节点（纯数据推导，不重读文件）：
+ * - 先剥离节点 ID 的最长公共目录前缀，再按目录层级分组；
+ * - 默认只展开第一级：标签 = 目录名（文件数），目标根下的散文件归为一组；
+ * - expandedGroups 中的组 id（如 `components` 或嵌套的 `components/A`）会被下钻：
+ *   其直接子目录成为下一级组节点、直接文件成为文件节点，与未展开的组混排；
+ * - 组间连线 = 组内任一文件依赖另一组内文件（去重，忽略自连）；
+ * - 没有任何连线的孤立节点不进入画布（与文件级的孤立过滤一致）。
  */
-export function aggregateByDirectory(data: WorkflowFileData): WorkflowFileData {
+export function aggregateByDirectory(
+  data: WorkflowFileData,
+  expandedGroups?: ReadonlySet<string>
+): WorkflowFileData {
   const prefix = commonDirPrefix(data.nodes.map((n) => n.id));
+  const expanded = expandedGroups ?? new Set<string>();
 
-  // 文件 → 组；组 → 成员文件
-  const groupOf = new Map<string, string>();
+  // 文件 → 画布节点 id（第一个未展开组的组 id；组链全部展开则为文件自身 id）
+  const renderIdOf = new Map<string, string>();
+  // 组 id → 组内成员文件
   const members = new Map<string, string[]>();
   for (const node of data.nodes) {
     const rel = prefix && node.id.startsWith(prefix) ? node.id.slice(prefix.length) : node.id;
-    const slash = rel.indexOf('/');
-    const key = slash > 0 ? rel.slice(0, slash) : ROOT_GROUP_ID;
-    groupOf.set(node.id, key);
-    const list = members.get(key) ?? [];
-    list.push(node.id);
-    members.set(key, list);
+    const segs = rel.split('/');
+    // 组链（自上而下）：根级散文件 = [__root__]；否则 = 逐级目录前缀
+    const chain: string[] = [];
+    if (segs.length === 1) {
+      chain.push(ROOT_GROUP_ID);
+    } else {
+      let group = '';
+      for (let i = 0; i < segs.length - 1; i++) {
+        group = group ? `${group}/${segs[i]}` : segs[i];
+        chain.push(group);
+      }
+    }
+    let renderId = node.id;
+    for (const g of chain) {
+      if (!expanded.has(g)) {
+        renderId = g;
+        break;
+      }
+    }
+    renderIdOf.set(node.id, renderId);
+    if (renderId !== node.id) {
+      const list = members.get(renderId) ?? [];
+      list.push(node.id);
+      members.set(renderId, list);
+    }
   }
 
-  // 组间依赖（去重、忽略组内自连）
+  // 组间/节点间依赖（去重、忽略自连）
   const adjacency = new Map<string, string[]>();
   const seen = new Set<string>();
   for (const edge of data.edges) {
-    const from = groupOf.get(edge.source.nodeId);
-    const to = groupOf.get(edge.target.nodeId);
+    const from = renderIdOf.get(edge.source.nodeId);
+    const to = renderIdOf.get(edge.target.nodeId);
     if (!from || !to || from === to) continue;
     const pairKey = `${from}->${to}`;
     if (seen.has(pairKey)) continue;
@@ -412,22 +438,25 @@ export function aggregateByDirectory(data: WorkflowFileData): WorkflowFileData {
     adjacency.set(from, list);
   }
 
-  // 过滤没有任何组间依赖的孤立组；
-  // 若全部组都没有组间依赖（如单文件场景），则全部保留，避免画布空白
+  // 过滤没有任何连线的孤立节点；
+  // 若全部节点都没有连线（如单文件场景），则全部保留，避免画布空白
   const connected = new Set<string>();
   for (const [from, deps] of adjacency) {
     connected.add(from);
     for (const d of deps) connected.add(d);
   }
-  const groupIds = Array.from(members.keys()).filter(
-    (g) => connected.size === 0 || connected.has(g)
+  const fileIds = data.nodes.map((n) => n.id).filter((id) => renderIdOf.get(id) === id);
+  const nodeIds = [...members.keys(), ...fileIds].filter(
+    (id) => connected.size === 0 || connected.has(id)
   );
 
-  const nodes = layoutNodes(groupIds, adjacency).map((n) => ({
-    ...n,
-    label: `${n.id === ROOT_GROUP_ID ? ROOT_GROUP_LABEL : n.id}（${members.get(n.id)?.length ?? 0}）`,
-    style: GROUP_NODE_STYLE,
-  }));
+  const nodes = layoutNodes(nodeIds, adjacency).map((n) => {
+    const count = members.get(n.id)?.length;
+    // 文件节点：layoutNodes 已给 DEP_NODE_STYLE + 完整路径标签，无需处理
+    if (count === undefined) return n;
+    const dirName = n.id === ROOT_GROUP_ID ? ROOT_GROUP_LABEL : n.id.split('/').pop();
+    return { ...n, label: `${dirName}（${count}）`, style: GROUP_NODE_STYLE };
+  });
 
   const edges: WorkflowEdgeData[] = [];
   for (const [from, deps] of adjacency) {
