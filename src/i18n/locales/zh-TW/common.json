@@ -178,7 +178,12 @@
   },
   "dependencyGraph": {
     "modeAggregate": "按子目錄聚合",
-    "modeFiles": "全部檔案"
+    "modeFiles": "全部檔案",
+    "openFile": "開啟檔案",
+    "locate": "定位",
+    "diffCompare": "diff 對比",
+    "diffNoRepo": "目前沒有開啟的 Git 倉庫，無法進行 diff 對比",
+    "diffFailed": "diff 對比失敗：{{message}}"
   },
   "topBar": {
     "searchFilesTooltip": "搜尋檔案 (Ctrl+P)",
@@ -220,6 +225,7 @@
       "newFile": "新增檔案",
       "newFolder": "新增資料夾",
       "revealInExplorer": "在磁碟中開啟",
+      "openInTerminal": "在終端中開啟",
       "findInFiles": "在檔案中尋找",
       "copyPath": "複製路徑",
       "copyRelativePath": "複製相對路徑",

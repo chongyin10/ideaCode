@@ -2155,6 +2155,31 @@ module.exports = {
     if (!currentRepo || !hash || !filePath) return null;
     return await currentRepo.getCommitFileDiff(hash, filePath);
   },
+  /**
+   * §获取工作树文件与 HEAD 的对比内容（左 = HEAD，右 = 工作树）。
+   * 供依赖可视化画布右键菜单「diff对比」使用。
+   * @param {string} filePath 文件相对路径
+   * @returns {Promise<{original: string, modified: string, isBinary: boolean}|null>}
+   */
+  async getWorkingTreeFileDiff({ filePath } = {}) {
+    if (!currentRepo || !filePath) return null;
+    let original = "";
+    try {
+      original = (await currentRepo.getOriginalContent(filePath)) || "";
+    } catch (e) {
+      // 文件在 HEAD 中不存在（新增/未跟踪），original 留空
+    }
+    let modified = "";
+    let isBinary = false;
+    try {
+      const result = await currentRepo.readFile(filePath);
+      modified = result.content;
+      isBinary = result.isBinary;
+    } catch (e) {
+      // 文件在工作区不存在（如已删除），modified 留空
+    }
+    return { original, modified, isBinary };
+  },
   async checkoutBranch({ name }) {
     if (!currentRepo) throw new Error("\u6CA1\u6709\u6253\u5F00\u7684\u4ED3\u5E93");
     await currentRepo.checkoutBranch(name);

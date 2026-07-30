@@ -46,3 +46,99 @@
   background: #094771;
   color: #ffffff;
 }
+
+/* 重命名弹窗（遮罩 + 居中对话框），进入时淡入 + 轻微上浮缩放，避免突兀 */
+@keyframes dep-graph-modal-mask-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes dep-graph-modal-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.dependency-graph-canvas__modal-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.4);
+  animation: dep-graph-modal-mask-in 0.15s ease-out;
+}
+
+.dependency-graph-canvas__modal {
+  width: 320px;
+  background: #252526;
+  border: 1px solid #3c3c3c;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+  padding: 14px;
+  animation: dep-graph-modal-pop-in 0.18s ease-out;
+}
+
+.dependency-graph-canvas__modal-title {
+  color: #cccccc;
+  font-size: 13px;
+  margin-bottom: 10px;
+}
+
+.dependency-graph-canvas__modal-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: #1e1e1e;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  color: #e8e8e8;
+  font-size: 12px;
+  padding: 6px 8px;
+  outline: none;
+}
+
+.dependency-graph-canvas__modal-input:focus {
+  border-color: #569cd6;
+}
+
+.dependency-graph-canvas__modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.dependency-graph-canvas__modal-actions button {
+  appearance: none;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  background: transparent;
+  color: #cccccc;
+  font-size: 12px;
+  padding: 4px 14px;
+  cursor: pointer;
+}
+
+.dependency-graph-canvas__modal-actions button:hover {
+  background: #37373d;
+}
+
+.dependency-graph-canvas__modal-actions button.is-primary {
+  background: #094771;
+  border-color: #094771;
+  color: #ffffff;
+}
+
+.dependency-graph-canvas__modal-actions button.is-primary:hover {
+  background: #0b5a8f;
+}

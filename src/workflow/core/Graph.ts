@@ -1065,6 +1065,12 @@ export class Graph {
         if (!this.canvas || !this.ctx || !this.edgeCtx) return;
         const { width, height } = this.canvas.getBoundingClientRect();
 
+        // 每帧重建基础变换（DPR 适配），不依赖上一帧的 save/restore 配平：
+        // 任何绘制异常都不会造成变换累积（绘制与命中测试错位的根源）
+        const dpr = window.devicePixelRatio || 1;
+        this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        this.edgeCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
         // 清空主画布
         this.ctx.clearRect(0, 0, width, height);
 
@@ -1075,40 +1081,42 @@ export class Graph {
         this.ctx.save();
         this.edgeCtx.save();
 
-        // 应用变换
-        this.ctx.translate(this.viewport.offset.x, this.viewport.offset.y);
-        this.ctx.scale(this.viewport.scale, this.viewport.scale);
-        this.edgeCtx.translate(this.viewport.offset.x, this.viewport.offset.y);
-        this.edgeCtx.scale(this.viewport.scale, this.viewport.scale);
+        try {
+            // 应用变换
+            this.ctx.translate(this.viewport.offset.x, this.viewport.offset.y);
+            this.ctx.scale(this.viewport.scale, this.viewport.scale);
+            this.edgeCtx.translate(this.viewport.offset.x, this.viewport.offset.y);
+            this.edgeCtx.scale(this.viewport.scale, this.viewport.scale);
 
-        // 绘制背景
-        this.drawBackground();
+            // 绘制背景
+            this.drawBackground();
 
-        // 绘制网格
-        if (this.options.grid.enabled) {
-            this.drawGrid(width, height);
+            // 绘制网格
+            if (this.options.grid.enabled) {
+                this.drawGrid(width, height);
+            }
+
+            // 可视区域的世界坐标包围盒（节点/边的视口裁剪用）
+            const viewBounds: ViewBounds = {
+                left: -this.viewport.offset.x / this.viewport.scale - Graph.CULL_MARGIN,
+                top: -this.viewport.offset.y / this.viewport.scale - Graph.CULL_MARGIN,
+                right: (width - this.viewport.offset.x) / this.viewport.scale + Graph.CULL_MARGIN,
+                bottom: (height - this.viewport.offset.y) / this.viewport.scale + Graph.CULL_MARGIN,
+            };
+
+            // 绘制所有节点（在主画布上）
+            this.renderNodes(viewBounds);
+
+            // 绘制所有边和连接桩（在边线层上，按 zIndex 排序混合绘制）
+            this.renderEdgesAndPorts(viewBounds);
+
+            // 绘制连接中的临时连线（在边线层上）
+            this.connectionManager.renderConnectingEdge(this.edgeCtx);
+        } finally {
+            // 恢复上下文状态（即使绘制抛错也必须恢复，避免变换泄漏到下一帧）
+            this.ctx.restore();
+            this.edgeCtx.restore();
         }
-
-        // 可视区域的世界坐标包围盒（节点/边的视口裁剪用）
-        const viewBounds: ViewBounds = {
-            left: -this.viewport.offset.x / this.viewport.scale - Graph.CULL_MARGIN,
-            top: -this.viewport.offset.y / this.viewport.scale - Graph.CULL_MARGIN,
-            right: (width - this.viewport.offset.x) / this.viewport.scale + Graph.CULL_MARGIN,
-            bottom: (height - this.viewport.offset.y) / this.viewport.scale + Graph.CULL_MARGIN,
-        };
-
-        // 绘制所有节点（在主画布上）
-        this.renderNodes(viewBounds);
-
-        // 绘制所有边和连接桩（在边线层上，按 zIndex 排序混合绘制）
-        this.renderEdgesAndPorts(viewBounds);
-
-        // 绘制连接中的临时连线（在边线层上）
-        this.connectionManager.renderConnectingEdge(this.edgeCtx);
-
-        // 恢复上下文状态
-        this.ctx.restore();
-        this.edgeCtx.restore();
 
         // 同步 HTML 节点的位置和缩放
         this.syncHtmlNodeTransforms();

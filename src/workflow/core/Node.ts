@@ -82,6 +82,8 @@ export interface NodeStyle {
     animatedBorderSpeed: number;
     /** 文字颜色 */
     textColor: string;
+    /** 次要文字颜色（可选）：设置后，含 '/' 的标签按路径渲染——目录部分用该色、文件名用 textColor */
+    secondaryTextColor?: string;
     /** 字体大小 */
     fontSize: number;
     /** 字体 */
@@ -535,25 +537,67 @@ export class Node extends Cell {
         ctx.setLineDash([]);
 
         // 绘制文字
-        ctx.fillStyle = style.textColor;
         ctx.font = `${style.fontSize}px ${style.fontFamily}`;
-        ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        
+
         // 处理文字截断
         const maxTextWidth = style.width - 20;
-        let displayLabel = this.label;
-        const textMetrics = ctx.measureText(displayLabel);
-        
-        if (textMetrics.width > maxTextWidth) {
-            let truncated = displayLabel;
-            while (ctx.measureText(truncated + '...').width > maxTextWidth && truncated.length > 0) {
-                truncated = truncated.slice(0, -1);
+        // 路径式标签（设置了次要文字色且标签含 '/'）：目录部分用次要色、文件名用主色，
+        // 过长时优先从左侧收缩目录部分（离文件最近的层级辨识度最高），保证文件名完整可见
+        const secondaryTextColor = style.secondaryTextColor;
+        const sepIndex = secondaryTextColor !== undefined ? this.label.lastIndexOf('/') : -1;
+
+        if (secondaryTextColor !== undefined && sepIndex > 0) {
+            const dirPart = this.label.slice(0, sepIndex + 1);
+            let filePart = this.label.slice(sepIndex + 1);
+            let fileWidth = ctx.measureText(filePart).width;
+            ctx.textAlign = 'left';
+
+            if (fileWidth > maxTextWidth) {
+                // 文件名本身就超长：退化为单色右侧省略
+                while (ctx.measureText(filePart + '...').width > maxTextWidth && filePart.length > 0) {
+                    filePart = filePart.slice(0, -1);
+                }
+                filePart += '...';
+                fileWidth = ctx.measureText(filePart).width;
+                ctx.fillStyle = style.textColor;
+                ctx.fillText(filePart, this.position.x - fileWidth / 2, this.position.y);
+            } else {
+                let displayDir = dirPart;
+                let dirWidth = ctx.measureText(displayDir).width;
+                if (dirWidth + fileWidth > maxTextWidth) {
+                    const budget = maxTextWidth - fileWidth;
+                    let tail = displayDir;
+                    while (tail.length > 0 && ctx.measureText('…' + tail).width > budget) {
+                        tail = tail.slice(1);
+                    }
+                    displayDir = tail.length > 0 ? '…' + tail : '';
+                    dirWidth = ctx.measureText(displayDir).width;
+                }
+                const startX = this.position.x - (dirWidth + fileWidth) / 2;
+                if (displayDir) {
+                    ctx.fillStyle = secondaryTextColor;
+                    ctx.fillText(displayDir, startX, this.position.y);
+                }
+                ctx.fillStyle = style.textColor;
+                ctx.fillText(filePart, startX + dirWidth, this.position.y);
             }
-            displayLabel = truncated + '...';
+        } else {
+            ctx.fillStyle = style.textColor;
+            ctx.textAlign = 'center';
+            let displayLabel = this.label;
+            const textMetrics = ctx.measureText(displayLabel);
+
+            if (textMetrics.width > maxTextWidth) {
+                let truncated = displayLabel;
+                while (ctx.measureText(truncated + '...').width > maxTextWidth && truncated.length > 0) {
+                    truncated = truncated.slice(0, -1);
+                }
+                displayLabel = truncated + '...';
+            }
+
+            ctx.fillText(displayLabel, this.position.x, this.position.y);
         }
-        
-        ctx.fillText(displayLabel, this.position.x, this.position.y);
 
         ctx.restore();
         // 注意：连接桩不再在节点绘制时绘制，由 Graph 在边线层统一管理绘制

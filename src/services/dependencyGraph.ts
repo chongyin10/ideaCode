@@ -1,4 +1,5 @@
-import { readFile, type FileSource } from './fileService';
+import { readFile, writeFile, type FileSource } from './fileService';
+import { renameEntry } from './fileOperations';
 import type { NodeStyle } from '../workflow';
 import {
   createWorkflowFileData,
@@ -27,6 +28,8 @@ const DEP_NODE_STYLE = {
   borderWidth: 1,
   borderRadius: 6,
   textColor: '#e8e8e8',
+  // 路径式标签：目录部分用暗色、文件名用 textColor，区分同名 index.tsx
+  secondaryTextColor: 'rgba(232, 232, 232, 0.45)',
   fontSize: 12,
 } as NodeStyle;
 
@@ -241,7 +244,9 @@ function layoutNodes(nodeIds: string[], adjacency: Map<string, string[]>): Workf
     ids.forEach((id, index) => {
       nodes.push({
         id,
-        label: id.split('/').pop() || id,
+        // 标签用完整相对路径（Node 绘制时目录部分用次要色、文件名用主色），
+        // 避免不同目录下的同名文件（如多个 index.tsx）在画布上无法区分
+        label: id,
         x: 40 + rowOffset + index * COLUMN_GAP,
         y: 40 + row * ROW_GAP,
         style: DEP_NODE_STYLE,
@@ -436,5 +441,114 @@ export function aggregateByDirectory(data: WorkflowFileData): WorkflowFileData {
     }
   }
 
+  return createWorkflowFileData(nodes, edges);
+}
+
+/** 计算 fromDir（项目相对目录，可为 ''）指向 toRel（项目相对路径）的相对路径 */
+function relativePath(fromDir: string, toRel: string): string {
+  const from = fromDir ? fromDir.split('/') : [];
+  const to = toRel.split('/');
+  let i = 0;
+  while (i < from.length && i < to.length && from[i] === to[i]) i++;
+  const ups = from.length - i;
+  return [...Array<string>(ups).fill('..'), ...to.slice(i)].join('/');
+}
+
+/**
+ * 按原说明符的书写风格生成重命名后的新说明符：
+ * - 原说明符不带扩展名（TS 常规风格 `./foo`）则新说明符也不带扩展名；
+ * - 原说明符是目录式引入（未显式写到 `index`）则保持目录式。
+ */
+function buildRenamedSpecifier(oldSpec: string, importerRel: string, newRel: string): string {
+  const importerDir = importerRel.includes('/') ? importerRel.slice(0, importerRel.lastIndexOf('/')) : '';
+  let rel = relativePath(importerDir, newRel);
+  if (!rel.startsWith('.')) rel = `./${rel}`;
+  if (!CODE_FILE_RE.test(oldSpec)) {
+    rel = rel.replace(CODE_FILE_RE, '');
+    if (!/(^|\/)index$/.test(oldSpec.replace(CODE_FILE_RE, ''))) {
+      rel = rel.replace(/\/index$/, '');
+    }
+  }
+  return rel;
+}
+
+export interface RenameImportSyncResult {
+  /** 重命名后的项目相对路径 */
+  newRel: string;
+  /** 被改写引入说明符的文件（项目相对路径） */
+  updatedFiles: string[];
+}
+
+/**
+ * 重命名代码文件并同步改写项目内所有指向它的 import/require 说明符：
+ * 先在磁盘上重命名，再遍历全部代码文件，凡解析结果指向旧路径的说明符
+ * 一律按原书写风格改写为新相对路径（基于正则解析，与依赖图构建同一套规则）。
+ */
+export async function renameFileWithImportSync(
+  rootSource: FileSource,
+  allFilePaths: string[],
+  oldRel: string,
+  newName: string
+): Promise<RenameImportSyncResult> {
+  const rootStr = String(rootSource);
+  const oldName = oldRel.split('/').pop() || oldRel;
+  const dir = oldRel.includes('/') ? oldRel.slice(0, oldRel.lastIndexOf('/')) : '';
+  const parentSource = dir ? `${rootStr}/${dir}` : rootStr;
+  await renameEntry(parentSource, oldName, newName, 'file');
+  const newRel = dir ? `${dir}/${newName}` : newName;
+
+  // 用「重命名前」的文件集合解析旧引入目标
+  const oldFileSet = new Set(allFilePaths);
+  const updatedFiles: string[] = [];
+  const importers = allFilePaths.filter((p) => CODE_FILE_RE.test(p) && p !== oldRel);
+  await mapLimit(importers, READ_BATCH_SIZE, async (importerRel) => {
+    let content: string;
+    try {
+      content = await readFile(`${rootStr}/${importerRel}`);
+    } catch {
+      return;
+    }
+    let next = content;
+    for (const spec of extractSpecifiers(content)) {
+      if (resolveSpecifier(spec, importerRel, oldFileSet) !== oldRel) continue;
+      const newSpec = buildRenamedSpecifier(spec, importerRel, newRel);
+      // 只替换带引号的字符串字面量位置，降低误伤同名文本的概率
+      next = next.split(`'${spec}'`).join(`'${newSpec}'`).split(`"${spec}"`).join(`"${newSpec}"`);
+    }
+    if (next !== content) {
+      await writeFile(`${rootStr}/${importerRel}`, next);
+      updatedFiles.push(importerRel);
+    }
+  });
+  return { newRel, updatedFiles };
+}
+
+/**
+ * 把图数据里 oldRel 节点改名为 newRel（纯数据推导，不重读文件）：
+ * 节点 id/标签/路径、连线的两端 nodeId/portId 与 id 同步更新，
+ * 供依赖可视化画布在重命名后直接重建，无需重新分析。
+ */
+export function renameNodeInGraphData(
+  data: WorkflowFileData,
+  oldRel: string,
+  newRel: string
+): WorkflowFileData {
+  const mapEndpoint = (nodeId: string, portId?: string) =>
+    nodeId === oldRel
+      ? { nodeId: newRel, portId: portId?.replace(`${oldRel}-port-`, `${newRel}-port-`) }
+      : { nodeId, portId };
+  const nodes = data.nodes.map((n) =>
+    n.id === oldRel ? { ...n, id: newRel, label: newRel, data: { ...n.data, path: newRel } } : n
+  );
+  const edges = data.edges.map((e) => {
+    const source = mapEndpoint(e.source.nodeId, e.source.portId);
+    const target = mapEndpoint(e.target.nodeId, e.target.portId);
+    return {
+      ...e,
+      id: e.id.replace(`dep-${oldRel}->`, `dep-${newRel}->`).replace(`->${oldRel}`, `->${newRel}`),
+      source,
+      target,
+    };
+  });
   return createWorkflowFileData(nodes, edges);
 }

@@ -67,6 +67,8 @@ interface FileTreeProps {
   relativePath?: string;
   /** 需要自动展开的目录路径链 */
   expandPaths?: string[];
+  /** 「定位」目标文件的项目相对路径，命中行高亮并滚动到可见区 */
+  locatedFilePath?: string | null;
   /** 展开/折叠目录的回调（实际派发由内部 useSelector 订阅 expandedDirs） */
   onToggleExpand?: (path: string, expand: boolean) => void;
   /** 拖拽移动文件/文件夹 */
@@ -114,6 +116,7 @@ const FileTree = memo(({
   gitStatus,
   relativePath,
   expandPaths,
+  locatedFilePath,
   onToggleExpand,
   onMoveFile,
   headerTools,
@@ -263,6 +266,15 @@ const FileTree = memo(({
 
   const isActive = activeSource ? isSameSource(entry.source, activeSource) : false;
   const isSelected = selectedEntries?.some((e) => isSameSource(e.source, entry.source)) ?? false;
+  // 「定位」高亮：与 expandPaths 同口径（entryRelPath = 项目相对路径）
+  const isLocated = locatedFilePath != null && locatedFilePath === entryRelPath;
+  const itemRef = useRef<HTMLDivElement>(null);
+  // 定位命中时滚动到可见区（父目录异步加载子节点后，目标行挂载即触发）
+  useEffect(() => {
+    if (isLocated) {
+      itemRef.current?.scrollIntoView({ block: 'center' });
+    }
+  }, [isLocated]);
   const isCut = clipboardItems?.some(
     (item) => item.action === 'cut' && isSameSource(entry.source, item.source)
   ) ?? false;
@@ -375,7 +387,8 @@ const FileTree = memo(({
       {/* 享元缩进引导线 */}
       {indentGuides}
       <div
-        className={`tree-item ${isActive ? 'active' : ''} ${isSelected ? 'selected' : ''} ${isCut ? 'is-cut' : ''} ${isDragOver ? 'drag-over' : ''} ${level === 0 && rootClassName ? rootClassName : ''}`}
+        ref={itemRef}
+        className={`tree-item ${isActive ? 'active' : ''} ${isSelected ? 'selected' : ''} ${isLocated ? 'located' : ''} ${isCut ? 'is-cut' : ''} ${isDragOver ? 'drag-over' : ''} ${level === 0 && rootClassName ? rootClassName : ''}`}
         style={{ paddingLeft: baseIndent + level * 12 }}
         draggable
         onDragStart={handleDragStart}
@@ -463,6 +476,7 @@ const FileTree = memo(({
             gitStatus={gitStatus}
             relativePath={entryRelPath}
             expandPaths={expandPaths}
+            locatedFilePath={locatedFilePath}
             onToggleExpand={onToggleExpand}
             onMoveFile={onMoveFile}
           />

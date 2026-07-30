@@ -178,7 +178,12 @@
   },
   "dependencyGraph": {
     "modeAggregate": "Group by directory",
-    "modeFiles": "All files"
+    "modeFiles": "All files",
+    "openFile": "Open File",
+    "locate": "Locate in Explorer",
+    "diffCompare": "Compare with HEAD",
+    "diffNoRepo": "No Git repository open for diff",
+    "diffFailed": "Diff failed: {{message}}"
   },
   "topBar": {
     "searchFilesTooltip": "Search files (Ctrl+P)",
@@ -220,6 +225,7 @@
       "newFile": "New File",
       "newFolder": "New Folder",
       "revealInExplorer": "Reveal in Explorer",
+      "openInTerminal": "Open in Terminal",
       "findInFiles": "Find in Files",
       "copyPath": "Copy Path",
       "copyRelativePath": "Copy Relative Path",

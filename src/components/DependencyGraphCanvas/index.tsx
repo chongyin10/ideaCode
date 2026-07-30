@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Graph,
@@ -6,9 +6,24 @@ import {
   Selection,
   Dnd,
   Tools,
+  Dropdown,
   type Node,
   type Edge,
 } from '../../workflow';
+import i18n from '../../i18n';
+import { useAppDispatch, useAppSelector } from '../../store/hooks';
+import {
+  openFile,
+  expandToFile,
+  openDiffView,
+  refreshAllFilePaths,
+  refreshDirectory,
+  setPendingSearchQuery,
+} from '../../store/slices/workspaceSlice';
+import { switchPanel } from '../../store/slices/layoutSlice';
+import { extensionRpc, isPath } from '../../services/fileService';
+import { exists, revealInExplorer } from '../../services/fileOperations';
+import { terminalSDK } from '../../services/terminalSDK';
 import {
   getWorkflowInstance,
   setWorkflowInstance,
@@ -21,8 +36,36 @@ import {
   type WorkflowInstance,
 } from '../../services/workflowRuntime';
 import { loadGraphFromData } from '../../services/workflowPersistence';
-import { aggregateByDirectory } from '../../services/dependencyGraph';
+import {
+  aggregateByDirectory,
+  renameFileWithImportSync,
+  renameNodeInGraphData,
+} from '../../services/dependencyGraph';
 import './DependencyGraphCanvas.css';
+
+/** 节点右键菜单的动作集：由 React 侧提供（需要 dispatch / 终端 / 弹窗等能力） */
+interface DepGraphMenuActions {
+  /** 节点 id → 文件的项目相对路径；非文件节点（聚合组）返回 null（不弹菜单） */
+  resolveFilePath: (nodeId: string) => string | null;
+  /** 打开文件（编辑区 tab） */
+  onOpenFile: (rel: string) => void;
+  /** 在资源管理器中定位（展开所有父目录） */
+  onLocate: (rel: string) => void;
+  /** diff 对比（HEAD vs 工作树，走 git 扩展） */
+  onDiff: (rel: string) => void;
+  /** 在磁盘中打开（系统文件管理器中定位） */
+  onReveal: (rel: string) => void;
+  /** 在终端中打开（cwd = 文件所在目录） */
+  onOpenInTerminal: (rel: string) => void;
+  /** 在文件中查找（跳搜索面板并预置文件名） */
+  onFindInFiles: (rel: string) => void;
+  /** 复制绝对路径 */
+  onCopyPath: (rel: string) => void;
+  /** 复制项目相对路径 */
+  onCopyRelativePath: (rel: string) => void;
+  /** 发起重命名（打开重命名弹窗） */
+  onRequestRename: (rel: string) => void;
+}
 
 /** 依赖连线的默认样式（直线；低透明度细线，避免密集区域糊成一团。
  *  selectedStroke 与 stroke 保持一致：外观只由下方选中高亮逻辑控制，
@@ -61,7 +104,11 @@ const DEP_EDGE_DIM_STYLE = {
  * 只装配只读浏览所需的插件，不接物料面板 / 样式配置服务）。
  * 实例缓存在 workflowRuntime 注册表中，tab 切换只 reparent 宿主 DOM，不销毁。
  */
-function createDepGraphInstance(_scope: string, parent: HTMLElement): WorkflowInstance {
+function createDepGraphInstance(
+  _scope: string,
+  parent: HTMLElement,
+  menuActions: DepGraphMenuActions
+): WorkflowInstance {
   const host = document.createElement('div');
   host.className = 'dependency-graph-canvas__host';
   parent.appendChild(host);
@@ -93,6 +140,60 @@ function createDepGraphInstance(_scope: string, parent: HTMLElement): WorkflowIn
 
   // 依赖可视化不接收物料拖入；仅为满足 WorkflowInstance 结构创建，不挂到 Graph
   const dnd = new Dnd({ enabled: false });
+
+  // 节点右键菜单（暗色风格，与资源管理器右键菜单一致）：
+  // 仅文件节点弹菜单（聚合组节点 resolveFilePath 返回 null）；标签在点击时取当前语言
+  graph.use(
+    new Dropdown({
+      menuWidth: 170,
+      backgroundColor: '#252526',
+      textColor: '#cccccc',
+      hoverColor: '#37373d',
+      borderColor: '#3c3c3c',
+      boxShadow: '0 4px 12px rgba(0, 0, 0, 0.45)',
+      nodeMenu: (node) => {
+        const rel = menuActions.resolveFilePath(node.getId());
+        if (!rel) return [];
+        return [
+          // 顶部提示：完整相对路径（纯展示，节点上可能因截断看不清全路径）
+          { label: rel, header: true, action: () => {} },
+          {
+            label: i18n.t('dependencyGraph.openFile'),
+            action: () => menuActions.onOpenFile(rel),
+          },
+          {
+            label: i18n.t('dependencyGraph.locate'),
+            action: () => menuActions.onLocate(rel),
+          },
+          {
+            label: i18n.t('dependencyGraph.diffCompare'),
+            action: () => menuActions.onDiff(rel),
+          },
+          {
+            label: i18n.t('explorer.contextMenu.revealInExplorer'),
+            action: () => menuActions.onReveal(rel),
+          },
+          {
+            label: i18n.t('explorer.contextMenu.openInTerminal'),
+            action: () => menuActions.onOpenInTerminal(rel),
+          },
+          {
+            label: i18n.t('explorer.contextMenu.findInFiles'),
+            action: () => menuActions.onFindInFiles(rel),
+          },
+          {
+            label: i18n.t('explorer.contextMenu.copyPath'),
+            action: () => menuActions.onCopyPath(rel),
+          },
+          {
+            label: i18n.t('explorer.contextMenu.copyRelativePath'),
+            action: () => menuActions.onCopyRelativePath(rel),
+          },
+          { label: i18n.t('rename'), action: () => menuActions.onRequestRename(rel) },
+        ];
+      },
+    })
+  );
 
   // 选中节点时只高亮其「出边」（它引用的子节点方向），父节点方向的入边压暗；
   // 同时压暗无关节点（子节点保持不透明）
@@ -179,9 +280,129 @@ function fitContent(graph: Graph): void {
 const DependencyGraphCanvas = ({ tabId }: { tabId: string }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const { t } = useTranslation();
+  const dispatch = useAppDispatch();
+  const rootSource = useAppSelector((state) => state.workspace.rootSource);
+  const allFilePaths = useAppSelector((state) => state.workspace.allFilePaths);
+  const activePanel = useAppSelector((state) => state.layout.activePanel);
+  const sidePanelVisible = useAppSelector((state) => state.layout.sidePanelVisible);
+  // 菜单动作在实例创建时被捕获（实例跨渲染缓存），用 ref 保证始终读到最新的根路径/文件清单
+  const rootSourceRef = useRef(rootSource);
+  rootSourceRef.current = rootSource;
+  const allFilePathsRef = useRef(allFilePaths);
+  allFilePathsRef.current = allFilePaths;
+  const layoutRef = useRef({ activePanel, sidePanelVisible });
+  layoutRef.current = { activePanel, sidePanelVisible };
   // 视图模式：默认按子目录聚合成组节点（tab 重挂载时恢复上次模式）
   const [mode, setMode] = useState<DepGraphViewMode>(
     () => getDepGraphViewMode(tabId) ?? 'aggregate'
+  );
+  // 重命名弹窗：目标文件的项目相对路径 + 输入中的新文件名
+  const [renameTarget, setRenameTarget] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+
+  /** 节点右键菜单动作（节点 id = 文件的项目相对路径，绝对路径 = 根路径 + rel） */
+  const menuActions = useMemo<DepGraphMenuActions>(
+    () => ({
+      resolveFilePath: (nodeId) => {
+        const source = getDepGraphSourceData(tabId);
+        return source && source.nodes.some((n) => n.id === nodeId) ? nodeId : null;
+      },
+      onOpenFile: (rel) => {
+        const root = rootSourceRef.current;
+        if (!root || !isPath(root)) return;
+        dispatch(openFile({ source: `${root}/${rel}`, name: rel.split('/').pop() || rel, kind: 'file' }));
+      },
+      onLocate: (rel) => {
+        // switchPanel 是切换语义：资源管理器已激活且侧栏可见时再调会把面板关掉，
+        // 仅在需要切换面板或展开侧栏时才调用
+        const layout = layoutRef.current;
+        if (layout.activePanel !== 'explorer' || !layout.sidePanelVisible) {
+          dispatch(switchPanel('explorer'));
+        }
+        dispatch(expandToFile(rel));
+      },
+      onDiff: (rel) => {
+        const root = rootSourceRef.current;
+        if (!root || !isPath(root)) return;
+        void (async () => {
+          const fileName = rel.split('/').pop() || rel;
+          try {
+            const res = await extensionRpc<{
+              original: string;
+              modified: string;
+              isBinary: boolean;
+            } | null>('ext.invoke', {
+              extId: 'ideacode-git',
+              method: 'getWorkingTreeFileDiff',
+              args: [{ filePath: rel }],
+            });
+            if (!res) {
+              window.alert(i18n.t('dependencyGraph.diffNoRepo'));
+              return;
+            }
+            if (res.isBinary) {
+              // 二进制无法 diff，回退为普通打开（与 extensionBridge git.openFile 行为一致）
+              dispatch(openFile({ source: `${root}/${rel}`, name: fileName, kind: 'file' }));
+              return;
+            }
+            const { getLanguageFromPath } = await import('../../utils/languageFromPath');
+            dispatch(
+              openDiffView({
+                filePath: rel,
+                fileName,
+                original: res.original,
+                modified: res.modified,
+                language: getLanguageFromPath(fileName),
+              })
+            );
+          } catch (err) {
+            console.error('[DependencyGraph] diff 对比失败:', err);
+            window.alert(
+              i18n.t('dependencyGraph.diffFailed', {
+                message: err instanceof Error ? err.message : String(err),
+              })
+            );
+          }
+        })();
+      },
+      onReveal: (rel) => {
+        const root = rootSourceRef.current;
+        if (!root || !isPath(root)) return;
+        revealInExplorer(`${root}/${rel}`).catch((err) => {
+          window.alert(
+            i18n.t('explorer.errors.revealFailed', {
+              message: err instanceof Error ? err.message : String(err),
+            })
+          );
+        });
+      },
+      onOpenInTerminal: (rel) => {
+        const root = rootSourceRef.current;
+        if (!root || !isPath(root)) return;
+        const abs = `${root}/${rel}`;
+        const dir = abs.replace(/[/\\][^/\\]*$/, '') || abs;
+        terminalSDK.createTab({ cwd: dir }).catch((err) => {
+          window.alert(`打开终端失败: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      },
+      onFindInFiles: (rel) => {
+        dispatch(switchPanel('search'));
+        dispatch(setPendingSearchQuery(rel.split('/').pop() || rel));
+      },
+      onCopyPath: (rel) => {
+        const root = rootSourceRef.current;
+        if (!root || !isPath(root)) return;
+        navigator.clipboard.writeText(`${root}/${rel}`).catch(() => {});
+      },
+      onCopyRelativePath: (rel) => {
+        navigator.clipboard.writeText(rel).catch(() => {});
+      },
+      onRequestRename: (rel) => {
+        setRenameTarget(rel);
+        setRenameValue(rel.split('/').pop() || rel);
+      },
+    }),
+    [tabId, dispatch]
   );
 
   /** 按模式从文件级源数据重建画布（聚合 / 全量两种视图共用一份源数据） */
@@ -203,17 +424,64 @@ const DependencyGraphCanvas = ({ tabId }: { tabId: string }) => {
     [tabId]
   );
 
+  /** 重命名确认：磁盘改名 + 同步改写全部引入，再更新图数据并重建画布、刷新资源管理器 */
+  const handleRenameConfirm = useCallback(async () => {
+    if (!renameTarget) return;
+    const root = rootSourceRef.current;
+    const oldName = renameTarget.split('/').pop() || renameTarget;
+    const newName = renameValue.trim();
+    if (!newName || newName === oldName) {
+      setRenameTarget(null);
+      return;
+    }
+    if (!root || !isPath(root)) {
+      setRenameTarget(null);
+      return;
+    }
+    const dir = renameTarget.includes('/')
+      ? renameTarget.slice(0, renameTarget.lastIndexOf('/'))
+      : '';
+    const parentSource = dir ? `${root}/${dir}` : root;
+    if (await exists(parentSource, newName)) {
+      window.alert(t('explorer.errors.nameExists', { name: newName }));
+      return; // 保留弹窗，让用户改名后重试
+    }
+    try {
+      const { newRel } = await renameFileWithImportSync(
+        root,
+        allFilePathsRef.current,
+        renameTarget,
+        newName
+      );
+      // 源数据同步改名（纯数据推导，不重新分析），随后按当前模式重建画布
+      const source = getDepGraphSourceData(tabId);
+      if (source) {
+        setDepGraphSourceData(tabId, renameNodeInGraphData(source, renameTarget, newRel));
+      }
+      dispatch(refreshAllFilePaths());
+      dispatch(refreshDirectory(root));
+      setRenameTarget(null);
+      const instance = getWorkflowInstance(tabId);
+      if (instance) renderMode(instance.graph, getDepGraphViewMode(tabId) ?? 'aggregate');
+    } catch (err) {
+      console.error('[DependencyGraph] 重命名失败:', err);
+      window.alert(t('explorer.errors.renameFailed'));
+    }
+  }, [renameTarget, renameValue, tabId, dispatch, renderMode, t]);
+
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
     let instance = getWorkflowInstance(tabId);
     if (!instance) {
-      instance = createDepGraphInstance(tabId, container);
+      instance = createDepGraphInstance(tabId, container, menuActions);
       setWorkflowInstance(tabId, instance);
     } else if (instance.host.parentElement !== container) {
-      // 重挂载（tab 切换回来）：把已有画布宿主 DOM 挂到新容器
+      // 重挂载（tab 切换回来）：把已有画布宿主 DOM 挂到新容器，并补一帧渲染
+      // （隐藏期间若错过 resize/渲染，避免画布残留旧帧或空白）
       container.appendChild(instance.host);
+      instance.graph.scheduleRender();
     }
     const current = instance;
 
@@ -224,7 +492,7 @@ const DependencyGraphCanvas = ({ tabId }: { tabId: string }) => {
       setDepGraphSourceData(tabId, pending);
       renderMode(current.graph, getDepGraphViewMode(tabId) ?? 'aggregate');
     }
-  }, [tabId, renderMode]);
+  }, [tabId, renderMode, menuActions]);
 
   const handleModeChange = (nextMode: DepGraphViewMode) => {
     if (nextMode === mode) return;
@@ -252,6 +520,40 @@ const DependencyGraphCanvas = ({ tabId }: { tabId: string }) => {
           {t('dependencyGraph.modeFiles')}
         </button>
       </div>
+      {renameTarget && (
+        <div
+          className="dependency-graph-canvas__modal-mask"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setRenameTarget(null);
+          }}
+        >
+          <div className="dependency-graph-canvas__modal">
+            <div className="dependency-graph-canvas__modal-title">{t('rename')}</div>
+            <input
+              className="dependency-graph-canvas__modal-input"
+              autoFocus
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void handleRenameConfirm();
+                if (e.key === 'Escape') setRenameTarget(null);
+              }}
+            />
+            <div className="dependency-graph-canvas__modal-actions">
+              <button type="button" onClick={() => setRenameTarget(null)}>
+                {t('cancel')}
+              </button>
+              <button
+                type="button"
+                className="is-primary"
+                onClick={() => void handleRenameConfirm()}
+              >
+                {t('confirm')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

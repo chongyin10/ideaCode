@@ -117,6 +117,8 @@ interface WorkspaceState {
   pendingSearchQuery: string | null;
   allFilePaths: string[];
   expandPaths: string[];
+  /** 「定位」目标文件的项目相对路径，资源管理器中该文件行高亮显示（点击树中任意条目后清除） */
+  locatedFilePath: string | null;
   expandedDirs: string[];
   /** 编辑器组列表（多列分屏） */
   editorGroups: EditorGroup[];
@@ -162,6 +164,7 @@ const initialState: WorkspaceState = {
   pendingSearchQuery: null,
   allFilePaths: [],
   expandPaths: [],
+  locatedFilePath: null,
   expandedDirs: [],
   editorGroups: [{ id: 'g0', fileIds: [], activeFileId: null, tabHistory: [], ratio: 1 }],
   activeGroupIndex: 0,
@@ -847,12 +850,18 @@ const workspaceSlice = createSlice({
         paths.push(current);
       }
       state.expandPaths = paths;
+      state.locatedFilePath = filePath;
     },
 
     /** §只清空 expandPaths 触发标记（不影响已展开的目录）。
      *  用于 expandToFile 触发后的自动清理，避免把刚展开的目录折叠回去。 */
     clearExpandPaths: (state) => {
       state.expandPaths = [];
+    },
+
+    /** §清除「定位」高亮（用户在树中点击其他条目后调用） */
+    clearLocatedFile: (state) => {
+      state.locatedFilePath = null;
     },
 
     /** §折叠所有目录（"全部折叠"按钮使用） */
@@ -1354,7 +1363,7 @@ const workspaceSlice = createSlice({
 export const {
   closeFile, activateFile, navigateTabHistory, setFileContent, setMirrorFileContent, markFileSaved,
   pinPreviewFile, setSearchHighlight, clearSearchHighlight, setClipboard,
-  clearClipboard, setPendingSearchQuery, expandToFile, clearExpandPaths, collapseAllDirs,
+  clearClipboard, setPendingSearchQuery, expandToFile, clearExpandPaths, clearLocatedFile, collapseAllDirs,
   toggleExpandDir, toggleSplitView, collapseAllGroups, setActiveGroup, saveEditorSnapshot, setGroupRatio, equalizeGroupRatios, reorderTab,
   openDiffView, closeDiffView, updateDiffView, openCommitDetail, setCommitDetailSearch, setFileLanguage,
   setSettingsVisible, closeSettings, setMissingFileIds, openVirtualFile,

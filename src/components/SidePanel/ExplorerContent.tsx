@@ -27,6 +27,7 @@ import {
   setPendingSearchQuery,
   refreshAllFilePaths,
   clearExpandPaths,
+  clearLocatedFile,
   collapseAllDirs,
   toggleExpandDir,
   activateFile,
@@ -191,6 +192,7 @@ const ExplorerContent = () => {
   // 外部文件变更（如 git discard），触发文件树精准刷新
   const externalFileChange = useAppSelector((state) => state.workspace.externalFileChange);
   const expandPaths = useAppSelector((state) => state.workspace.expandPaths);
+  const locatedFilePath = useAppSelector((state) => state.workspace.locatedFilePath);
   const openedFiles = useAppSelector((state) => state.workspace.openedFiles);
   const editorGroups = useAppSelector((state) => state.workspace.editorGroups);
   const activeFileId = useAppSelector((state) => state.workspace.activeFileId);
@@ -564,6 +566,8 @@ const ExplorerContent = () => {
   }, []);
 
   const handleItemSelect = useCallback((entry: FileEntry, parentSource: FileSource, isMultiSelect: boolean) => {
+    // 用户开始与树交互，清除「定位」高亮
+    dispatch(clearLocatedFile());
     if (isMultiSelect) {
       setSelectedEntries((prev) => {
         const exists = prev.some((s) => isSameSource(s.entry.source, entry.source));
@@ -575,7 +579,7 @@ const ExplorerContent = () => {
     } else {
       setSelectedEntries([{ entry, parentSource }]);
     }
-  }, []);
+  }, [dispatch]);
 
   const openContextMenu = useCallback(
     (e: React.MouseEvent, entry: FileEntry | null, parentSource: FileSource) => {
@@ -1235,6 +1239,7 @@ const ExplorerContent = () => {
                           onItemSelect={handleItemSelect}
                           gitStatus={gitStatus}
                           expandPaths={expandPaths}
+                          locatedFilePath={locatedFilePath}
                           onToggleExpand={stableOnToggleExpand}
                         />
                       ))}
@@ -1292,6 +1297,7 @@ const ExplorerContent = () => {
                       onItemSelect={handleItemSelect}
                       gitStatus={gitStatus}
                       expandPaths={expandPaths}
+                      locatedFilePath={locatedFilePath}
                       onToggleExpand={stableOnToggleExpand}
                       onMoveFile={handleMoveFile}
                       relativePath={rootExpandPath}

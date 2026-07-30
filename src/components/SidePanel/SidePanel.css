@@ -697,6 +697,12 @@
   background-color: #2a2d2e;
 }
 
+/* 「定位」高亮：蓝色调背景，与选中/激活态区分，便于在大量文件中一眼找到 */
+.tree-item.located {
+  background-color: rgba(0, 122, 204, 0.3);
+  color: #fff;
+}
+
 /* 拖拽悬停高亮 */
 .tree-item.drag-over {
   background-color: rgba(0, 122, 204, 0.15);

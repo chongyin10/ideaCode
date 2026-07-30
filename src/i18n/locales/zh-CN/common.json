@@ -178,7 +178,12 @@
   },
   "dependencyGraph": {
     "modeAggregate": "按子目录聚合",
-    "modeFiles": "全部文件"
+    "modeFiles": "全部文件",
+    "openFile": "打开文件",
+    "locate": "定位",
+    "diffCompare": "diff对比",
+    "diffNoRepo": "当前没有打开的 Git 仓库，无法进行 diff 对比",
+    "diffFailed": "diff 对比失败：{{message}}"
   },
   "topBar": {
     "searchFilesTooltip": "搜索文件 (Ctrl+P)",
@@ -220,6 +225,7 @@
       "newFile": "新建文件",
       "newFolder": "新建文件夹",
       "revealInExplorer": "在磁盘中打开",
+      "openInTerminal": "在终端中打开",
       "findInFiles": "在文件中查找",
       "copyPath": "复制路径",
       "copyRelativePath": "复制相对路径",

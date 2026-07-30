@@ -18,6 +18,8 @@ export interface MenuItem {
     danger?: boolean;
     /** 是否禁用 */
     disabled?: boolean;
+    /** 是否为纯展示的提示文本（不可点击、无悬停效果，常用于菜单顶部显示上下文信息） */
+    header?: boolean;
 }
 
 /**
@@ -91,6 +93,9 @@ export class Dropdown implements Plugin {
     private options: Required<DropdownOptions>;
     private currentPopup: HTMLDivElement | null = null;
     private container: HTMLElement | null = null;
+    /** 容器级 DOM 监听（destroy 时移除） */
+    private boundContainerMouseDown: ((e: globalThis.MouseEvent) => void) | null = null;
+    private boundContainerWheel: (() => void) | null = null;
 
     constructor(options: DropdownOptions = {}) {
         this.options = {
@@ -227,11 +232,21 @@ export class Dropdown implements Plugin {
 
         // 全局点击事件（处理点击非菜单区域）
         if (this.options.closeOnClickOutside && this.container) {
-            this.container.addEventListener('mousedown', (e) => {
+            this.boundContainerMouseDown = (e) => {
                 if (this.currentPopup && !this.currentPopup.contains(e.target as globalThis.Node)) {
                     this.close();
                 }
-            });
+            };
+            this.container.addEventListener('mousedown', this.boundContainerMouseDown);
+        }
+
+        // 滚轮缩放时关闭菜单：菜单位置按打开时的屏幕坐标固定，
+        // 缩放后画布内容移动，菜单不跟随节点，留着会“飘”在错误位置
+        if (this.container) {
+            this.boundContainerWheel = () => {
+                this.close();
+            };
+            this.container.addEventListener('wheel', this.boundContainerWheel, { passive: true });
         }
     }
 
@@ -280,6 +295,30 @@ export class Dropdown implements Plugin {
         // 创建菜单项
         menuItems.forEach((item) => {
             if (item.disabled) return;
+
+            // 纯展示项（菜单顶部的上下文提示）：不可点击、无悬停效果，过长省略号截断
+            if (item.header) {
+                const headerEl = document.createElement('div');
+                headerEl.style.cssText = `
+                    padding: 5px 14px;
+                    font-size: 11px;
+                    line-height: 1.4;
+                    color: ${this.options.textColor};
+                    opacity: 0.5;
+                    max-width: 260px;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
+                    cursor: default;
+                    user-select: none;
+                    border-bottom: 1px solid ${this.options.borderColor};
+                    margin-bottom: 2px;
+                `;
+                headerEl.textContent = item.label;
+                headerEl.title = item.label; // 悬停可见完整内容
+                popup.appendChild(headerEl);
+                return;
+            }
 
             const menuItem = document.createElement('div');
             const textColor = item.danger ? this.options.dangerColor : this.options.textColor;
@@ -343,6 +382,16 @@ export class Dropdown implements Plugin {
      */
     public destroy(): void {
         this.close();
+        if (this.container) {
+            if (this.boundContainerMouseDown) {
+                this.container.removeEventListener('mousedown', this.boundContainerMouseDown);
+                this.boundContainerMouseDown = null;
+            }
+            if (this.boundContainerWheel) {
+                this.container.removeEventListener('wheel', this.boundContainerWheel);
+                this.boundContainerWheel = null;
+            }
+        }
         // 解绑事件在 Graph 销毁时自动处理
     }
 
