@@ -2622,8 +2622,11 @@ body {
   border-radius: 1px;
 }
 
-/* §流式打字机：光标出现在最后一个子元素的文本末尾 */
-.md-content.streaming-text > :last-child::after {
+/* §流式打字机：光标出现在最后一个子元素的文本末尾。
+   仅附着在文本类块元素（p/li/标题/引用）上——若最后一个子元素是
+   表格/代码块等块级元素，inline-block 光标会额外产生一个行盒，
+   每个 token 重解析时元素类型切换导致光标行盒出现/消失，面板随之抖动 */
+.md-content.streaming-text > :last-child:is(p, li, blockquote, h1, h2, h3, h4, h5, h6)::after {
   content: '';
   display: inline-block;
   width: 6px;

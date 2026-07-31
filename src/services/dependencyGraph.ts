@@ -581,3 +581,26 @@ export function renameNodeInGraphData(
   });
   return createWorkflowFileData(nodes, edges);
 }
+
+/**
+ * 提取以 nodeId 为中心的直接关联子图（纯数据推导，不重读文件）：
+ * 节点 = 自身 + 与它有连线的直接邻居（引入它的 + 它引入的），
+ * 连线 = 两端都在集合内的全部连线。供「拆分为新的依赖图」开新 tab 使用。
+ * 子图按分层布局规则重新排列（沿用 layoutNodes），不保留原图画布坐标——
+ * 原坐标是从全图布局里截出来的，子集会稀疏散乱、间距过大。
+ */
+export function extractDirectSubgraph(data: WorkflowFileData, nodeId: string): WorkflowFileData {
+  const memberIds = new Set<string>([nodeId]);
+  for (const e of data.edges) {
+    if (e.source.nodeId === nodeId) memberIds.add(e.target.nodeId);
+    if (e.target.nodeId === nodeId) memberIds.add(e.source.nodeId);
+  }
+  const adjacency = new Map<string, string[]>();
+  for (const id of memberIds) adjacency.set(id, []);
+  const edges = data.edges.filter(
+    (e) => memberIds.has(e.source.nodeId) && memberIds.has(e.target.nodeId)
+  );
+  for (const e of edges) adjacency.get(e.source.nodeId)?.push(e.target.nodeId);
+  const nodes = layoutNodes([...memberIds], adjacency);
+  return createWorkflowFileData(nodes, edges);
+}

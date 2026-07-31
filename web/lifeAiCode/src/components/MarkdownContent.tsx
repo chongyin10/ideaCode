@@ -48,6 +48,13 @@ interface MarkdownContentProps {
   fileHint?: string;
   /** §流式打字机：额外附加在 md-content 容器上的 className */
   className?: string;
+  /**
+   * §流式输出中标记：为 true 时 preprocessMarkdown 跳过结构补齐
+   * （未闭合围栏/表格/HTML 标签）与裸代码包裹——半行结构每个 token 都在变，
+   * 补齐的假行/假围栏随下一个 token 到来立即消失，造成面板高度来回抖动。
+   * 流式结束后以 false 重渲染，一次性应用完整预处理。
+   */
+  streaming?: boolean;
 }
 
 export function MarkdownContent({
@@ -55,6 +62,7 @@ export function MarkdownContent({
   onExecuteShell, onKillShell, shellOutputs,
   fileHint,
   className,
+  streaming = false,
 }: MarkdownContentProps) {
   // §需求：LLM 经常在中文/英文混排中产生多余空格（如 "用了  node:module  等"），
   //   渲染后表现为生硬的额外空白 / 偶发换行。统一压缩相邻空白为单空格，
@@ -65,12 +73,12 @@ export function MarkdownContent({
   // 防御性处理：preprocessMarkdown 抛错时回退到原始内容，避免整面板黑屏
   const { processed, incomplete, reasons } = useMemo(() => {
     try {
-      return preprocessMarkdown(normalized, fileHint);
+      return preprocessMarkdown(normalized, fileHint, streaming);
     } catch (err) {
       console.error('[MarkdownContent] preprocess failed:', err);
       return { processed: normalized, incomplete: false, reasons: [] as string[] };
     }
-  }, [normalized, fileHint]);
+  }, [normalized, fileHint, streaming]);
 
   const optionList = useMemo(() => {
     if (!enableOptions || !onOptionClick) return null;
@@ -680,15 +688,27 @@ function parseOptionList(content: string): { preText: string; options: string[] 
 /**
  * 检测并补齐未闭合的 markdown 结构
  * 解决 LLM streaming 被截断时留下未闭合代码块/表格导致 UI 崩坏
+ *
+ * §streaming=true（流式输出进行中）时只做最基础的剥离，跳过裸代码包裹与
+ * 所有结构补齐：半行表格/未闭合围栏每个 token 都在变化，补齐内容（假表格行、
+ * 假闭合围栏、"回答可能不完整"横幅）会随下一个 token 到来立即消失，
+ * 面板高度随之来回抖动。流式结束后调用方以 streaming=false 重渲染，
+ * 此处再一次性应用完整预处理。
  */
 function preprocessMarkdown(
   content: string,
   fileHint?: string,
+  streaming = false,
 ): { processed: string; incomplete: boolean; reasons: string[] } {
   let result = content;
   const reasons: string[] = [];
 
   result = stripRedundantPreCodeWrapper(result);
+
+  if (streaming) {
+    return { processed: result.trimEnd(), incomplete: false, reasons };
+  }
+
   result = unwrapMisformattedCode(result);
   result = wrapUnwrappedCode(result, fileHint);
 

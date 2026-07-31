@@ -183,7 +183,10 @@
     "locate": "定位",
     "diffCompare": "diff对比",
     "diffNoRepo": "当前没有打开的 Git 仓库，无法进行 diff 对比",
-    "diffFailed": "diff 对比失败：{{message}}"
+    "diffFailed": "diff 对比失败：{{message}}",
+    "searchPlaceholder": "搜索节点",
+    "searchNoMatch": "未找到匹配「{{query}}」的节点",
+    "splitToNewGraph": "拆分为新的依赖图"
   },
   "topBar": {
     "searchFilesTooltip": "搜索文件 (Ctrl+P)",

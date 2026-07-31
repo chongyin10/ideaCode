@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Search } from 'lucide-react';
 import {
   Graph,
   EdgeType,
@@ -16,6 +17,7 @@ import {
   openFile,
   expandToFile,
   openDiffView,
+  openVirtualFile,
   refreshAllFilePaths,
   refreshDirectory,
   setPendingSearchQuery,
@@ -28,6 +30,7 @@ import {
   getWorkflowInstance,
   setWorkflowInstance,
   consumePendingWorkflowGraphData,
+  setPendingWorkflowGraphData,
   setDepGraphSourceData,
   getDepGraphSourceData,
   setDepGraphViewMode,
@@ -43,6 +46,7 @@ import {
   aggregateByDirectory,
   renameFileWithImportSync,
   renameNodeInGraphData,
+  extractDirectSubgraph,
 } from '../../services/dependencyGraph';
 import './DependencyGraphCanvas.css';
 
@@ -70,6 +74,8 @@ interface DepGraphMenuActions {
   onCopyRelativePath: (rel: string) => void;
   /** 发起重命名（打开重命名弹窗） */
   onRequestRename: (rel: string) => void;
+  /** 拆分为新的依赖图：以该节点为中心提取直接关联子图，开新画布 tab */
+  onSplitGraph: (rel: string) => void;
 }
 
 /** 依赖连线的默认样式（直线；低透明度细线，避免密集区域糊成一团。
@@ -104,15 +110,44 @@ const DEP_EDGE_DIM_STYLE = {
   selectedStrokeWidth: 1,
 };
 
+/** 搜索命中节点的边框高亮色（与文件节点蓝 #569cd6、组节点琥珀 #e0af68 区分） */
+const SEARCH_HIGHLIGHT_BORDER = '#f97583';
+
+/** git 状态码 → 角标颜色（与资源管理器 .git-status 配色一致，见 SidePanel.css） */
+const GIT_STATUS_BADGE_COLORS: Record<string, string> = {
+  M: '#cca700', // 已修改 — 暗金
+  A: '#73c991', // 新增 — 绿
+  U: '#73c991', // 未跟踪 — 绿
+  D: '#f85149', // 删除 — 红
+  R: '#4a9eff', // 重命名 — 蓝
+  C: '#73c991', // 复制 — 绿
+};
+
+/** 把 git 文件状态同步为节点左上角角标（节点 id = 项目相对路径，与 gitStatus 键同口径）；
+ *  无状态的节点清除角标。组节点 id 不在 gitStatus 中，天然无角标 */
+function applyGitStatusBadges(graph: Graph, gitStatus: Record<string, string>): void {
+  for (const node of graph.getAllNodes()) {
+    const code = gitStatus[node.getId()];
+    node.updateStyle({
+      badgeText: code || undefined,
+      badgeColor: code ? GIT_STATUS_BADGE_COLORS[code] ?? '#cccccc' : undefined,
+    });
+  }
+  graph.scheduleRender();
+}
+
 /**
  * 创建依赖可视化 scope 的 Graph 实例（把 workflow 引擎当 SDK 用，
  * 只装配只读浏览所需的插件，不接物料面板 / 样式配置服务）。
  * 实例缓存在 workflowRuntime 注册表中，tab 切换只 reparent 宿主 DOM，不销毁。
+ * menuActionsRef：菜单/事件动作的可变引用——实例跨组件挂载复用，闭包必须
+ * 每次经 ref 取最新动作集，否则会用首次挂载的旧闭包（setState 已随旧组件卸载，
+ * 表现为重命名弹窗等动作失效）。
  */
 function createDepGraphInstance(
   _scope: string,
   parent: HTMLElement,
-  menuActions: DepGraphMenuActions
+  menuActionsRef: { current: DepGraphMenuActions }
 ): WorkflowInstance {
   const host = document.createElement('div');
   host.className = 'dependency-graph-canvas__host';
@@ -157,8 +192,14 @@ function createDepGraphInstance(
       borderColor: '#3c3c3c',
       boxShadow: '0 4px 12px rgba(0, 0, 0, 0.45)',
       nodeMenu: (node) => {
+        const menuActions = menuActionsRef.current;
         const rel = menuActions.resolveFilePath(node.getId());
         if (!rel) return [];
+        // 叶子节点（依赖链末尾，没有任何出向连线）拆不出子图：菜单项置灰禁用
+        const nodeId = node.getId();
+        const hasOutgoing = graph
+          .getAllEdges()
+          .some((e) => e.getSourceAnchor().nodeId === nodeId);
         return [
           // 顶部提示：完整相对路径（纯展示，节点上可能因截断看不清全路径）
           { label: rel, header: true, action: () => {} },
@@ -195,16 +236,37 @@ function createDepGraphInstance(
             action: () => menuActions.onCopyRelativePath(rel),
           },
           { label: i18n.t('rename'), action: () => menuActions.onRequestRename(rel) },
+          {
+            label: i18n.t('dependencyGraph.splitToNewGraph'),
+            disabled: !hasOutgoing,
+            action: () => menuActions.onSplitGraph(rel),
+          },
         ];
       },
     })
   );
 
+  // 当前高亮关联集：从边样式动态推导（处于高亮色的边的两端节点）。
+  // 不另存状态——画布重建 / 空白点击会把边样式重置回默认色，推导结果自动失效
+  const getLitNodeIds = (): Set<string> | null => {
+    const lit = new Set<string>();
+    for (const edge of graph.getAllEdges()) {
+      if (edge.getStyle().stroke === DEP_EDGE_ACTIVE_STYLE.stroke) {
+        lit.add(edge.getSourceAnchor().nodeId);
+        lit.add(edge.getTargetAnchor().nodeId);
+      }
+    }
+    return lit.size > 0 ? lit : null;
+  };
+
   // 选中节点时只高亮其「出边」（它引用的子节点方向），父节点方向的入边压暗；
-  // 同时压暗无关节点（子节点保持不透明）
+  // 同时压暗无关节点（子节点保持不透明）。
+  // 已存在高亮关联线时，点击（含右键触发的选中）关联集内的节点保持原状，
+  // 只有点击集外节点才取消旧高亮、按新节点重新计算
   graph.on('node:selected', (data: { node?: Node }) => {
     const selectedId = data.node?.getId();
     if (!selectedId) return;
+    if (getLitNodeIds()?.has(selectedId)) return;
     const neighborIds = new Set<string>([selectedId]);
     for (const edge of graph.getAllEdges()) {
       const srcId = edge.getSourceAnchor().nodeId;
@@ -224,6 +286,7 @@ function createDepGraphInstance(
   graph.on('node:dblclick', (data: { node?: Node }) => {
     const id = data.node?.getId();
     if (!id) return;
+    const menuActions = menuActionsRef.current;
     const rel = menuActions.resolveFilePath(id);
     if (rel) menuActions.onOpenFile(rel);
     else menuActions.onToggleGroup(id);
@@ -299,6 +362,8 @@ const DependencyGraphCanvas = ({ tabId }: { tabId: string }) => {
   const allFilePaths = useAppSelector((state) => state.workspace.allFilePaths);
   const activePanel = useAppSelector((state) => state.layout.activePanel);
   const sidePanelVisible = useAppSelector((state) => state.layout.sidePanelVisible);
+  // Git 文件状态（web/git 扩展推送）：同步为节点左上角角标
+  const gitStatus = useAppSelector((state) => state.workspace.gitStatus);
   // 菜单动作在实例创建时被捕获（实例跨渲染缓存），用 ref 保证始终读到最新的根路径/文件清单
   const rootSourceRef = useRef(rootSource);
   rootSourceRef.current = rootSource;
@@ -306,6 +371,8 @@ const DependencyGraphCanvas = ({ tabId }: { tabId: string }) => {
   allFilePathsRef.current = allFilePaths;
   const layoutRef = useRef({ activePanel, sidePanelVisible });
   layoutRef.current = { activePanel, sidePanelVisible };
+  const gitStatusRef = useRef(gitStatus);
+  gitStatusRef.current = gitStatus;
   // 视图模式：默认按子目录聚合成组节点（tab 重挂载时恢复上次模式）
   const [mode, setMode] = useState<DepGraphViewMode>(
     () => getDepGraphViewMode(tabId) ?? 'aggregate'
@@ -315,6 +382,12 @@ const DependencyGraphCanvas = ({ tabId }: { tabId: string }) => {
   const [renameValue, setRenameValue] = useState('');
   // renderMode 声明在 menuActions 之后，用 ref 打通（双击下钻组节点时触发画布重建）
   const renderModeRef = useRef<((graph: Graph, nextMode: DepGraphViewMode) => void) | null>(null);
+  // 节点搜索：输入值 + 当前查询的匹配结果（重复点击循环跳转）+ 已高亮节点的原始边框
+  const [searchValue, setSearchValue] = useState('');
+  const searchQueryRef = useRef('');
+  const searchMatchesRef = useRef<string[]>([]);
+  const searchIndexRef = useRef(0);
+  const highlightRef = useRef<{ nodeId: string; borderColor?: string; borderWidth?: number } | null>(null);
 
   /** 节点右键菜单动作（节点 id = 文件的项目相对路径，绝对路径 = 根路径 + rel） */
   const menuActions = useMemo<DepGraphMenuActions>(
@@ -423,15 +496,46 @@ const DependencyGraphCanvas = ({ tabId }: { tabId: string }) => {
         setRenameTarget(rel);
         setRenameValue(rel.split('/').pop() || rel);
       },
+      onSplitGraph: (rel) => {
+        // 从当前 tab 的文件级源数据提取直接关联子图，开新依赖图 tab（与资源管理器
+        // 「工作流可视化」同套路：预置数据 + openVirtualFile，由新画布挂载时消费）
+        const source = getDepGraphSourceData(tabId);
+        if (!source) return;
+        const sub = extractDirectSubgraph(source, rel);
+        if (sub.nodes.length === 0) return;
+        const newTabId = `workflow-dep-${Date.now()}`;
+        setPendingWorkflowGraphData(newTabId, sub);
+        dispatch(
+          openVirtualFile({
+            id: newTabId,
+            name: t('explorer.contextMenu.workflowVisualizeTab', {
+              name: rel.split('/').pop() || rel,
+            }),
+            source: `workflow://dep/${encodeURIComponent(rel)}`,
+            content: '',
+            language: 'dependency-graph',
+            isDirty: false,
+            isPreview: false,
+            readOnly: true,
+          })
+        );
+      },
     }),
-    [tabId, dispatch]
+    [tabId, dispatch, t]
   );
+  // Graph 实例跨组件挂载复用，闭包经此 ref 始终拿到最新动作集（见 createDepGraphInstance）
+  const menuActionsRef = useRef(menuActions);
+  menuActionsRef.current = menuActions;
 
   /** 按模式从文件级源数据重建画布（聚合 / 全量两种视图共用一份源数据） */
   const renderMode = useCallback(
     (graph: Graph, nextMode: DepGraphViewMode) => {
       const source = getDepGraphSourceData(tabId);
       if (!source) return;
+      // 画布重建后旧节点全部销毁：搜索匹配缓存与高亮状态一并失效
+      searchQueryRef.current = '';
+      searchMatchesRef.current = [];
+      highlightRef.current = null;
       const data =
         nextMode === 'aggregate'
           ? aggregateByDirectory(source, getDepGraphExpandedGroups(tabId))
@@ -444,11 +548,19 @@ const DependencyGraphCanvas = ({ tabId }: { tabId: string }) => {
         edge.setType(EdgeType.Straight);
         edge.updateStyle(DEP_EDGE_STYLE);
       }
+      // 重建的节点默认无角标：按当前 git 状态重新挂载
+      applyGitStatusBadges(graph, gitStatusRef.current);
       fitContent(graph);
     },
     [tabId]
   );
   renderModeRef.current = renderMode;
+
+  // git 状态变化（web/git 扩展异步推送）时同步到现有画布节点
+  useEffect(() => {
+    const instance = getWorkflowInstance(tabId);
+    if (instance) applyGitStatusBadges(instance.graph, gitStatus);
+  }, [gitStatus, tabId]);
 
   /** 重命名确认：磁盘改名 + 同步改写全部引入，再更新图数据并重建画布、刷新资源管理器 */
   const handleRenameConfirm = useCallback(async () => {
@@ -501,7 +613,7 @@ const DependencyGraphCanvas = ({ tabId }: { tabId: string }) => {
 
     let instance = getWorkflowInstance(tabId);
     if (!instance) {
-      instance = createDepGraphInstance(tabId, container, menuActions);
+      instance = createDepGraphInstance(tabId, container, menuActionsRef);
       setWorkflowInstance(tabId, instance);
     } else if (instance.host.parentElement !== container) {
       // 重挂载（tab 切换回来）：把已有画布宿主 DOM 挂到新容器，并补一帧渲染
@@ -520,7 +632,22 @@ const DependencyGraphCanvas = ({ tabId }: { tabId: string }) => {
     }
   }, [tabId, renderMode, menuActions]);
 
+  /** 还原搜索高亮：把上一个命中节点的边框恢复为原始样式 */
+  const clearSearchHighlight = useCallback(() => {
+    const prev = highlightRef.current;
+    if (!prev) return;
+    highlightRef.current = null;
+    const instance = getWorkflowInstance(tabId);
+    const prevNode = instance?.graph.getAllNodes().find((n) => n.getId() === prev.nodeId);
+    if (prevNode) {
+      prevNode.updateStyle({ borderColor: prev.borderColor, borderWidth: prev.borderWidth });
+    }
+  }, [tabId]);
+
   const handleModeChange = (nextMode: DepGraphViewMode) => {
+    // 切换/重置视图都会重建画布：清空搜索输入并撤销高亮（旧节点销毁，匹配结果已失效）
+    setSearchValue('');
+    clearSearchHighlight();
     // 已处于聚合模式时再点一次 = 收起全部已下钻的组，回到初始聚合视图
     if (nextMode === mode) {
       if (nextMode === 'aggregate') {
@@ -536,23 +663,98 @@ const DependencyGraphCanvas = ({ tabId }: { tabId: string }) => {
     if (instance) renderMode(instance.graph, nextMode);
   };
 
+  /** 搜索定位：匹配当前画布节点（id/标签，忽略大小写包含匹配），平滑居中并高亮边框；
+   *  同一查询重复点击在多个匹配间循环跳转；查询为空时仅清除已有高亮 */
+  const handleSearch = useCallback(() => {
+    const query = searchValue.trim().toLowerCase();
+    const instance = getWorkflowInstance(tabId);
+    if (!query || !instance) {
+      clearSearchHighlight();
+      searchQueryRef.current = '';
+      searchMatchesRef.current = [];
+      return;
+    }
+    const graph = instance.graph;
+
+    if (query !== searchQueryRef.current) {
+      searchQueryRef.current = query;
+      searchMatchesRef.current = graph
+        .getAllNodes()
+        .filter(
+          (n) =>
+            n.getId().toLowerCase().includes(query) ||
+            n.getLabel().toLowerCase().includes(query)
+        )
+        .map((n) => n.getId());
+      searchIndexRef.current = 0;
+    }
+    const matches = searchMatchesRef.current;
+    if (matches.length === 0) {
+      window.alert(i18n.t('dependencyGraph.searchNoMatch', { query: searchValue.trim() }));
+      return;
+    }
+    const nodeId = matches[searchIndexRef.current % matches.length];
+    searchIndexRef.current += 1;
+    const node = graph.getAllNodes().find((n) => n.getId() === nodeId);
+    if (!node) return;
+
+    // 居中：节点世界坐标中心 → 画布中心（保持当前缩放，平滑平移过去）
+    const { scale } = graph.getTransform();
+    const pos = node.getPosition();
+    const rect = instance.host.getBoundingClientRect();
+    void graph.panTo({
+      x: rect.width / 2 - pos.x * scale,
+      y: rect.height / 2 - pos.y * scale,
+    });
+
+    // 高亮命中节点边框（先还原上一个命中节点的原始边框）
+    clearSearchHighlight();
+    const style = node.getStyle();
+    highlightRef.current = { nodeId, borderColor: style.borderColor, borderWidth: style.borderWidth };
+    node.updateStyle({ borderColor: SEARCH_HIGHLIGHT_BORDER, borderWidth: 2 });
+  }, [searchValue, tabId, clearSearchHighlight]);
+
   return (
     <div ref={containerRef} className="dependency-graph-canvas">
-      <div className="dependency-graph-canvas__mode-switch">
-        <button
-          type="button"
-          className={mode === 'aggregate' ? 'is-active' : ''}
-          onClick={() => handleModeChange('aggregate')}
-        >
-          {t('dependencyGraph.modeAggregate')}
-        </button>
-        <button
-          type="button"
-          className={mode === 'files' ? 'is-active' : ''}
-          onClick={() => handleModeChange('files')}
-        >
-          {t('dependencyGraph.modeFiles')}
-        </button>
+      <div className="dependency-graph-canvas__toolbar">
+        <div className="dependency-graph-canvas__mode-switch">
+          <button
+            type="button"
+            className={mode === 'aggregate' ? 'is-active' : ''}
+            onClick={() => handleModeChange('aggregate')}
+          >
+            {t('dependencyGraph.modeAggregate')}
+          </button>
+          <button
+            type="button"
+            className={mode === 'files' ? 'is-active' : ''}
+            onClick={() => handleModeChange('files')}
+          >
+            {t('dependencyGraph.modeFiles')}
+          </button>
+        </div>
+        <div className="dependency-graph-canvas__search">
+          <input
+            value={searchValue}
+            placeholder={t('dependencyGraph.searchPlaceholder')}
+            onChange={(e) => {
+              setSearchValue(e.target.value);
+              // 清空输入时同步撤掉节点高亮，不必再点一次搜索
+              if (!e.target.value.trim()) clearSearchHighlight();
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') handleSearch();
+            }}
+          />
+          <button
+            type="button"
+            className="dependency-graph-canvas__search-btn"
+            title={t('dependencyGraph.searchPlaceholder')}
+            onClick={handleSearch}
+          >
+            <Search size={13} strokeWidth={1.5} />
+          </button>
+        </div>
       </div>
       {renameTarget && (
         <div

@@ -21321,33 +21321,4 @@ function listConnections() {
     };
   });
 }
-/**
- * §获取指定连接的完整凭据（含密码/密钥），供终端通道认证自动化使用。
- *
- * 与 listConnections 不同，这里返回敏感字段（password/privateKey/passphrase）。
- * 凭据仅在主进程内存中流转（渲染进程获取后通过 IPC 直接传给主进程），不持久化。
- *
- * 认证类型判断：
- *   - 密钥认证（privateKey 存在）：SSH 扩展的 connection.password 字段实际存储的是密钥 passphrase
- *     （见 attemptConnect(id, { privateKey }, password) 中 password 参数的用法）
- *   - 密码认证（无 privateKey）：connection.password 是 SSH 登录密码
- *
- * @param {string} connectionId 连接 ID
- * @returns {{ success: boolean, password?: string, privateKey?: string, passphrase?: string, error?: string }}
- */
-function getConnection(connectionId) {
-  const conn = findConnection(connectionId);
-  if (!conn) return { success: false, error: "\u8FDE\u63A5\u4E0D\u5B58\u5728" };
-  if (conn.privateKey) {
-    return {
-      success: true,
-      privateKey: conn.privateKey,
-      passphrase: conn.password
-    };
-  }
-  return {
-    success: true,
-    password: conn.password
-  };
-}
-module.exports = { activate, deactivate, getRemoteFileTree, handleFileOperation, callFileSystemProvider, executeRemote, listConnections, openConnection, getConnection };
+module.exports = { activate, deactivate, getRemoteFileTree, handleFileOperation, callFileSystemProvider, executeRemote, listConnections, openConnection };

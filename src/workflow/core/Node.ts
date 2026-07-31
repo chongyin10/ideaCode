@@ -84,6 +84,10 @@ export interface NodeStyle {
     textColor: string;
     /** 次要文字颜色（可选）：设置后，含 '/' 的标签按路径渲染——目录部分用该色、文件名用 textColor */
     secondaryTextColor?: string;
+    /** 角标文字（可选，如 git 状态 M/U）：绘制在节点左上角 */
+    badgeText?: string;
+    /** 角标文字颜色（可选，缺省用 textColor） */
+    badgeColor?: string;
     /** 字体大小 */
     fontSize: number;
     /** 字体 */
@@ -597,6 +601,18 @@ export class Node extends Cell {
             }
 
             ctx.fillText(displayLabel, this.position.x, this.position.y);
+        }
+
+        // 角标（可选，如 git 状态字母）：节点左上角，字号略小加粗
+        if (style.badgeText) {
+            ctx.font = `bold ${Math.max(9, style.fontSize - 2)}px ${style.fontFamily}`;
+            ctx.textAlign = 'left';
+            ctx.fillStyle = style.badgeColor ?? style.textColor;
+            ctx.fillText(
+                style.badgeText,
+                this.position.x - style.width / 2 + 5,
+                this.position.y - style.height / 2 + 9
+            );
         }
 
         ctx.restore();

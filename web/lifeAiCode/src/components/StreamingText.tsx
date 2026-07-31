@@ -59,12 +59,20 @@ export function StreamingText({
     return () => window.clearInterval(id);
   }, [isStreaming]); // 只随 streaming 状态启停，content 变化通过 ref 读取，避免 interval 被反复重置
 
-  const displayed = content.slice(0, displayedLength);
+  // §代理对安全：按码元截断可能劈开 emoji 等 surrogate pair，
+  // 末尾闪现 � 替换符造成视觉跳动——边界处回退一个码元避开高位代理
+  let end = displayedLength;
+  if (end > 0 && end < content.length) {
+    const code = content.charCodeAt(end - 1);
+    if (code >= 0xd800 && code <= 0xdbff) end -= 1;
+  }
+  const displayed = content.slice(0, end);
 
   return (
     <MarkdownContent
       content={displayed}
       className="streaming-text"
+      streaming={isStreaming}
       onOptionClick={onOptionClick}
       onExecuteShell={onExecuteShell}
       onKillShell={onKillShell}

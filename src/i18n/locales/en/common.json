@@ -183,7 +183,10 @@
     "locate": "Locate in Explorer",
     "diffCompare": "Compare with HEAD",
     "diffNoRepo": "No Git repository open for diff",
-    "diffFailed": "Diff failed: {{message}}"
+    "diffFailed": "Diff failed: {{message}}",
+    "searchPlaceholder": "Search nodes",
+    "searchNoMatch": "No node matching \"{{query}}\"",
+    "splitToNewGraph": "Split into New Dependency Graph"
   },
   "topBar": {
     "searchFilesTooltip": "Search files (Ctrl+P)",

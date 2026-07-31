@@ -294,8 +294,6 @@ export class Dropdown implements Plugin {
 
         // 创建菜单项
         menuItems.forEach((item) => {
-            if (item.disabled) return;
-
             // 纯展示项（菜单顶部的上下文提示）：不可点击、无悬停效果，过长省略号截断
             if (item.header) {
                 const headerEl = document.createElement('div');
@@ -324,32 +322,37 @@ export class Dropdown implements Plugin {
             const textColor = item.danger ? this.options.dangerColor : this.options.textColor;
             const hoverBg = item.danger ? this.options.dangerHoverColor : this.options.hoverColor;
 
+            // 禁用项：渲染为灰色、无悬停效果、不可点击（而不是直接隐藏，
+            // 让用户知道功能存在但当前不满足条件）
             menuItem.style.cssText = `
                 padding: 5px 14px;
-                cursor: pointer;
+                cursor: ${item.disabled ? 'default' : 'pointer'};
                 display: flex;
                 align-items: center;
                 gap: 8px;
                 font-size: 12px;
                 line-height: 1.4;
                 color: ${textColor};
+                opacity: ${item.disabled ? 0.4 : 1};
                 transition: background 0.1s;
                 user-select: none;
             `;
 
             menuItem.innerHTML = `${item.icon || ''} ${item.label}`.trim();
 
-            menuItem.onmouseenter = () => {
-                menuItem.style.background = hoverBg;
-            };
-            menuItem.onmouseleave = () => {
-                menuItem.style.background = 'transparent';
-            };
+            if (!item.disabled) {
+                menuItem.onmouseenter = () => {
+                    menuItem.style.background = hoverBg;
+                };
+                menuItem.onmouseleave = () => {
+                    menuItem.style.background = 'transparent';
+                };
 
-            menuItem.onclick = () => {
-                this.close();
-                item.action(target, event);
-            };
+                menuItem.onclick = () => {
+                    this.close();
+                    item.action(target, event);
+                };
+            }
 
             popup.appendChild(menuItem);
         });

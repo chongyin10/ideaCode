@@ -14,12 +14,19 @@
   overflow: hidden;
 }
 
-/* 左上角的视图模式切换（分段按钮：按子目录聚合 / 全部文件） */
-.dependency-graph-canvas__mode-switch {
+/* 左上角工具区（视图模式切换 + 节点搜索） */
+.dependency-graph-canvas__toolbar {
   position: absolute;
   top: 12px;
   left: 12px;
   z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 视图模式切换（分段按钮：按子目录聚合 / 全部文件） */
+.dependency-graph-canvas__mode-switch {
   display: flex;
   background: #252526;
   border: 1px solid #3c3c3c;
@@ -45,6 +52,46 @@
 .dependency-graph-canvas__mode-switch button.is-active {
   background: #094771;
   color: #ffffff;
+}
+
+/* 节点搜索框：输入后点击图标定位到匹配节点并居中高亮 */
+.dependency-graph-canvas__search {
+  display: flex;
+  align-items: center;
+  background: #252526;
+  border: 1px solid #3c3c3c;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.dependency-graph-canvas__search input {
+  width: 160px;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: #e8e8e8;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 5px 10px;
+}
+
+.dependency-graph-canvas__search input::placeholder {
+  color: #777777;
+}
+
+.dependency-graph-canvas__search-btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: #999999;
+  padding: 5px 10px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+
+.dependency-graph-canvas__search-btn:hover {
+  color: #cccccc;
 }
 
 /* 重命名弹窗（遮罩 + 居中对话框），进入时淡入 + 轻微上浮缩放，避免突兀 */

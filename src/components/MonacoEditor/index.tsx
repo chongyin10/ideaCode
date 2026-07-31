@@ -612,6 +612,14 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
   const semTokensLegendRef = useRef<{ tokenTypes: string[]; tokenModifiers: string[] } | null>(null);
   /** 事件驱动重试触发器：tsserver 推送 diagnostics（program 已构建）时立即重试 */
   const semTokensRetryTriggerRef = useRef<(() => void) | null>(null);
+  /** provider 重试循环的唤醒器集合：当前文件收到诊断推送时全部唤醒（program 已构建信号） */
+  const semTokensDiagWaitersRef = useRef(new Set<() => void>());
+  /** semantic tokens 重试耗尽标记：耗尽后 Monaco 在下一次编辑前不再查询，
+   *  待诊断到达（服务端冷启动完成）时强制重新查询补高亮 */
+  const semTokensExhaustedRef = useRef(false);
+  /** semanticHighlightingEnabled 的 ref 镜像（onMount 闭包内读最新设置值） */
+  const semanticHighlightingEnabledRef = useRef(semanticHighlightingEnabled);
+  semanticHighlightingEnabledRef.current = semanticHighlightingEnabled;
   /** onMount 已执行标记：区分首次加载（由 onMount 处理）和切 tab（由 useEffect 处理） */
   const editorMountedRef = useRef(false);
   /** 最新 value 的 ref，供切 tab useEffect 拿到新文件内容，避免把 value 放进依赖 */
@@ -1051,6 +1059,19 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
               applyDiagnostics(editorRef.current, monacoRef.current, data.diagnostics);
               // tsserver 已处理该文件 → 立即触发 semantic tokens 重试（消除盲等）
               if (semTokensRetryTriggerRef.current) semTokensRetryTriggerRef.current();
+              // 诊断到达 = program 已构建：唤醒 provider 内等待中的重试循环
+              semTokensDiagWaitersRef.current.forEach((wake) => wake());
+              semTokensDiagWaitersRef.current.clear();
+              // 重试已耗尽（Monaco 已拿到 null 并放弃查询）→ 切换 semanticHighlighting
+              // 选项强制 Monaco 重新查询，此时服务端已就绪，高亮即刻补上
+              if (semTokensExhaustedRef.current) {
+                semTokensExhaustedRef.current = false;
+                const ed = editorRef.current;
+                ed?.updateOptions({ 'semanticHighlighting.enabled': false });
+                setTimeout(() => {
+                  ed?.updateOptions({ 'semanticHighlighting.enabled': semanticHighlightingEnabledRef.current });
+                }, 50);
+              }
             }
           });
 
@@ -1213,16 +1234,40 @@ const MonacoEditor = ({ value, language, onChange, snapshot, onSnapshot, focused
                 if (result) return result;
               }
 
-              // 3. 无预取但 LSP 可达 → 发起新请求并更新缓存
+              // 3. 无预取但 LSP 可达 → 发起请求并更新缓存。
+              // §tsserver 冷启动（大项目首次构建 program 需数秒）时 semanticTokens 会
+              // 超时/返回空；Monaco 拿到 null 后在下次编辑前不会再查询，表现为
+              // "变量/方法一直没有高亮"。这里做有界重试：诊断推送（program 构建完成）
+              // 立即唤醒，1s 兜底间隔，最多 12 次；耗尽后置标记，由诊断处理器强制刷新。
               if (currentPath) {
-                try {
-                  const tokens = await tsService.semanticTokens(currentPath);
-                  if (tokens && tokens.data && tokens.data.length > 0) {
-                    const data = tokens.data instanceof Uint32Array ? tokens.data : new Uint32Array(tokens.data);
-                    decodedTokensRef.current = decodeSemTokens(data);
-                    return { resultId: tokens.resultId, data };
-                  }
-                } catch { /* fall through to remapped cache */ }
+                for (let attempt = 0; attempt < 12; attempt++) {
+                  try {
+                    const tokens = await tsService.semanticTokens(currentPath);
+                    if (tokens && tokens.data && tokens.data.length > 0) {
+                      const data = tokens.data instanceof Uint32Array ? tokens.data : new Uint32Array(tokens.data);
+                      decodedTokensRef.current = decodeSemTokens(data);
+                      return { resultId: tokens.resultId, data };
+                    }
+                  } catch { /* 继续重试 */ }
+                  if (pathRef.current !== currentPath) break; // 已切 tab，放弃本文件
+                  // 等待诊断唤醒或 1s 超时
+                  await new Promise<void>((resolve) => {
+                    const wake = () => {
+                      clearTimeout(timer);
+                      resolve();
+                    };
+                    const timer = setTimeout(() => {
+                      semTokensDiagWaitersRef.current.delete(wake);
+                      resolve();
+                    }, 1000);
+                    semTokensDiagWaitersRef.current.add(wake);
+                  });
+                  if (pathRef.current !== currentPath) break;
+                }
+                // 12 次仍无 tokens（服务端冷启动未完成）：标记耗尽，待诊断到达时强制刷新
+                if (pathRef.current === currentPath) {
+                  semTokensExhaustedRef.current = true;
+                }
               }
 
               // 4. LSP 请求失败或返回空 → 返回位置重映射后的缓存 tokens（同步，零延迟）

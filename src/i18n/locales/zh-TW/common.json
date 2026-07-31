@@ -183,7 +183,10 @@
     "locate": "定位",
     "diffCompare": "diff 對比",
     "diffNoRepo": "目前沒有開啟的 Git 倉庫，無法進行 diff 對比",
-    "diffFailed": "diff 對比失敗：{{message}}"
+    "diffFailed": "diff 對比失敗：{{message}}",
+    "searchPlaceholder": "搜尋節點",
+    "searchNoMatch": "找不到符合「{{query}}」的節點",
+    "splitToNewGraph": "拆分為新的依賴圖"
   },
   "topBar": {
     "searchFilesTooltip": "搜尋檔案 (Ctrl+P)",

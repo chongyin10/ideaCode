@@ -570,7 +570,7 @@ function BlockRenderer({ block, shellOutputs, onExecuteShell, onKillShell, onOpt
         </div>
       );
     case 'reasoning':
-      return <ReasoningBlock content={block.content} isActive={isActive} />;
+      return <ReasoningBlock content={block.content} isActive={isActive} streaming={isStreaming && isActive} />;
     case 'edit':
       return <EditSummary filePath={block.filePath} additions={block.additions} deletions={block.deletions} />;
     case 'shell':
@@ -588,7 +588,7 @@ function BlockRenderer({ block, shellOutputs, onExecuteShell, onKillShell, onOpt
 /*  Reasoning Block                                                   */
 /* ─────────────────────────────────────────────────────────────────── */
 
-function ReasoningBlock({ content, isActive }: { content: string; isActive?: boolean }) {
+function ReasoningBlock({ content, isActive, streaming }: { content: string; isActive?: boolean; streaming?: boolean }) {
   const [open, setOpen] = useState(false);
 
   // §内容保留：推理块在活跃输出时自动展开后不再自动收起。
@@ -617,7 +617,7 @@ function ReasoningBlock({ content, isActive }: { content: string; isActive?: boo
       </button>
       {open && (
         <div className="reasoning-body">
-          <MarkdownContent content={content} enableOptions={false} />
+          <MarkdownContent content={content} enableOptions={false} streaming={streaming} />
         </div>
       )}
     </div>

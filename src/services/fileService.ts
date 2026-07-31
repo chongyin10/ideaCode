@@ -185,7 +185,8 @@ export async function readFile(fileSource: FileSource): Promise<string> {
       return content;
     } catch (err) {
       // 目录或显式抛出的 EISDIR 直接向上抛，避免对目录重复 readFile
-      if (err && typeof err.message === 'string' && err.message.startsWith('EISDIR')) throw err;
+      const errMsg = (err as { message?: unknown } | null)?.message;
+      if (typeof errMsg === 'string' && errMsg.startsWith('EISDIR')) throw err;
       // stat 不可用（权限/特殊文件）时降级：直接尝试 readFile
       return window.electronAPI!.fs.readFile(fileSource);
     }

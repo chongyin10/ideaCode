@@ -27,7 +27,7 @@ import {
   TerminalTab,
 } from '../../store/slices/terminalSlice';
 import { useTerminalFileTreeSync } from '../../services/terminalFileTreeSync';
-import { getCurrentSshConfig, buildSshTerminalArgs, resolveTerminalChannel } from '../../services/sshWorkspace';
+import { resolveTerminalChannel } from '../../services/sshWorkspace';
 import {
   createTerminal, disposeTerminal,
   listProfiles, onTerminalOutput,

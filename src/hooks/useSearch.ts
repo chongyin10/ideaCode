@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { readFile, searchContent, isElectron, isRemoteUri } from '../services/fileService';
-import type { FileEntry, FileSource } from '../services/fileService';
+import type { FileEntry, FileSource, SearchContentResult } from '../services/fileService';
 import { InvertedIndex, PIDController, KalmanFilter } from '../utils/algorithms';
 import {
   hasNonWordChars,
@@ -88,7 +88,8 @@ class RipgrepSearchStrategy implements SearchStrategy {
 
       // §ripgrep 推送的 results 是主进程聚合的全量结果（按文件路径 Map），
       // 每次 progress 直接替换渲染进程的 results，无需本地合并。
-      const toFileResults = (results: { filePath: string; fileName: string; matches: { line: number; column: number; text: string; match: { index: number; length: number; matched: string } } }[]): FileSearchResult[] =>
+      // SearchContentMatch 与 SearchMatch 结构一致（line/column/text/match），直接透传
+      const toFileResults = (results: SearchContentResult[]): FileSearchResult[] =>
         results.map((r) => ({
           filePath: r.filePath,
           fileName: r.fileName,

@@ -181,6 +181,8 @@ export class Graph {
     private dragManager: DragManager;
 
     private rafId: number | null = null;
+    /** 滚轮缩放停止后的补帧定时器（ debounce ） */
+    private zoomSettleTimer: ReturnType<typeof setTimeout> | null = null;
 
     // HTML 节点元素管理
     private htmlNodeElements: Map<string, HTMLElement> = new Map();
@@ -1033,6 +1035,14 @@ export class Graph {
         this.viewport.offset.y = mouseY - worldY * newScale;
 
         this.scheduleRender();
+
+        // 缩放停止后补一帧：连续滚轮时帧被 rAF 合并，若最后一帧恰好异常
+        // （节点未绘出等），之后不再有交互触发重绘，画面会一直停留在坏帧上
+        if (this.zoomSettleTimer !== null) clearTimeout(this.zoomSettleTimer);
+        this.zoomSettleTimer = setTimeout(() => {
+            this.zoomSettleTimer = null;
+            this.scheduleRender();
+        }, 150);
 
         // 触发缩放回调
         this.options.onZoom(this.viewport.scale, { ...this.viewport.offset });
@@ -1972,7 +1982,13 @@ export class Graph {
                     return;
                 }
             }
-            node.draw(this.ctx, this.animationTime);
+            // 单节点绘制异常只跳过该节点（记录日志便于定位），
+            // 避免一个坏节点拖垮整帧导致后续节点与连线全部丢失
+            try {
+                node.draw(this.ctx, this.animationTime);
+            } catch (err) {
+                console.error(`[Graph] 节点 ${node.getId()} 绘制异常:`, err);
+            }
         });
 
         // 在选中的节点上绘制 resize handles
@@ -2203,12 +2219,19 @@ export class Graph {
         padding: number = 50
     ): void {
         const { width, height } = this.canvas.getBoundingClientRect();
+        // 画布隐藏（如 tab 未激活）时尺寸为 0：此时计算会得出 scale=0/NaN 并写进
+        // viewport，导致整幅画布（网格/节点/连线）绘制失效，直接放弃本次适配
+        if (!(width > 0) || !(height > 0)) return;
         const contentWidth = contentBounds.width + padding * 2;
         const contentHeight = contentBounds.height + padding * 2;
 
         const scaleX = width / contentWidth;
         const scaleY = height / contentHeight;
-        const scale = Math.min(scaleX, scaleY, this.options.maxZoom);
+        // fitToContent 直接写 viewport（不经过 setScale），这里手动夹取到合法区间
+        const scale = Math.max(
+            this.options.minZoom,
+            Math.min(scaleX, scaleY, this.options.maxZoom)
+        );
 
         const offsetX =
             (width - contentBounds.width * scale) / 2 - contentBounds.x * scale;
@@ -2486,6 +2509,12 @@ export class Graph {
         if (this.rafId !== null) {
             cancelAnimationFrame(this.rafId);
             this.rafId = null;
+        }
+
+        // 取消缩放补帧定时器
+        if (this.zoomSettleTimer !== null) {
+            clearTimeout(this.zoomSettleTimer);
+            this.zoomSettleTimer = null;
         }
 
         // 卸载全部插件（清理各自的 DOM、document/window 级监听、键盘监听等）

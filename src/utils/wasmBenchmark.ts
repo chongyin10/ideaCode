@@ -10,7 +10,7 @@
  */
 
 import { getWasm } from './wasmLoader';
-import { fuzzyScore as jsFuzzyScore, fuzzySearch as jsFuzzySearch } from './algorithms/fuzzySearch';
+import { fuzzySearch as jsFuzzySearch } from './algorithms/fuzzySearch';
 
 /** 生成测试用的文件路径列表 */
 function generateTestTargets(count: number): string[] {
@@ -73,7 +73,7 @@ async function benchFuzzyScoreBatch(
   for (let i = 0; i < iterations; i++) {
     jsFuzzySearch(query, targets);
   }
-  jsMs = performance.now() - start;
+  const jsMs = performance.now() - start;
 
   return {
     name: `fuzzy_score_batch("${query}", ${targets.length} targets)`,
