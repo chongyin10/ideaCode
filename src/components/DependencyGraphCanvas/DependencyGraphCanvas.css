@@ -41,8 +41,12 @@
   color: #999999;
   font-size: 12px;
   line-height: 1.4;
-  padding: 5px 12px;
+  padding: 5px 10px;
   cursor: pointer;
+  /* 图标化后居中显示 */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .dependency-graph-canvas__mode-switch button:hover {
@@ -188,4 +192,173 @@
 
 .dependency-graph-canvas__modal-actions button.is-primary:hover {
   background: #0b5a8f;
+}
+
+/* 工具按钮（仅看变更影响 / 刷新）：与搜索框同款容器风格 */
+.dependency-graph-canvas__tool-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: #252526;
+  border: 1px solid #3c3c3c;
+  border-radius: 6px;
+  color: #999999;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+.dependency-graph-canvas__tool-btn:hover:not(:disabled) {
+  color: #cccccc;
+}
+
+.dependency-graph-canvas__tool-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.dependency-graph-canvas__tool-btn.is-active {
+  background: #094771;
+  border-color: #094771;
+  color: #ffffff;
+}
+
+/* 刷新中图标旋转 */
+@keyframes dep-graph-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.dependency-graph-canvas__spin {
+  animation: dep-graph-spin 0.9s linear infinite;
+}
+
+/* 循环依赖警示（检测到环时出现在工具栏） */
+.dependency-graph-canvas__cycle-warning {
+  display: inline-flex;
+  align-items: center;
+  background: rgba(248, 81, 73, 0.12);
+  border: 1px solid rgba(248, 81, 73, 0.5);
+  border-radius: 6px;
+  color: #f85149;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 5px 10px;
+}
+
+/* 节点悬停信息卡（fixed 定位：坐标取自鼠标 clientX/Y） */
+.dependency-graph-canvas__tooltip {
+  position: fixed;
+  z-index: 30;
+  max-width: 360px;
+  background: #252526;
+  border: 1px solid #3c3c3c;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+  padding: 8px 10px;
+  pointer-events: none;
+  word-break: break-all;
+}
+
+.dependency-graph-canvas__tooltip-title {
+  color: #e8e8e8;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.dependency-graph-canvas__tooltip-line {
+  color: #999999;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* 扩展名过滤下拉（与工具按钮同款容器风格） */
+.dependency-graph-canvas__ext-select {
+  appearance: none;
+  background: #252526;
+  border: 1px solid #3c3c3c;
+  border-radius: 6px;
+  color: #999999;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 5px 8px;
+  cursor: pointer;
+  outline: none;
+  max-width: 110px;
+}
+
+.dependency-graph-canvas__ext-select:hover {
+  color: #cccccc;
+}
+
+.dependency-graph-canvas__ext-select option {
+  background: #252526;
+  color: #cccccc;
+}
+
+/* 依赖路径查找提示条（工具栏下方，点 × 或空白处取消） */
+.dependency-graph-canvas__path-hint {
+  position: absolute;
+  top: 48px;
+  left: 12px;
+  z-index: 10;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(9, 71, 113, 0.25);
+  border: 1px solid #094771;
+  border-radius: 6px;
+  color: #4fc1ff;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 5px 10px;
+}
+
+.dependency-graph-canvas__path-hint button {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: #4fc1ff;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+}
+
+.dependency-graph-canvas__path-hint button:hover {
+  color: #ffffff;
+}
+
+/* 「AI 单元测试」物料按钮：紫色标识可拖拽（cursor 由 Dnd.registerSource 设置为 grab） */
+.dependency-graph-canvas__ai-test-material {
+  color: #c586c0;
+}
+
+/* 测试报告弹窗：比重命名弹窗宽，内容可滚动 */
+.dependency-graph-canvas__modal--report {
+  width: 560px;
+  max-width: 80vw;
+}
+
+.dependency-graph-canvas__report-content {
+  margin: 0;
+  padding: 10px 12px;
+  max-height: 50vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #cccccc;
+  background: #1b1b1d;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
 }

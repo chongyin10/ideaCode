@@ -720,6 +720,8 @@ function dispatchLifeAiCode(method, params) {
     'lifeAiCode.internal.reject':           'lifeAiCode.internal.reject',
     'lifeAiCode.internal.previewDiff':      'lifeAiCode.internal.previewDiff',
     'lifeAiCode.internal.setEditMode':      'lifeAiCode.internal.setEditMode',
+    'lifeAiCode.internal.addMention':       'lifeAiCode.internal.addMention',
+    'lifeAiCode.internal.runAgent':         'lifeAiCode.internal.runAgent',
   };
   
   const cmd = cmdMap[method];
@@ -747,6 +749,8 @@ const lifeAiCodeMethods = [
   'lifeAiCode.internal.configure',
   'lifeAiCode.internal.testConnection',
   'lifeAiCode.internal.setEditMode',
+  'lifeAiCode.internal.addMention',
+  'lifeAiCode.internal.runAgent',
 ];
 
 // 处理 commands.execute（如 lifeAiCode.ask、ssh.internal.execute 等）

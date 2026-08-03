@@ -20,6 +20,8 @@ export interface MenuItem {
     disabled?: boolean;
     /** 是否为纯展示的提示文本（不可点击、无悬停效果，常用于菜单顶部显示上下文信息） */
     header?: boolean;
+    /** 是否为分组分隔线（中划线风格，仅渲染一条横线，不可点击） */
+    separator?: boolean;
 }
 
 /**
@@ -294,6 +296,20 @@ export class Dropdown implements Plugin {
 
         // 创建菜单项
         menuItems.forEach((item) => {
+            // 分组分隔线：一条横线，上下留白，无交互
+            if (item.separator) {
+                const sepEl = document.createElement('div');
+                sepEl.style.cssText = `
+                    height: 1px;
+                    margin: 4px 10px;
+                    background: ${this.options.borderColor};
+                    pointer-events: none;
+                    user-select: none;
+                `;
+                popup.appendChild(sepEl);
+                return;
+            }
+
             // 纯展示项（菜单顶部的上下文提示）：不可点击、无悬停效果，过长省略号截断
             if (item.header) {
                 const headerEl = document.createElement('div');
@@ -362,6 +378,14 @@ export class Dropdown implements Plugin {
             ev.stopPropagation();
         });
         popup.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+        });
+        // §悬停穿透修复：Graph 的 mousemove 绑在 document 上（冒泡阶段），
+        // 光标在菜单内移动时引擎仍会对菜单下方的节点做悬停命中——
+        // 菜单背后节点会显示连接桩（白点）等 hover 视觉，菜单关闭后形成"残留 hover"。
+        // 拦截菜单内的 mousemove：菜单打开期间引擎保持打开前的悬停状态，
+        // 关闭后也不会在菜单背后的节点上残留 hover。
+        popup.addEventListener('mousemove', (ev) => {
             ev.stopPropagation();
         });
 

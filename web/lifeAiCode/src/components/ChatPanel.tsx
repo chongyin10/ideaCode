@@ -11,7 +11,6 @@ import { TodoDropdown } from './agent/TodoDropdown';
 
 import { AgentStatusSummary } from './agent/AgentStatusSummary';
 import { PlanTaskPanel } from './agent/PlanTaskPanel';
-import { TaskSummary } from './agent/TaskSummary';
 import { TodoListBlock } from './agent/TodoListBlock';
 import { ShellInteraction } from './agent/ShellInteraction';
 import { ShieldCheck, Brain, Pencil, ArrowDown, User, Sparkles, Paperclip, Send, MessageSquare, Loader2, Check, Square, ChevronDown, X, GripVertical, Code2, MessageCircleQuestion, FileText, Terminal, RefreshCw, Network, Lightbulb, GitCompare, Trash2, Archive, MapPin, Undo2, Info, Copy, Folder, File } from 'lucide-react';
@@ -262,6 +261,8 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
   //   收到 agentEditPending 时直接转发 confirmAgentEdit 给后端。
   const agentModeRef = useRef(agentMode);
   agentModeRef.current = agentMode;
+  // §外部联动：消息监听 effect（deps 仅 [vscode]）经此 ref 调最新 sendMessage
+  const sendMessageRef = useRef<(text: string, options?: { forceAgent?: boolean }) => Promise<void>>(async () => {});
   // autoAccept 绑定到 aiEditMode：编辑模式开启时自动接受建议，关闭时手动接受
   useEffect(() => { setAutoAccept(aiEditMode); }, [aiEditMode]);
 
@@ -976,6 +977,21 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
           setWorkspaceFiles(msg.files);
           break;
         }
+        case 'addMention': {
+          // §外部联动（依赖图「添加到 LifeAiCode」）：直接向输入框添加 @ 引用芯片（去重）
+          setMentions((prev) =>
+            prev.some((m) => m.path === msg.file.path && m.isDirectory === msg.file.isDirectory)
+              ? prev
+              : [...prev, msg.file]
+          );
+          break;
+        }
+        case 'externalSend': {
+          // §外部联动（依赖图「AI 单元测试」）：外部直接发起一条 Agent 对话，
+          // 强制 Agent 模式（需要文件读写/命令执行工具）
+          void sendMessageRef.current(msg.text, { forceAgent: true });
+          break;
+        }
         case 'docParse': {
           // §文档解析 loading：附件提取文本期间显示进度提示
           if (msg.status === 'parsing') {
@@ -1290,7 +1306,9 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
     });
   }, []);
 
-  const sendMessage = async (text: string) => {
+  const sendMessage = async (text: string, options?: { forceAgent?: boolean }) => {
+    // §外部联动：强制 Agent 模式（外部触发需要文件读写/命令执行工具）
+    const effectiveAgentMode = options?.forceAgent === true ? true : agentMode;
     // §@ 文件补全：芯片形式的文件引用在发送时拼回文本前缀，保证 LLM 能拿到路径
     const mentionPrefix = mentions.map((m) => `@${m.path}`).join(' ');
     const fullText = (mentionPrefix ? `${mentionPrefix} ${text}` : text).trim();
@@ -1330,7 +1348,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
     setLastResponseDuration(null);
     // 新对话开始时清空上一次的完成状态与执行记录，避免显示到新的占位消息上
     setAgentStatus(null);
-    if (agentMode) {
+    if (effectiveAgentMode) {
       setToolCalls([]);
       setPlanSteps([]);
       setPlanStreamText('');
@@ -1360,7 +1378,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
       attachments: mentions,
       context,
       thinkingEnabled,
-      agentMode,
+      agentMode: effectiveAgentMode,
       // §继续会话：把当前已有对话作为历史上下文传给后端，让 LLM 能理解多轮上下文
       // 排除占位消息和空内容，最多保留最近 20 条避免 token 爆炸
       // §DeepSeek thinking mode：assistant 消息必须回传 reasoning_content，否则 API 报 400
@@ -1387,6 +1405,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
         }),
     } as WebViewRequest);
   };
+  sendMessageRef.current = sendMessage;
 
   // §需求3：点击暂停时的统一处理
   // 1) 通知后端（让流式生成尽早停止，避免后端继续烧 token）
@@ -2084,17 +2103,8 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
         </div>
       )}
 
-      {/* §外部任务总结：Agent 完成后在消息区域外展示统计卡片 */}
-      {agentStatus?.status === 'done' && (toolCalls.length > 0 || planSteps.length > 0) && (
-        <div className="agent-summary-zone">
-          <TaskSummary
-            toolCalls={toolCalls}
-            planSteps={planSteps}
-            changes={allChanges}
-            duration={lastResponseDuration}
-          />
-        </div>
-      )}
+      {/* §任务完成状态由上方 status-indicator-zone 统一展示（状态+耗时+Token），
+          不再单独渲染统计卡片 */}
 
       {/* Scroll to bottom button */}
       {userScrolledUp && (

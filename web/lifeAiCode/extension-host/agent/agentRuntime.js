@@ -81,6 +81,8 @@ class AgentRuntime {
     this._abortController = new AbortController();
     // §需求8-阶段3：每个新任务允许触发一次自动压缩
     this._autoCompacted = false;
+    // §只答不改兜底：每个新任务允许触发一次"要求实际执行修改"的提示
+    this._editNudged = false;
     try {
       const result = await this._runOne(next);
       next.resolve(result);
@@ -161,6 +163,8 @@ class AgentRuntime {
       // 若循环跑满 MAX_ROUNDS 仍未收敛，需要给用户明确提示，
       // 否则用户会以为任务正常完成，而实际上 LLM 还想继续调工具但被截断了。
       let converged = false;
+      // §只答不改兜底：本轮任务中是否实际调用过修改类工具
+      let editToolCalled = false;
 
       for (let round = 0; round < MAX_ROUNDS; round++) {
         if (this.cancelled) {
@@ -209,9 +213,29 @@ class AgentRuntime {
         // 解析 tool_call（native 或 prompt-based）
         const toolCall = this.adapter.extractToolCall(responseObject || responseContent);
         if (!toolCall) {
+          // §只答不改兜底：用户明确要求修改代码，模型却全程只输出分析文字、
+          // 未调用任何修改类工具就结束。追加提示要求其实际执行修改（仅触发一次，防死循环）。
+          if (!planExecuted && !editToolCalled && !this._editNudged && this._wantsCodeEdit(userInput)) {
+            this._editNudged = true;
+            this._notifyStep('think', '检测到未执行修改，要求模型继续');
+            const nudgeAssistant = { role: 'assistant', content: responseContent };
+            // DeepSeek thinking mode 要求 assistant 消息携带 reasoning_content 字段
+            nudgeAssistant.reasoning_content = (responseObject && responseObject.reasoningContent) || '';
+            messages.push(nudgeAssistant);
+            messages.push({
+              role: 'user',
+              content: '你刚才只给出了分析和方案，没有实际执行修改。请立即使用 apply_edit / write_file 工具完成上述修改，不要只用文字描述方案。',
+            });
+            continue;
+          }
           // 没有 tool_call，任务完成
           converged = true;
           break;
+        }
+
+        // §只答不改兜底：记录是否调用过修改类工具
+        if (toolCall.name === 'apply_edit' || toolCall.name === 'write_file' || toolCall.name === 'delete_file') {
+          editToolCalled = true;
         }
 
         // 通知 UI 有 tool_call
@@ -534,6 +558,16 @@ ${transcript}
       if (err && (err.isAbort || err.name === 'AbortError' || this.cancelled)) return;
       console.warn('[AgentRuntime] 自动压缩失败:', err?.message || err);
     }
+  }
+
+  /**
+   * §只答不改兜底：判断用户输入是否包含明确的代码修改意图。
+   * 仅用于"模型全程未调用修改类工具就结束"时的一次性提示，
+   * 宁可漏判不可误判——纯分析/问答类输入不应触发。
+   */
+  _wantsCodeEdit(userInput) {
+    if (!userInput || typeof userInput !== 'string') return false;
+    return /(修改|重构|重写|优化|调整|改成|改为|改写|改造|变更|更新代码|refactor|rewrite|optimize|modify)/i.test(userInput);
   }
 
   /**

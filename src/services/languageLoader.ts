@@ -24,6 +24,8 @@ export async function ensureLanguage(lang: string): Promise<void> {
     'c':          () => import('monaco-editor/esm/vs/basic-languages/cpp/cpp.contribution.js').then(() => {}),
     'csharp':     () => import('monaco-editor/esm/vs/basic-languages/csharp/csharp.contribution.js').then(() => {}),
     'python':     () => import('monaco-editor/esm/vs/basic-languages/python/python.contribution.js').then(() => {}),
+    'go':         () => import('monaco-editor/esm/vs/basic-languages/go/go.contribution.js').then(() => {}),
+    'rust':       () => import('monaco-editor/esm/vs/basic-languages/rust/rust.contribution.js').then(() => {}),
     'css':        () => import('monaco-editor/esm/vs/basic-languages/css/css.contribution.js').then(() => {}),
     'scss':       () => import('monaco-editor/esm/vs/basic-languages/scss/scss.contribution.js').then(() => {}),
     'less':       () => import('monaco-editor/esm/vs/basic-languages/less/less.contribution.js').then(() => {}),

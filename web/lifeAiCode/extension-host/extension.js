@@ -2132,6 +2132,15 @@ async function activate(context) {
       const ctx = params.context || await contextBuilder.buildContext({ selection: params.selection });
       await processMessage(params.text, ctx);
     }],
+    ['lifeAiCode.internal.addMention', async (params) => {
+      // §依赖图「添加到 LifeAiCode」：把文件作为 @ 引用芯片塞进输入框
+      if (params?.file) postToWebView({ type: 'addMention', file: params.file });
+    }],
+    ['lifeAiCode.internal.runAgent', async (params) => {
+      // §依赖图「AI 单元测试」：渲染进程直接发起 Agent 模式任务，
+      // 转发给 webview 走它自己的发送链路（消息气泡/状态栏/历史记录一致）
+      if (params?.text) postToWebView({ type: 'externalSend', text: params.text });
+    }],
     ['lifeAiCode.internal.explainCode', async (params) => {
       const ctx = params.context || await contextBuilder.buildContext();
       await explainCode(ctx);

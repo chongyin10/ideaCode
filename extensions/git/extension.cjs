@@ -2063,5 +2063,25 @@ module.exports = {
     } else {
       currentRepo.pause();
     }
+  },
+  // 供主应用 RPC 调用（依赖图节点右键「diff对比」等场景）：
+  // 返回工作树文件与 HEAD 版本的内容对，无打开仓库时返回 null
+  async getWorkingTreeFileDiff({ filePath }) {
+    if (!filePath) throw new Error("\u7F3A\u5C11 filePath \u53C2\u6570");
+    if (!currentRepo) return null;
+    let original = "";
+    try {
+      original = await currentRepo.getOriginalContent(filePath) || "";
+    } catch {
+    }
+    let modified = "";
+    let isBinary = false;
+    try {
+      const result = await currentRepo.readFile(filePath);
+      modified = result.content;
+      isBinary = result.isBinary;
+    } catch {
+    }
+    return { original, modified, isBinary };
   }
 };

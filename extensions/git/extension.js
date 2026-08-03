@@ -948,4 +948,27 @@ module.exports = {
       currentRepo.pause();
     }
   },
+  // 供主应用 RPC 调用（依赖图节点右键「diff对比」等场景）：
+  // 返回工作树文件与 HEAD 版本的内容对，无打开仓库时返回 null
+  async getWorkingTreeFileDiff({ filePath }) {
+    if (!filePath) throw new Error('缺少 filePath 参数');
+    if (!currentRepo) return null;
+    let original = '';
+    try {
+      original = (await currentRepo.getOriginalContent(filePath)) || '';
+    } catch {
+      // 文件在 HEAD 中不存在（新增/未跟踪），original 留空
+    }
+    let modified = '';
+    let isBinary = false;
+    try {
+      // §优先使用 Repository.readFile（支持远程 SSH 仓库通过 cat 读取）
+      const result = await currentRepo.readFile(filePath);
+      modified = result.content;
+      isBinary = result.isBinary;
+    } catch {
+      // 文件在工作区不存在（已删除），modified 留空
+    }
+    return { original, modified, isBinary };
+  },
 };

@@ -58,7 +58,7 @@ import {
 } from '../../services/fileOperations';
 import type { FileClipboardState } from '../../services/fileClipboard';
 import { buildDependencyGraph, isCodeFile } from '../../services/dependencyGraph';
-import { setPendingWorkflowGraphData } from '../../services/workflowRuntime';
+import { setPendingWorkflowGraphData, setDepGraphTarget } from '../../services/workflowRuntime';
 import {
   getFileClipboard,
   setFileClipboard,
@@ -475,8 +475,9 @@ const ExplorerContent = () => {
         return;
       }
       const tabId = `workflow-dep-${Date.now()}`;
-      // 预置图数据，画布挂载时由 DependencyGraphCanvas 消费
+      // 预置图数据，画布挂载时由 DependencyGraphCanvas 消费；记录构图目标供「刷新」重建
       setPendingWorkflowGraphData(tabId, data);
+      setDepGraphTarget(tabId, { path: rel, kind: entry.kind });
       dispatch(
         openVirtualFile({
           id: tabId,

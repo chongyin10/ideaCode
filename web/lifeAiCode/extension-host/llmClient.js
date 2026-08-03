@@ -284,28 +284,64 @@ class LlmClient extends EventEmitter {
     const provider = PROVIDERS[this.provider];
     if (!provider) throw new Error(`不支持的 Provider: ${this.provider}`);
 
-    const body = this._buildRequestBody(provider, messages, true, options);
-    const url = this._getRequestUrl(provider);
+    // §自动续写：输出被 max_tokens 截断（finish_reason = length / max_tokens）时，
+    // 把已生成内容作为 assistant 消息回传并附"请继续"继续请求，
+    // 避免长回答只输出一半、需要用户手动输入"继续"。
+    // 仅当本轮没有 tool_calls 时续写——tool_call 的 arguments JSON 被截断后无法安全拼接。
+    const MAX_CONTINUATIONS = 3;
+    let currentMessages = messages;
+    let combinedContent = '';
+    let combinedReasoning = '';
+    let finalToolCalls = [];
 
-    // B2: 流式请求不重试 — 已 emit 给 UI 的 token 无法回收，重试会导致输出重复
-    // 若需重试，应由上层（agentRuntime）丢弃本次部分输出后整体重发
-    if (this._isAborted(options.signal)) throw this._createAbortError();
-    try {
-      const result = await this._httpStreamRequest(url.toString(), {
-        method: 'POST',
-        headers: provider.headers(this.apiKey),
-        body: JSON.stringify(body),
-        timeout: this.timeout,
-      }, options);
+    for (let round = 0; ; round++) {
+      const body = this._buildRequestBody(provider, currentMessages, true, options);
+      const url = this._getRequestUrl(provider);
+
+      // B2: 流式请求不重试 — 已 emit 给 UI 的 token 无法回收，重试会导致输出重复
+      // 若需重试，应由上层（agentRuntime）丢弃本次部分输出后整体重发
       if (this._isAborted(options.signal)) throw this._createAbortError();
-      if (options.returnRaw) return result;
-      // 非 raw 模式返回 content 字符串
-      return typeof result === 'string' ? result : (result.content || '');
-    } catch (err) {
+      let result;
+      try {
+        result = await this._httpStreamRequest(url.toString(), {
+          method: 'POST',
+          headers: provider.headers(this.apiKey),
+          body: JSON.stringify(body),
+          timeout: this.timeout,
+        }, { ...options, returnRaw: true });
+      } catch (err) {
+        if (this._isAborted(options.signal)) throw this._createAbortError();
+        if (err && err.isAbort) throw err;
+        throw err;
+      }
       if (this._isAborted(options.signal)) throw this._createAbortError();
-      if (err && err.isAbort) throw err;
-      throw err;
+
+      combinedContent += result.content || '';
+      combinedReasoning += result.reasoningContent || '';
+      const hasToolCalls = Array.isArray(result.toolCalls) && result.toolCalls.length > 0;
+      if (hasToolCalls) finalToolCalls = result.toolCalls;
+
+      const truncated = result.finishReason === 'length' || result.finishReason === 'max_tokens';
+      if (!truncated || hasToolCalls || round >= MAX_CONTINUATIONS) {
+        break;
+      }
+
+      // 续写：把本轮已输出内容作为 assistant 消息回传，让模型接着写。
+      // DeepSeek thinking mode 要求 assistant 消息携带 reasoning_content 字段（可为空字符串）。
+      console.log(`[LifeAiCode] 输出被截断（finish_reason=${result.finishReason}），自动续写第 ${round + 1}/${MAX_CONTINUATIONS} 次`);
+      const assistantMsg = { role: 'assistant', content: result.content || '' };
+      assistantMsg.reasoning_content = result.reasoningContent || '';
+      currentMessages = [
+        ...currentMessages,
+        assistantMsg,
+        { role: 'user', content: '请继续' },
+      ];
     }
+
+    if (options.returnRaw) {
+      return { content: combinedContent, toolCalls: finalToolCalls, reasoningContent: combinedReasoning };
+    }
+    return combinedContent;
   }
 
   _getRequestUrl(provider) {
@@ -456,6 +492,8 @@ class LlmClient extends EventEmitter {
         let fullContent = '';
         let fullReasoningContent = '';
         let buffer = '';
+        // §自动续写：记录本轮流式的 finish_reason（length / max_tokens 表示被输出上限截断）
+        let finishReason = '';
         // reasoning → content 切换跟踪：把 DeepSeek 的 reasoning_content
         // 包装成 <think>...</think> 标签 emit 给前端，让 llmTags 能实时解析展示思维链。
         // fullContent / fullReasoningContent 仍只累加纯内容（不含标签），不影响返回值。
@@ -488,15 +526,25 @@ class LlmClient extends EventEmitter {
                       delta = parsed.delta?.text || '';
                     } else if (parsed.type === 'content_block_start') {
                       delta = parsed.content_block?.text || '';
+                    } else if (parsed.type === 'message_delta') {
+                      // Anthropic SSE：stop_reason 在 message_delta 中（max_tokens 表示截断）
+                      finishReason = parsed.delta?.stop_reason || finishReason;
                     }
                     break;
                   case 'ollama':
                     delta = parsed.message?.content || '';
+                    if (parsed.done) {
+                      finishReason = parsed.done_reason || 'stop';
+                    }
                     break;
                   case 'openai':
                   default:
                     delta = parsed.choices?.[0]?.delta?.content || '';
                     reasoningDelta = parsed.choices?.[0]?.delta?.reasoning_content || '';
+                    // OpenAI 兼容：finish_reason 在最后一个非 [DONE] chunk 中
+                    if (parsed.choices?.[0]?.finish_reason) {
+                      finishReason = parsed.choices[0].finish_reason;
+                    }
                     // 累加 tool_calls delta（OpenAI 兼容格式）
                     if (Array.isArray(toolCallsDelta)) {
                       for (const tc of toolCallsDelta) {
@@ -571,7 +619,7 @@ class LlmClient extends EventEmitter {
             }
           }
           resolve(requestOptions.returnRaw
-            ? { content: fullContent, toolCalls, reasoningContent: fullReasoningContent }
+            ? { content: fullContent, toolCalls, reasoningContent: fullReasoningContent, finishReason }
             : fullContent);
         });
 

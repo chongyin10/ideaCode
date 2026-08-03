@@ -408,6 +408,10 @@ export type ExtensionMessage =
   | { type: 'error'; message: string }
   // §@ 文件补全：扩展宿主返回的工作区文件列表
   | { type: 'fileList'; files: MentionFileItem[]; error?: string }
+  // §外部联动（依赖图「添加到 LifeAiCode」）：向输入框添加 @ 引用芯片
+  | { type: 'addMention'; file: MentionFileItem }
+  // §外部联动（依赖图「AI 单元测试」）：外部直接发起一条 Agent 对话
+  | { type: 'externalSend'; text: string }
   // §文档解析进度：附件 docx/pdf/xlsx/pptx 提取文本时的 loading 提示
   | { type: 'docParse'; status: 'parsing' | 'done'; fileName?: string; current?: number; total?: number };
 

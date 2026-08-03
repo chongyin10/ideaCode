@@ -1,5 +1,11 @@
 import { readFile, writeFile, type FileSource } from './fileService';
 import { renameEntry } from './fileOperations';
+import {
+  extractTsSpecifiers,
+  getAnalyzerForFile,
+  resolveTsSpecifier,
+  TS_FILE_RE,
+} from './dependencyGraphLanguages';
 import type { NodeStyle } from '../workflow';
 import {
   createWorkflowFileData,
@@ -49,14 +55,12 @@ const GROUP_NODE_STYLE = {
 const ROOT_GROUP_ID = '__root__';
 const ROOT_GROUP_LABEL = '（根级文件）';
 
-/** 参与依赖分析的代码文件扩展名 */
-export const CODE_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
-
-const CODE_FILE_RE = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
+// 参与依赖分析的代码文件扩展名（全语言合集，由语言分析器注册表决定）
+export { CODE_EXTENSIONS } from './dependencyGraphLanguages';
 
 /** 判断文件名是否为可分析的代码文件 */
 export function isCodeFile(name: string): boolean {
-  return CODE_FILE_RE.test(name);
+  return getAnalyzerForFile(name) !== null;
 }
 
 export interface DependencyGraphTarget {
@@ -68,65 +72,20 @@ export interface DependencyGraphTarget {
 /** 每批并发读取的文件数（与 searchService 的遍历骨架一致） */
 const READ_BATCH_SIZE = 8;
 
-/** import/require 说明符提取（在剔除注释后的内容上执行） */
-const SPECIFIER_PATTERNS = [
-  // import ... from '...' / import '...'
-  /\bimport\s+(?:[\w$*{}\s,]+\s+from\s+)?['"]([^'"]+)['"]/g,
-  // export ... from '...'
-  /\bexport\s+(?:[\w$*{}\s,]+|\*)\s+from\s+['"]([^'"]+)['"]/g,
-  // import('...')
-  /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
-  // require('...')
-  /\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
-];
+/** 依赖分析默认排除的目录段：第三方依赖、缓存与构建产物不参与构图 */
+const EXCLUDED_DIR_SEGMENTS = new Set([
+  'node_modules',
+  'venv',
+  '.venv',
+  '__pycache__',
+  'site-packages',
+  'target',
+  'vendor',
+]);
 
-/** 剔除块注释与行注释，减少 import 误匹配（行注释要求前导字符不是 `:`，避免误伤 http://） */
-function stripComments(content: string): string {
-  return content.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
-}
-
-/** 提取文件中的模块说明符 */
-function extractSpecifiers(content: string): string[] {
-  const stripped = stripComments(content);
-  const specifiers = new Set<string>();
-  for (const pattern of SPECIFIER_PATTERNS) {
-    pattern.lastIndex = 0;
-    let match: RegExpExecArray | null;
-    while ((match = pattern.exec(stripped)) !== null) {
-      specifiers.add(match[1]);
-    }
-  }
-  return Array.from(specifiers);
-}
-
-/** posix 路径归一化（处理 ./ 与 ../） */
-function normalizePath(p: string): string {
-  const parts = p.split('/');
-  const out: string[] = [];
-  for (const part of parts) {
-    if (!part || part === '.') continue;
-    if (part === '..') out.pop();
-    else out.push(part);
-  }
-  return out.join('/');
-}
-
-/**
- * 把相对说明符解析为项目内的相对文件路径（TS 解析规则：补扩展名 / index 文件）。
- * 包名引用（非 ./ ../ 开头）返回 null。
- */
-function resolveSpecifier(spec: string, fromRel: string, fileSet: Set<string>): string | null {
-  if (!spec.startsWith('./') && !spec.startsWith('../')) return null;
-  const fromDir = fromRel.includes('/') ? fromRel.slice(0, fromRel.lastIndexOf('/')) : '';
-  const joined = normalizePath(fromDir ? `${fromDir}/${spec}` : spec);
-  if (fileSet.has(joined) && CODE_FILE_RE.test(joined)) return joined;
-  for (const ext of CODE_EXTENSIONS) {
-    if (fileSet.has(joined + ext)) return joined + ext;
-  }
-  for (const ext of CODE_EXTENSIONS) {
-    if (fileSet.has(`${joined}/index${ext}`)) return `${joined}/index${ext}`;
-  }
-  return null;
+/** 路径是否落入默认排除目录（按 / 分段匹配） */
+function isExcludedPath(rel: string): boolean {
+  return rel.split('/').some((seg) => EXCLUDED_DIR_SEGMENTS.has(seg));
 }
 
 /** 有限并发映射 */
@@ -143,12 +102,20 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
   return results;
 }
 
+/** 依赖图布局方向：TB = 自上而下（默认），LR = 自左而右 */
+export type DepGraphDirection = 'TB' | 'LR';
+
 /**
- * 分层布局（自上而下）：层 = 依赖链深度（入口文件在最上层，依赖逐层向下），
- * 同层节点水平排列。同层顺序用重心法（barycenter）多轮迭代排序，
- * 让有关联的节点尽量靠近，减少连线交叉；各层相对最宽层水平居中。
+ * 分层布局：层 = 依赖链深度（入口文件在最上层/最左列，依赖逐层展开），
+ * 同层节点沿另一轴排列。同层顺序用重心法（barycenter）多轮迭代排序，
+ * 让有关联的节点尽量靠近，减少连线交叉；各层相对最宽层居中。
+ * direction = TB 自上而下（默认），LR 自左而右。
  */
-function layoutNodes(nodeIds: string[], adjacency: Map<string, string[]>): WorkflowNodeData[] {
+function layoutNodes(
+  nodeIds: string[],
+  adjacency: Map<string, string[]>,
+  direction: DepGraphDirection = 'TB'
+): WorkflowNodeData[] {
   // 依赖链深度：A imports B → depth(A) = max(depth(B)) + 1，无本地依赖为 0（带环保护）
   const depthCache = new Map<string, number>();
   const visiting = new Set<string>();
@@ -239,16 +206,21 @@ function layoutNodes(nodeIds: string[], adjacency: Map<string, string[]>): Workf
   }
 
   const nodes: WorkflowNodeData[] = [];
+  // LR 布局：层沿 x 展开需留足节点宽度 + 连线弯曲空间；层内沿 y 排列只需节点高度间隔
+  const WITHIN_GAP = direction === 'LR' ? NODE_HEIGHT + 52 : COLUMN_GAP;
+  const LAYER_GAP = direction === 'LR' ? NODE_WIDTH + 90 : ROW_GAP;
   ordered.forEach((ids, row) => {
-    const rowOffset = ((maxRowSize - ids.length) * COLUMN_GAP) / 2;
+    const rowOffset = ((maxRowSize - ids.length) * WITHIN_GAP) / 2;
     ids.forEach((id, index) => {
+      const along = 40 + rowOffset + index * WITHIN_GAP;
+      const across = 40 + row * LAYER_GAP;
       nodes.push({
         id,
         // 标签用完整相对路径（Node 绘制时目录部分用次要色、文件名用主色），
         // 避免不同目录下的同名文件（如多个 index.tsx）在画布上无法区分
         label: id,
-        x: 40 + rowOffset + index * COLUMN_GAP,
-        y: 40 + row * ROW_GAP,
+        x: direction === 'LR' ? across : along,
+        y: direction === 'LR' ? along : across,
         style: DEP_NODE_STYLE,
         portsAlwaysVisible: false,
         data: { path: id },
@@ -271,6 +243,9 @@ export async function buildDependencyGraph(
 ): Promise<WorkflowFileData> {
   const rootStr = String(rootSource);
   const fileSet = new Set(allFilePaths);
+  // 排除第三方依赖/缓存/构建产物目录（如项目内的 venv/site-packages），
+  // 目标自身就在排除目录内时（用户明确对其构图）不做排除
+  const isExcluded = isExcludedPath(target.path) ? () => false : isExcludedPath;
   /** 文件 → 项目内依赖（去重后） */
   const adjacency = new Map<string, string[]>();
 
@@ -284,10 +259,13 @@ export async function buildDependencyGraph(
     } catch {
       return [];
     }
+    // 按文件扩展名分派语言分析器；无分析器的文件不产生边
+    const analyzer = getAnalyzerForFile(rel);
+    if (!analyzer) return [];
     const deps = new Set<string>();
-    for (const spec of extractSpecifiers(content)) {
-      const resolved = resolveSpecifier(spec, rel, fileSet);
-      if (resolved && resolved !== rel) deps.add(resolved);
+    for (const spec of analyzer.extractSpecifiers(content)) {
+      const resolved = analyzer.resolveSpecifier(spec, rel, fileSet);
+      if (resolved && resolved !== rel && !isExcluded(resolved)) deps.add(resolved);
     }
     const result = Array.from(deps);
     adjacency.set(rel, result);
@@ -298,7 +276,9 @@ export async function buildDependencyGraph(
   if (target.kind === 'directory') {
     // 目录模式：候选 = 目录下全部代码文件，批量并发解析
     const prefix = `${target.path}/`;
-    nodeIds = allFilePaths.filter((p) => CODE_FILE_RE.test(p) && p.startsWith(prefix));
+    nodeIds = allFilePaths.filter(
+      (p) => isCodeFile(p) && p.startsWith(prefix) && !isExcluded(p)
+    );
     await mapLimit(nodeIds, READ_BATCH_SIZE, parseFile);
     // 只保留目录内部的边
     const inScope = new Set(nodeIds);
@@ -316,7 +296,7 @@ export async function buildDependencyGraph(
     nodeIds = nodeIds.filter((id) => connected.has(id));
   } else {
     // 文件模式：BFS 依赖闭包（依赖可超出所在目录）
-    if (!CODE_FILE_RE.test(target.path)) return createWorkflowFileData([], []);
+    if (!isCodeFile(target.path)) return createWorkflowFileData([], []);
     const visited = new Set<string>([target.path]);
     let frontier = [target.path];
     while (frontier.length > 0) {
@@ -492,9 +472,9 @@ function buildRenamedSpecifier(oldSpec: string, importerRel: string, newRel: str
   const importerDir = importerRel.includes('/') ? importerRel.slice(0, importerRel.lastIndexOf('/')) : '';
   let rel = relativePath(importerDir, newRel);
   if (!rel.startsWith('.')) rel = `./${rel}`;
-  if (!CODE_FILE_RE.test(oldSpec)) {
-    rel = rel.replace(CODE_FILE_RE, '');
-    if (!/(^|\/)index$/.test(oldSpec.replace(CODE_FILE_RE, ''))) {
+  if (!TS_FILE_RE.test(oldSpec)) {
+    rel = rel.replace(TS_FILE_RE, '');
+    if (!/(^|\/)index$/.test(oldSpec.replace(TS_FILE_RE, ''))) {
       rel = rel.replace(/\/index$/, '');
     }
   }
@@ -512,6 +492,8 @@ export interface RenameImportSyncResult {
  * 重命名代码文件并同步改写项目内所有指向它的 import/require 说明符：
  * 先在磁盘上重命名，再遍历全部代码文件，凡解析结果指向旧路径的说明符
  * 一律按原书写风格改写为新相对路径（基于正则解析，与依赖图构建同一套规则）。
+ * 注意：说明符改写仅覆盖 TS/JS 的 import/require 语法，其他语言（py/java/rust/c）
+ * 重命名只改文件名，不同步引入语句。
  */
 export async function renameFileWithImportSync(
   rootSource: FileSource,
@@ -529,7 +511,8 @@ export async function renameFileWithImportSync(
   // 用「重命名前」的文件集合解析旧引入目标
   const oldFileSet = new Set(allFilePaths);
   const updatedFiles: string[] = [];
-  const importers = allFilePaths.filter((p) => CODE_FILE_RE.test(p) && p !== oldRel);
+  // 仅 TS/JS 文件的 import/require 可被改写，其他语言语法不同不在此同步
+  const importers = allFilePaths.filter((p) => TS_FILE_RE.test(p) && p !== oldRel);
   await mapLimit(importers, READ_BATCH_SIZE, async (importerRel) => {
     let content: string;
     try {
@@ -538,8 +521,8 @@ export async function renameFileWithImportSync(
       return;
     }
     let next = content;
-    for (const spec of extractSpecifiers(content)) {
-      if (resolveSpecifier(spec, importerRel, oldFileSet) !== oldRel) continue;
+    for (const spec of extractTsSpecifiers(content)) {
+      if (resolveTsSpecifier(spec, importerRel, oldFileSet) !== oldRel) continue;
       const newSpec = buildRenamedSpecifier(spec, importerRel, newRel);
       // 只替换带引号的字符串字面量位置，降低误伤同名文本的概率
       next = next.split(`'${spec}'`).join(`'${newSpec}'`).split(`"${spec}"`).join(`"${newSpec}"`);
@@ -603,4 +586,222 @@ export function extractDirectSubgraph(data: WorkflowFileData, nodeId: string): W
   for (const e of edges) adjacency.get(e.source.nodeId)?.push(e.target.nodeId);
   const nodes = layoutNodes([...memberIds], adjacency);
   return createWorkflowFileData(nodes, edges);
+}
+/**
+ * 找出处于循环依赖中的节点 ID（Tarjan 强连通分量，O(V+E)）：
+ * SCC 大小 > 1 或存在自环的节点视为循环依赖参与者。
+ * 输入为图数据的连线列表（文件级或聚合级均可），纯数据推导。
+ */
+export function findCyclicNodeIds(edges: WorkflowEdgeData[]): Set<string> {
+  const adjacency = new Map<string, string[]>();
+  const ensure = (id: string) => {
+    let list = adjacency.get(id);
+    if (!list) {
+      list = [];
+      adjacency.set(id, list);
+    }
+    return list;
+  };
+  for (const e of edges) {
+    ensure(e.source.nodeId).push(e.target.nodeId);
+    ensure(e.target.nodeId);
+  }
+
+  const indexOf = new Map<string, number>();
+  const lowlinkOf = new Map<string, number>();
+  const onStack = new Set<string>();
+  const stack: string[] = [];
+  const cyclic = new Set<string>();
+  let nextIndex = 0;
+
+  const strongConnect = (start: string) => {
+    // 迭代式 Tarjan（递归在深层依赖链上会爆栈）
+    const work: Array<{ id: string; childIdx: number }> = [{ id: start, childIdx: 0 }];
+    indexOf.set(start, nextIndex);
+    lowlinkOf.set(start, nextIndex);
+    nextIndex++;
+    stack.push(start);
+    onStack.add(start);
+
+    while (work.length > 0) {
+      const frame = work[work.length - 1];
+      const children = adjacency.get(frame.id) ?? [];
+      if (frame.childIdx < children.length) {
+        const child = children[frame.childIdx++];
+        if (!indexOf.has(child)) {
+          indexOf.set(child, nextIndex);
+          lowlinkOf.set(child, nextIndex);
+          nextIndex++;
+          stack.push(child);
+          onStack.add(child);
+          work.push({ id: child, childIdx: 0 });
+        } else if (onStack.has(child)) {
+          lowlinkOf.set(frame.id, Math.min(lowlinkOf.get(frame.id)!, indexOf.get(child)!));
+        }
+      } else {
+        work.pop();
+        if (lowlinkOf.get(frame.id) === indexOf.get(frame.id)) {
+          // 弹出一个 SCC
+          const scc: string[] = [];
+          let member: string;
+          do {
+            member = stack.pop()!;
+            onStack.delete(member);
+            scc.push(member);
+          } while (member !== frame.id);
+          if (scc.length > 1 || (adjacency.get(frame.id) ?? []).includes(frame.id)) {
+            for (const id of scc) cyclic.add(id);
+          }
+        }
+        if (work.length > 0) {
+          const parent = work[work.length - 1];
+          lowlinkOf.set(
+            parent.id,
+            Math.min(lowlinkOf.get(parent.id)!, lowlinkOf.get(frame.id)!)
+          );
+        }
+      }
+    }
+  };
+
+  for (const id of adjacency.keys()) {
+    if (!indexOf.has(id)) strongConnect(id);
+  }
+  return cyclic;
+}
+
+/**
+ * 提取 Git 变更影响面子图（纯数据推导）：
+ * 节点 = 有 git 状态的文件 + 与它们直接相连的文件（上下游各一层），
+ * 连线 = 两端都在集合内的全部连线。供「仅看变更影响」过滤使用。
+ */
+export function filterChangedImpact(
+  data: WorkflowFileData,
+  gitStatus: Record<string, string>
+): WorkflowFileData {
+  const nodeIds = new Set(data.nodes.map((n) => n.id));
+  const changed = new Set(Object.keys(gitStatus).filter((p) => nodeIds.has(p)));
+  const keep = new Set(changed);
+  for (const e of data.edges) {
+    if (changed.has(e.source.nodeId)) keep.add(e.target.nodeId);
+    if (changed.has(e.target.nodeId)) keep.add(e.source.nodeId);
+  }
+  return {
+    ...data,
+    nodes: data.nodes.filter((n) => keep.has(n.id)),
+    edges: data.edges.filter((e) => keep.has(e.source.nodeId) && keep.has(e.target.nodeId)),
+  };
+}
+
+/**
+ * 把依赖图数据导出为 Mermaid `graph TD` 文本：
+ * 节点用 n0/n1… 编号（Mermaid id 不允许 / 与 .），标签为项目相对路径，
+ * 双引号转义为 Mermaid 实体 #quot;。供「复制 Mermaid」粘贴到 Markdown 渲染。
+ */
+export function toMermaid(data: WorkflowFileData): string {
+  const ids = data.nodes.map((n) => n.id).sort();
+  const alias = new Map(ids.map((id, i) => [id, `n${i}`]));
+  const lines = ['graph TD'];
+  for (const id of ids) {
+    lines.push(`  ${alias.get(id)}["${id.replace(/"/g, '#quot;')}"]`);
+  }
+  for (const e of data.edges) {
+    const source = alias.get(e.source.nodeId);
+    const target = alias.get(e.target.nodeId);
+    if (source && target) lines.push(`  ${source} --> ${target}`);
+  }
+  return lines.join('\n');
+}
+
+/**
+ * 按方向重排图数据的节点位置（纯数据推导，保留节点样式/标签，仅改坐标）：
+ * TB 直接返回原数据（与构建时布局一致）；LR 以自左而右分层重算坐标，
+ * 连线端点从 下→上 连接桩改到 右→左 连接桩。
+ */
+export function relayoutGraphData(
+  data: WorkflowFileData,
+  direction: DepGraphDirection
+): WorkflowFileData {
+  if (direction === 'TB') return data;
+  const adjacency = new Map<string, string[]>();
+  for (const n of data.nodes) adjacency.set(n.id, []);
+  for (const e of data.edges) adjacency.get(e.source.nodeId)?.push(e.target.nodeId);
+  const laidOut = layoutNodes(
+    data.nodes.map((n) => n.id),
+    adjacency,
+    direction
+  );
+  const posOf = new Map(laidOut.map((n) => [n.id, { x: n.x, y: n.y }]));
+  const nodes = data.nodes.map((n) => {
+    const pos = posOf.get(n.id);
+    return pos ? { ...n, x: pos.x, y: pos.y } : n;
+  });
+  const edges = data.edges.map((e) => ({
+    ...e,
+    source: { ...e.source, portId: e.source.portId?.replace('-port-bottom', '-port-right') },
+    target: { ...e.target, portId: e.target.portId?.replace('-port-top', '-port-left') },
+  }));
+  return createWorkflowFileData(nodes, edges);
+}
+
+/**
+ * 查找两个节点间的依赖路径（BFS 最短路径，沿依赖方向）：
+ * 先查 fromId → toId（from 依赖链能到 to），不可达再查反向 toId → fromId。
+ * 返回路径上的节点 id 序列（含两端），两个方向都不可达返回 null。
+ */
+export function findDependencyPath(
+  edges: WorkflowEdgeData[],
+  fromId: string,
+  toId: string
+): string[] | null {
+  const adjacency = new Map<string, string[]>();
+  for (const e of edges) {
+    const list = adjacency.get(e.source.nodeId) ?? [];
+    list.push(e.target.nodeId);
+    adjacency.set(e.source.nodeId, list);
+  }
+  const bfs = (start: string, goal: string): string[] | null => {
+    if (start === goal) return [start];
+    const prev = new Map<string, string>();
+    const visited = new Set<string>([start]);
+    let frontier = [start];
+    while (frontier.length > 0) {
+      const next: string[] = [];
+      for (const id of frontier) {
+        for (const dep of adjacency.get(id) ?? []) {
+          if (visited.has(dep)) continue;
+          visited.add(dep);
+          prev.set(dep, id);
+          if (dep === goal) {
+            const path = [goal];
+            let cur = goal;
+            while (cur !== start) {
+              cur = prev.get(cur)!;
+              path.unshift(cur);
+            }
+            return path;
+          }
+          next.push(dep);
+        }
+      }
+      frontier = next;
+    }
+    return null;
+  };
+  return bfs(fromId, toId) ?? bfs(toId, fromId);
+}
+
+/**
+ * 按节点 id 谓词过滤图数据（纯数据推导）：
+ * 节点只保留命中的，连线只保留两端都保留的。供过滤器栏组合使用。
+ */
+export function filterGraphNodes(
+  data: WorkflowFileData,
+  keep: (id: string) => boolean
+): WorkflowFileData {
+  return {
+    ...data,
+    nodes: data.nodes.filter((n) => keep(n.id)),
+    edges: data.edges.filter((e) => keep(e.source.nodeId) && keep(e.target.nodeId)),
+  };
 }

@@ -138,6 +138,37 @@ export function resetDepGraphExpandedGroups(scope: string): void {
   depGraphExpandedGroups.delete(scope);
 }
 
+/** 依赖可视化：构图目标（刷新增量重建时按原目标重新分析） */
+const depGraphTargets = new Map<string, { path: string; kind: 'file' | 'directory' }>();
+
+/** 记录依赖可视化的构图目标 */
+export function setDepGraphTarget(
+  scope: string,
+  target: { path: string; kind: 'file' | 'directory' }
+): void {
+  depGraphTargets.set(scope, target);
+}
+
+/** 读取依赖可视化的构图目标（无记录返回 undefined，此时刷新不可用） */
+export function getDepGraphTarget(
+  scope: string
+): { path: string; kind: 'file' | 'directory' } | undefined {
+  return depGraphTargets.get(scope);
+}
+
+/** 依赖可视化：布局方向（tab 重挂载时恢复） */
+const depGraphDirections = new Map<string, 'TB' | 'LR'>();
+
+/** 记录依赖可视化的布局方向 */
+export function setDepGraphDirection(scope: string, direction: 'TB' | 'LR'): void {
+  depGraphDirections.set(scope, direction);
+}
+
+/** 读取依赖可视化的布局方向（无记录返回 undefined，按默认 TB 处理） */
+export function getDepGraphDirection(scope: string): 'TB' | 'LR' | undefined {
+  return depGraphDirections.get(scope);
+}
+
 /** 销毁某个工作流画布实例（tab 关闭时调用，释放 Graph 与宿主 DOM） */
 export function destroyWorkflowInstance(scope: string): void {
   const instance = instances.get(scope);
@@ -153,6 +184,8 @@ export function destroyWorkflowInstance(scope: string): void {
   depGraphSourceData.delete(scope);
   depGraphViewModes.delete(scope);
   depGraphExpandedGroups.delete(scope);
+  depGraphTargets.delete(scope);
+  depGraphDirections.delete(scope);
   if (runtime?.scope === scope) {
     setWorkflowRuntime(null);
   }

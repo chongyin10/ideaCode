@@ -6840,69 +6840,6 @@ body {
   to { transform: rotate(360deg); }
 }
 
-/* ─── §任务末尾总结 ─── */
-.task-summary {
-  margin-top: 10px;
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-  background: var(--surface-1);
-  overflow: hidden;
-}
-.task-summary__header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  background: linear-gradient(90deg, rgba(34, 197, 94, 0.08), transparent);
-  border-bottom: 1px solid var(--border-subtle);
-  color: var(--success-400);
-  font-size: 12px;
-  font-weight: 600;
-}
-.task-summary__time {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  margin-left: auto;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-}
-.task-summary__body {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 8px 10px;
-}
-.task-summary__item {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  border-radius: var(--radius-full);
-  background: var(--surface-2);
-  border: 1px solid var(--border-subtle);
-  color: var(--text-secondary);
-  font-size: 11px;
-  font-weight: 500;
-}
-.task-summary__item--created {
-  color: var(--success-400);
-  background: rgba(34, 197, 94, 0.08);
-  border-color: rgba(34, 197, 94, 0.15);
-}
-.task-summary__item--modified {
-  color: var(--accent-400);
-  background: rgba(59, 130, 246, 0.08);
-  border-color: rgba(59, 130, 246, 0.15);
-}
-.task-summary__item--deleted {
-  color: var(--error-400);
-  background: rgba(239, 68, 68, 0.08);
-  border-color: rgba(239, 68, 68, 0.15);
-}
-
 /* ─── §消息内任务列表汇总（<step> 标签归纳） ─── */
 /* §简约化：去掉面板盒子的边框/背景，header 是纯文字行 */
 .step-summary {
