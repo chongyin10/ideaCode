@@ -1,10 +1,28 @@
+Copyright (c) 2024-2027 chongyin10
 
-Copyright (c) 2024-2027
+IDEACODE 源码授权与转让协议
+================================
 
-All Rights Reserved.
+一、协议效力
+本文件是 IDEACODE 项目（下称"本项目"）源码的授权与转让条款。
+版权人同意，在双方签署转让合同（或完成合法交易）后，将本项目的
+完整所有权与使用权转让给受让人。
 
-Permission is granted to view the source code for personal study and non-commercial use only.
+二、转让后权利
+自转让生效之日起，受让人（买方）拥有本项目完整的所有权，包括但不限于：
+- 使用、复制、修改、衍生开发的权力，可用于任何商业或非商业目的；
+- 将本项目作为商业产品的一部分、二次开发、出租或再分发；
+- 在不通知版权人的前提下，自行决定项目的后续版本与发布方式。
 
-Commercial use, reproduction, distribution, or modification of this software, in whole or in part, is strictly prohibited without prior written permission from the copyright holder.
+三、未授权使用限制
+在转让生效之前，未经版权人书面授权，任何人不得将本项目用于任何
+商业用途，包括但不限于作为商业产品的一部分、出售、出租，或用于
+企业内部盈利性项目。
 
-For commercial licensing inquiries, please contact: chongyin_good@163.com or mimicy710@gmail.com
+四、第三方组件
+本项目依赖的部分开源组件（如 Monaco Editor、xterm.js、React、
+Electron 等）仍受其各自开源许可证的约束，受让人应遵守相应条款。
+
+五、联系方式
+商务合作 / 授权咨询 / 源码转让请联系：
+chongyin_good@163.com 或 mimicy710@gmail.com

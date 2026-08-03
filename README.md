@@ -279,10 +279,8 @@ ideacode/
 
 ## 版权声明 / License
 
-本项目代码仅供个人学习、研究或非商业用途使用。
+本项目源码的授权与转让遵循 `LICENSE` 文件的条款。
 
-- ✅ 允许：查看源码、个人学习研究、非商业性质的交流
-- ❌ 禁止：未经书面授权，严禁将本项目用于任何商业用途（包括但不限于作为商业产品的一部分、出售、出租、或用于企业内部盈利性项目）
-- 如需商业授权或合作，请联系：📧 [chongyin_good@163.com](mailto:chongyin_good@163.com) | [mimicy710@gmail.com](mailto:mimicy710@gmail.com)
-
-> ⚠️ Legal Notice: All Rights Reserved. Unauthorized commercial use is strictly prohibited and will be subject to legal action.
+- **源码转让**：版权人支持将本项目的完整所有权转让给受让人。转让生效后，受让人可商用、二次开发、再分发，无需另行授权。
+- **未授权限制**：在转让生效之前，未经书面授权，任何人不得将本项目用于商业用途。
+- 商务合作 / 授权咨询 / 源码转让请联系：📧 [chongyin_good@163.com](mailto:chongyin_good@163.com) | [mimicy710@gmail.com](mailto:mimicy710@gmail.com)
