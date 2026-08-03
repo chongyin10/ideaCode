@@ -11,7 +11,6 @@
  * 3. 将 ServiceBus 事件反向路由到 Extension Host
  */
 
-import { ServiceBus } from '@ideacode/kernel';
 import type { IServiceBus } from '@ideacode/kernel';
 import type {
   ExtensionManifest,

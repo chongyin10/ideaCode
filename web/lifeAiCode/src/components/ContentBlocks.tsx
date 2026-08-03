@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useEffect, memo, useDeferredValue } from 'react';
 import {
-  Brain, Bot, Pencil, Terminal, FileText, Search, Info,
+  Brain, Bot, Pencil, Terminal, FileText, Search,
   ChevronDown, Copy, Check, Loader2, X,
   GitBranch,
   AlertTriangle, RefreshCw, Network,
@@ -19,16 +19,7 @@ function buildReasoningFromThinking(content: string): ContentBlockType {
   return { type: 'reasoning', content: content.trim() };
 }
 
-function buildEnvironmentFromTag(content: string): ContentBlockType {
-  // 解析 <environment_details> 内部的多行键值对
-  // 形如 "Current time: 2026-06-25T17:33:59+08:00"
-  const lines = content.split('\n').map((l) => l.trim()).filter(Boolean);
-  return {
-    type: 'environment',
-    raw: content,
-    lines,
-  } as unknown as ContentBlockType; // 见 types.ts 中的 type
-}
+// 注：buildEnvironmentFromTag 暂未启用（环境块解析待接入），已移除。
 
 function buildCanonicalBlock(tag: ExtractedTag): ContentBlockType | null {
   const { tagName, attrs = '', content } = tag;
@@ -322,14 +313,12 @@ function ContentBlocksBase({
       onContinue={onContinue}
       incomplete={incomplete}
       incompleteReasons={incompleteReasons}
-      showActions={false}
       agentStatus={agentStatus}
     >
       {stepBlocks.length > 0 && (
         <StepSummary steps={stepBlocks} completed={completed} isActive={activeStepIndex >= 0} />
       )}
       {otherBlocks.map((block, idx) => {
-        const isLastBlock = idx === otherBlocks.length - 1;
         const isActive = idx === activeOtherIndex;
         return (
           <BlockRenderer
@@ -429,7 +418,6 @@ interface MessageCardProps {
   children: React.ReactNode;
   providerLabel?: string;
   modelLabel?: string;
-  showActions?: boolean;
   onContinue?: () => void;
   incomplete?: boolean;
   incompleteReasons?: string[];
@@ -440,7 +428,6 @@ interface MessageCardProps {
 function MessageCard({
   title, status, children,
   providerLabel, modelLabel,
-  showActions = false,
   onContinue,
   incomplete, incompleteReasons,
   defaultCollapsed = false,
@@ -652,14 +639,13 @@ function EditSummary({ filePath, additions, deletions }: { filePath: string; add
 
 function ToolCall({
   command, output: initialOutput, status: initialStatus,
-  shellOutputs, onExecuteShell, onKillShell,
+  shellOutputs, onExecuteShell,
 }: {
   command: string;
   output?: string;
   status?: 'running' | 'success' | 'error' | 'killed';
   shellOutputs: Record<string, { output: string; status: 'running' | 'success' | 'error' | 'killed' | 'deferred'; longRunning?: boolean; deferred?: boolean }>;
   onExecuteShell?: (id: string, command: string) => void;
-  onKillShell?: (id: string) => void;
 }) {
   const execId = useMemo(() => `shell-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`, []);
   const executedRef = useRef(false);

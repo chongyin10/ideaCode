@@ -126,9 +126,12 @@ export class Trie {
 
   /**
    * 删除字符串
+   * @returns 是否删除成功（该词存在于 Trie 中）
    */
   delete(word: string): boolean {
-    return this.deleteHelper(this.root, word, 0);
+    if (!this.search(word)) return false;
+    this.deleteHelper(this.root, word, 0);
+    return true;
   }
 
   /**

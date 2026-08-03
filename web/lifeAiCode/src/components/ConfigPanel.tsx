@@ -64,7 +64,7 @@ export function ConfigPanel({
     };
     window.addEventListener('message', handler);
     return () => window.removeEventListener('message', handler);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, []);
 
   const startNew = () => {

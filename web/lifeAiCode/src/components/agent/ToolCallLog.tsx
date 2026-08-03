@@ -35,7 +35,7 @@ export function ToolCallLog({ toolCalls }: ToolCallLogProps) {
   const rows: Row[] = [];
   let currentReadGroup: ToolCallInfo[] = [];
   let currentRunningShellGroup: ToolCallInfo[] = [];
-  let completedShells: ToolCallInfo[] = [];
+  const completedShells: ToolCallInfo[] = [];
 
   const flushReadGroup = () => {
     if (currentReadGroup.length > 0) {

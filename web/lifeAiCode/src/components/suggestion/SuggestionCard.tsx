@@ -87,7 +87,7 @@ interface SuggestionCardProps {
   loading?: boolean;
 }
 
-export function SuggestionCard({ suggestion, onAccept, onReject, onOpenDiffInEditor, loading }: SuggestionCardProps) {
+export function SuggestionCard({ suggestion, onAccept, onReject, onOpenDiffInEditor }: SuggestionCardProps) {
   // §需求3：所有 DiffView 共享的 collapsed 状态——header 的「展开」按钮与
   // 每个 DiffView 自己的「展开」按钮做同一件事，任意一个被点都同步切换。
   const [diffExpanded, setDiffExpanded] = useState(false);

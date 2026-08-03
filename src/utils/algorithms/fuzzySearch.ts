@@ -462,7 +462,7 @@ function fuzzySearchWithBanditPruning(
 
   // UCB1 动态剪枝主循环
   const totalRounds = Math.min(3, Math.ceil(N / 30));
-  let activeSet = new Set<number>(targets.map((_, i) => i));
+  const activeSet = new Set<number>(targets.map((_, i) => i));
   const scored = new Map<number, FuzzyResult>();
   let totalPlays = 0;
 

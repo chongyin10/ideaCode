@@ -25,21 +25,9 @@ import type {
   LanguageApi,
   EnvironmentApi,
   WorkspaceConfiguration,
-  TreeItem,
-  TreeDataProvider,
-  WebviewViewProvider,
   TextDocument,
   TextEditor,
   Terminal,
-  FileStat,
-  FileType,
-  WorkspaceFolder,
-  Selection,
-  Range,
-  CompletionItemProvider,
-  CompletionItem,
-  HoverProvider,
-  DefinitionProvider,
 } from '@ideacode/types';
 
 class UriImpl implements Uri {
@@ -176,12 +164,12 @@ export class ExtensionContextImpl implements IExtensionContext {
           reveal() { self.bus.notify('webview', 'reveal', { id: panelId }); },
           dispose() { self.bus.notify('webview', 'dispose', { id: panelId }); },
           get onDidDispose() {
-            return ((listener: () => void) => {
+            return ((_listener: () => void) => {
               return { dispose: () => {} };
             }) as any;
           },
           get onDidChangeViewState() {
-            return ((listener: (data: { active: boolean; visible: boolean }) => void) => {
+            return ((_listener: (data: { active: boolean; visible: boolean }) => void) => {
               return { dispose: () => {} };
             }) as any;
           },
@@ -228,7 +216,7 @@ export class ExtensionContextImpl implements IExtensionContext {
         self.bus.notify('tree', 'register', { viewId, treeDataProvider });
         return { dispose: () => { self.bus.notify('tree', 'unregister', { viewId }); } };
       },
-      registerWebviewViewProvider(viewId, provider) {
+      registerWebviewViewProvider(viewId, _provider) {
         self.bus.notify('webviewView', 'register', { viewId });
         return { dispose: () => { self.bus.notify('webviewView', 'unregister', { viewId }); } };
       },
@@ -251,7 +239,6 @@ export class ExtensionContextImpl implements IExtensionContext {
     const self = this;
     return {
       getConfiguration(section) {
-        const cfg = self.bus.request<Record<string, unknown>>('configuration', 'get', { section });
         return {
           get<T>(key: string, defaultValue?: T): T {
             // 同步 get 降级为默认值；扩展应直接使用 bus.request
@@ -260,10 +247,10 @@ export class ExtensionContextImpl implements IExtensionContext {
           async update(key: string, value: unknown) {
             await self.bus.request('configuration', 'set', { section, key, value });
           },
-          has(key: string): boolean {
+          has(_key: string): boolean {
             return false;
           },
-          inspect<T>(key: string) {
+          inspect<_T>(_key: string) {
             return undefined;
           },
         } as WorkspaceConfiguration;
@@ -277,7 +264,7 @@ export class ExtensionContextImpl implements IExtensionContext {
       getWorkspaceFolders() {
         return self.bus.request('workspace', 'getWorkspaceFolders', {});
       },
-      registerFileSystemProvider(scheme, provider) {
+      registerFileSystemProvider(scheme, _provider) {
         self.bus.notify('workspace', 'registerFileSystemProvider', { scheme, extensionId: self.extensionId });
         return { dispose: () => { self.bus.notify('workspace', 'unregisterFileSystemProvider', { scheme }); } };
       },
@@ -324,7 +311,6 @@ export class ExtensionContextImpl implements IExtensionContext {
     const self = this;
     return {
       getActiveTextEditor() {
-        const result = self.bus.request<TextEditor | null>('editor', 'getActive', {});
         return undefined; // 异步，需要 await
       },
       getVisibleTextEditors() {
@@ -384,18 +370,17 @@ export class ExtensionContextImpl implements IExtensionContext {
   // ─── Language API ───
 
   private _createLanguageApi(): LanguageApi {
-    const self = this;
     return {
-      registerCompletionItemProvider(selector, provider) {
+      registerCompletionItemProvider(_selector, _provider) {
         return { dispose: () => {} };
       },
-      registerHoverProvider(selector, provider) {
+      registerHoverProvider(_selector, _provider) {
         return { dispose: () => {} };
       },
-      registerDefinitionProvider(selector, provider) {
+      registerDefinitionProvider(_selector, _provider) {
         return { dispose: () => {} };
       },
-      registerDocumentSemanticTokensProvider(selector, provider) {
+      registerDocumentSemanticTokensProvider(_selector, _provider) {
         return { dispose: () => {} };
       },
     };

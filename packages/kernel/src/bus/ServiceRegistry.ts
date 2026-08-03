@@ -8,7 +8,7 @@
  * - 服务健康检查
  */
 
-import type { ServiceManifest, Disposable } from '@ideacode/types';
+import type { ServiceManifest } from '@ideacode/types';
 
 export interface RegisteredService {
   manifest: ServiceManifest;

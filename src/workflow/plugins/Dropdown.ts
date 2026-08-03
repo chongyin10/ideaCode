@@ -171,7 +171,7 @@ export class Dropdown implements Plugin {
             this.graph.on('node:contextmenu', (e: any) => {
                 e.preventDefault?.();
                 const menuItems = typeof this.options.nodeMenu === 'function'
-                    ? (this.options.nodeMenu as Function)(e.node, e)
+                    ? (this.options.nodeMenu as (...args: any[]) => any)(e.node, e)
                     : this.options.nodeMenu;
                 if (menuItems && menuItems.length > 0) {
                     this.show(e.node, e, menuItems);
@@ -184,7 +184,7 @@ export class Dropdown implements Plugin {
             this.graph.on('edge:contextmenu', (e: any) => {
                 e.preventDefault?.();
                 const menuItems = typeof this.options.edgeMenu === 'function'
-                    ? (this.options.edgeMenu as Function)(e.edge, e)
+                    ? (this.options.edgeMenu as (...args: any[]) => any)(e.edge, e)
                     : this.options.edgeMenu;
                 if (menuItems && menuItems.length > 0) {
                     this.show(e.edge, e, menuItems);
@@ -197,7 +197,7 @@ export class Dropdown implements Plugin {
             this.graph.on('cell:contextmenu', (e: any) => {
                 e.preventDefault?.();
                 const menuItems = typeof this.options.cellMenu === 'function'
-                    ? (this.options.cellMenu as Function)(e.cell, e)
+                    ? (this.options.cellMenu as (...args: any[]) => any)(e.cell, e)
                     : this.options.cellMenu;
                 if (menuItems && menuItems.length > 0) {
                     this.show(e.cell, e, menuItems);
@@ -210,7 +210,7 @@ export class Dropdown implements Plugin {
             this.graph.on('blank:contextmenu', (e: any) => {
                 e.preventDefault?.();
                 const menuItems = typeof this.options.blankMenu === 'function'
-                    ? (this.options.blankMenu as Function)(e)
+                    ? (this.options.blankMenu as (...args: any[]) => any)(e)
                     : this.options.blankMenu;
                 if (menuItems && menuItems.length > 0) {
                     this.show(null, e, menuItems);

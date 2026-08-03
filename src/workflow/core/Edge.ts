@@ -634,8 +634,8 @@ export class Edge extends Cell {
             const dist = t * length;
             
             // 基础位置（在线段上）
-            let baseX = source.x + dirX * dist;
-            let baseY = source.y + dirY * dist;
+            const baseX = source.x + dirX * dist;
+            const baseY = source.y + dirY * dist;
             
             // 计算偏移量（跳线效果）
             let offset = 0;
@@ -1288,13 +1288,14 @@ export class Edge extends Cell {
                 return Math.sqrt(Math.pow(target.x - source.x, 2) + Math.pow(target.y - source.y, 2));
             
             case EdgeType.Bezier:
-            case EdgeType.Arc:
+            case EdgeType.Arc: {
                 // 使用近似长度（控制点距离的平均值）
                 const midX = (source.x + target.x) / 2;
                 const midY = (source.y + target.y) / 2;
                 const dist1 = Math.sqrt(Math.pow(midX - source.x, 2) + Math.pow(midY - source.y, 2));
                 const dist2 = Math.sqrt(Math.pow(target.x - midX, 2) + Math.pow(target.y - midY, 2));
                 return (dist1 + dist2) * 1.2; // 曲线比直线稍长
+            }
             
             case EdgeType.StepRight:
             case EdgeType.StepDown:

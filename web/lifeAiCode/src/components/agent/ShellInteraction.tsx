@@ -1,3 +1,5 @@
+/* ANSI 转义序列剥离属于终端场景的合法用途，豁免 no-control-regex */
+/* eslint-disable no-control-regex */
 import { useState, useEffect, useRef, useMemo, memo } from 'react';
 import { Terminal, Loader2, X, ChevronRight } from 'lucide-react';
 
@@ -20,7 +22,7 @@ interface ShellInteractionProps {
  * 直接显示会乱码（如 \x1b[36m\x1b[39m\x1b[2K\x1b[1A）。
  */
 function stripAnsi(text: string): string {
-  // eslint-disable-next-line no-control-regex
+   
   return text
     .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '') // CSI 序列
     .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '') // OSC 序列

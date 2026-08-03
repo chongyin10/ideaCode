@@ -82,7 +82,7 @@ export class ProcessManager {
       this.processes.set(config.id, info);
 
       try {
-        const child = this.spawnFn(config, (msg: unknown) => {
+        const child = this.spawnFn(config, () => {
           // 子类或桥接层处理消息
         });
 

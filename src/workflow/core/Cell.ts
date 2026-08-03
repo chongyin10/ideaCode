@@ -281,8 +281,8 @@ export abstract class Cell extends Eventful {
         // 提取鼠标/触摸坐标
         let clientX = 0;
         let clientY = 0;
-        let x = 0;
-        let y = 0;
+        const x = 0;
+        const y = 0;
 
         if (originalEvent instanceof MouseEvent) {
             clientX = originalEvent.clientX;

@@ -17,7 +17,7 @@ import type {
   PluginEditorApi,
 } from './types';
 import type { RootState } from '../store';
-import { openFile } from '../store/slices/workspaceSlice';
+import { openFile, setFileContent } from '../store/slices/workspaceSlice';
 import { switchPanel, setSidePanelVisible } from '../store/slices/layoutSlice';
 import { readFile, writeFile as fsWriteFile, readDirectory } from '../services/fileService';
 import { getPluginManager } from './core';
@@ -193,7 +193,6 @@ export function createPluginContext(
           (f) => f.id === state.workspace.activeFileId
         );
         if (activeFile) {
-          const { setFileContent } = require('../store/slices/workspaceSlice');
           store.dispatch(setFileContent({ id: activeFile.id, content: value }));
         }
       }

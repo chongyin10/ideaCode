@@ -519,11 +519,12 @@ export class Port extends Cell {
                     point.y <= pos.y + this.style.height / 2
                 );
             case Shape.Circle:
-            default:
+            default: {
                 const radius = Math.min(this.style.width, this.style.height) / 2;
                 const dx = point.x - pos.x;
                 const dy = point.y - pos.y;
                 return dx * dx + dy * dy <= radius * radius;
+            }
         }
     }
 

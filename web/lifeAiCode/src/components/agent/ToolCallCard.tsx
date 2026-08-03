@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { ChevronDown, ChevronRight, Terminal, Loader2, Check, X } from 'lucide-react';
+import { ChevronDown, Terminal, Loader2, Check, X } from 'lucide-react';
 import type { ToolCallInfo } from '../../types';
 
 interface ToolCallCardProps {

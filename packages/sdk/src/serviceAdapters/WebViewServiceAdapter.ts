@@ -120,7 +120,7 @@ export class WebViewServiceAdapter implements ServiceAdapter {
 
     // 状态栏
     bus.handle('ui.statusBar.update', (params) => {
-      const { id, text, tooltip, command } = params as { id: string; text: string; tooltip?: string; command?: string };
+      const { id, text } = params as { id: string; text: string; tooltip?: string; command?: string };
       console.log(`[StatusBar] ${id}: ${text}`);
       return { updated: true };
     });

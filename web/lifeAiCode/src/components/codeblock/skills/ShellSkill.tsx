@@ -1,5 +1,7 @@
 /* ─────────────────────────────────────────────────────────────────── */
 /*  ShellSkill：shell/bash 代码块专属行为                              */
+/*  ANSI 转义序列处理属于终端场景的合法用途，豁免 no-control-regex     */
+/* eslint-disable no-control-regex */
 /* ─────────────────────────────────────────────────────────────────── */
 /*  - "执行"按钮：点击后 spawn 子进程隐藏执行，输出实时流回占位区
  *  - "停止"按钮：终止长期运行命令（npm run dev 等），释放子进程资源
@@ -31,8 +33,8 @@ const ANSI_COLORS: Record<number, string> = {
 };
 
 function ansiToHtml(text: string): string {
-  let processed = text.replace(/[^\n]*\r([^\n])/g, '$1');
-  let escaped = processed
+  const processed = text.replace(/[^\n]*\r([^\n])/g, '$1');
+  const escaped = processed
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
@@ -80,7 +82,7 @@ function extractShellCommand(code: string): string | null {
       if (current) { commands.push(current.trim()); current = ''; }
       continue;
     }
-    let cmd = line.replace(/^\$\s*/, '').replace(/^>\s*/, '');
+    const cmd = line.replace(/^\$\s*/, '').replace(/^>\s*/, '');
     // 反斜杠行继续符：移除 \ 并与下一行拼接（shell 中 \ + newline = 空）
     if (cmd.endsWith('\\')) {
       current += (current ? ' ' : '') + cmd.slice(0, -1).trim();
@@ -143,7 +145,7 @@ export const ShellSkill: CodeBlockSkill = {
   renderActions(ctx: CodeBlockSkillContext) {
     const { code, onExecuteShell, onKillShell, shellOutputs, setSkillState } = ctx;
     const { execId } = getShellState(ctx);
-    const { shellResult, isWaiting, isRunning, isLongRunning, isDeferred, statusText, statusClass } = computeStatus(execId, shellOutputs);
+    const { shellResult, isWaiting, isRunning, isLongRunning, isDeferred, statusClass } = computeStatus(execId, shellOutputs);
 
     const shellCmd = extractShellCommand(code);
     if (!shellCmd || !onExecuteShell) return null;

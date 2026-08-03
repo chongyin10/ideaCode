@@ -14,14 +14,6 @@ const STATUS_ICON: Record<PlanStepStatus, typeof Circle> = {
   skipped: MinusCircle,
 };
 
-const STATUS_LABEL: Record<PlanStepStatus, string> = {
-  pending: '待执行',
-  running: '执行中',
-  done: '完成',
-  error: '失败',
-  skipped: '跳过',
-};
-
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   const s = Math.floor(ms / 1000);

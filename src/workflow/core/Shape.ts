@@ -273,17 +273,19 @@ export class ShapeRenderer {
                     pointY >= shapeY - height / 2 &&
                     pointY <= shapeY + height / 2
                 );
-            case Shape.Circle:
+            case Shape.Circle: {
                 const radius = Math.min(width, height) / 2;
                 const dx = pointX - shapeX;
                 const dy = pointY - shapeY;
                 return dx * dx + dy * dy <= radius * radius;
-            case Shape.Ellipse:
+            }
+            case Shape.Ellipse: {
                 const rx = width / 2;
                 const ry = height / 2;
                 const edx = pointX - shapeX;
                 const edy = pointY - shapeY;
                 return (edx * edx) / (rx * rx) + (edy * edy) / (ry * ry) <= 1;
+            }
             default:
                 return (
                     pointX >= shapeX - width / 2 &&
@@ -310,7 +312,7 @@ export class ShapeRenderer {
 
         switch (shape.type) {
             case Shape.Circle:
-            case Shape.Ellipse:
+            case Shape.Ellipse: {
                 // 圆形/椭圆的边界点
                 const rx = halfWidth;
                 const ry = halfHeight;
@@ -325,6 +327,7 @@ export class ShapeRenderer {
                         return { x: x - rx, y };
                 }
                 break;
+            }
             default:
                 // 矩形和其他形状的边界点
                 switch (position) {

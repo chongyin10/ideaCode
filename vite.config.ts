@@ -37,7 +37,7 @@ function esbuildMonacoNlsLocalize2Fix() {
     setup(build: PluginBuild) {
       build.onLoad({ filter: new RegExp('monaco-editor[/\\\\]esm[/\\\\]vs.+\\.js$') }, async (args: OnLoadArgs) => {
         // nls.js 由 esbuildPluginMonacoEditorNls 整体替换，跳过
-        if (/[\\\/]vs[\\\/]nls\.js$/.test(args.path)) return
+        if (/[\\/]vs[\\/]nls\.js$/.test(args.path)) return
 
         const source = await fs.promises.readFile(args.path, 'utf-8')
         const re = new RegExp('(?:monaco-editor[/\\\\]esm[/\\\\])(.+)(?=\\.js)')
@@ -69,7 +69,7 @@ function rollupMonacoNlsLocalize2Fix() {
     transform(code: string, filepath: string) {
       if (!/monaco-editor[\\/\\]esm[\\/\\]vs.+\.js/.test(filepath)) return
       if (/esm[\\/\\]vs[\\/\\].*nls\.js/.test(filepath)) return
-      const re = /(?:monaco-editor[\/\\]esm[\/\\])(.+)(?=\.js)/
+      const re = /(?:monaco-editor[/\\]esm[/\\])(.+)(?=\.js)/
       const m = re.exec(filepath)
       if (!m) return
       const modulePath = m[1].replace(/\\/g, '/')

@@ -9,7 +9,8 @@
  */
 
 import type { Disposable, Uri, Event } from '../ipc/index.js';
-import type { IFileService, ITerminalService, IEditorService, IWorkspaceService, IUiService, IWebViewService, IConfigService, IStorageService, ISecretService } from '../services/index.js';
+// 注：服务接口（IFileService / ITerminalService 等）暂未在扩展 API 中落地，
+// 待接入扩展服务层时再从此处导入。
 
 // ─── 扩展清单 ───
 

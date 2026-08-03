@@ -61,7 +61,9 @@ function myersDiff(oldLines: string[], newLines: string[]): DiffChunk[] {
   const trace: Int32Array[] = [];
 
   for (let d = 0; d <= max; d++) {
-    trace.push(new Int32Array(2 * max + 1));
+    // 保存进入本层前的 V 快照（即 d-1 层计算完成后的状态）。
+    // 快照必须是拷贝：currV/prevV 滚动交换后数组会被复用覆盖。
+    trace.push(prevV.slice());
 
     for (let k = -d; k <= d; k += 2) {
       const kIdx = k + max;
@@ -84,7 +86,6 @@ function myersDiff(oldLines: string[], newLines: string[]): DiffChunk[] {
       currV[kIdx] = x;
 
       if (x >= m && y >= n) {
-        trace[d] = currV;
         return backtrackMyers(oldLines, newLines, trace, d, k);
       }
     }
@@ -112,6 +113,8 @@ function backtrackMyers(
   const path: { type: DiffType; oldIdx: number; newIdx: number }[] = [];
 
   for (let dd = d; dd >= 0; dd--) {
+    // trace[dd] 是进入第 dd 层前的 V 快照（即 dd-1 层计算完成后的状态），
+    // 决策条件与 prevX 取值均基于该快照，与前向用 prevV 判断保持一致。
     const V = trace[dd];
 
     const prevK: number =
@@ -130,12 +133,12 @@ function backtrackMyers(
     }
 
     if (dd > 0) {
-      if (prevK === k + 1) {
-        // 来自下方 → 删除
+      if (k === prevK + 1) {
+        // 垂直移动（k 增大）→ 删除 old 行
         x--;
         path.unshift({ type: 'delete', oldIdx: x, newIdx: -1 });
       } else {
-        // 来自右方 → 插入
+        // 水平移动（k 减小）→ 插入 new 行
         y--;
         path.unshift({ type: 'insert', oldIdx: -1, newIdx: y });
       }

@@ -91,7 +91,6 @@ export function CodeBlock({ language, children }: CodeBlockProps) {
   };
 
   const matchedSkills = getMatchingSkills(skillCtx);
-  const hasActions = matchedSkills.some((s) => s.renderActions);
   // 任意 skill 处于 running 状态时，dots 闪烁
   // （当前只有 shell skill 有 running 概念，未来可扩展）
   const isRunning = matchedSkills.some((s) => {

@@ -1,6 +1,6 @@
 import { forwardRef } from 'react';
 import { ListTodo, FilePlus, FileEdit, FileMinus, CheckCircle2, Loader2, AlertCircle } from 'lucide-react';
-import type { PlanStep, PlanStepStatus } from './PlanChecklist';
+import type { PlanStep } from './PlanChecklist';
 import type { SuggestionChange } from '../../types';
 
 interface AgentStatusSummaryProps {

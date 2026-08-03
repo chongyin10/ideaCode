@@ -29,21 +29,6 @@ function inferLanguage(filePath: string): string {
   return map[ext] || 'clike';
 }
 
-/**
- * 需求1：把 inferLanguage 返回的全名压缩为 badge 用的缩写。
- * - javascript → JS
- * - typescript → TS
- *
- * 重要：只用于 badge 文本展示，syntax highlighter 仍需调用 inferLanguage
- * 拿全名做高亮映射（react-syntax-highlighter 不支持 JS/TS 缩写）。
- */
-function formatLangBadge(language: string): string {
-  const lower = (language || '').toLowerCase();
-  if (lower === 'javascript') return 'JS';
-  if (lower === 'typescript') return 'TS';
-  return language;
-}
-
 interface DiffLine {
   oldLine: number | null;
   newLine: number | null;

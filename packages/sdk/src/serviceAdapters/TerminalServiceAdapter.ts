@@ -53,7 +53,7 @@ export class TerminalServiceAdapter implements ServiceAdapter {
         bus.publish(`terminal:${tabId}:output`, data);
         bus.publish('terminal:output', { tabId, processId, data });
       });
-      const unsubExit = this.terminalApi?.onTabExit(tabId, (exitCode) => {
+      this.terminalApi?.onTabExit(tabId, (exitCode) => {
         bus.publish(`terminal:${tabId}:exit`, { exitCode });
         bus.publish('terminal:exit', { tabId, processId, exitCode });
         unsubOutput?.();

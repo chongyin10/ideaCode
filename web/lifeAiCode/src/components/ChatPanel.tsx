@@ -9,11 +9,10 @@ import { DiffConfirmDialog } from './agent/DiffConfirmDialog';
 import type { PlanStep } from './agent/PlanChecklist';
 import { TodoDropdown } from './agent/TodoDropdown';
 
-import { AgentStatusSummary } from './agent/AgentStatusSummary';
 import { PlanTaskPanel } from './agent/PlanTaskPanel';
 import { TodoListBlock } from './agent/TodoListBlock';
 import { ShellInteraction } from './agent/ShellInteraction';
-import { ShieldCheck, Brain, Pencil, ArrowDown, User, Sparkles, Paperclip, Send, MessageSquare, Loader2, Check, Square, ChevronDown, X, GripVertical, Code2, MessageCircleQuestion, FileText, Terminal, RefreshCw, Network, Lightbulb, GitCompare, Trash2, Archive, MapPin, Undo2, Info, Copy, Folder, File } from 'lucide-react';
+import { ShieldCheck, Brain, Pencil, ArrowDown, User, Sparkles, Paperclip, Send, MessageSquare, Loader2, Check, Square, ChevronDown, X, GripVertical, Code2, MessageCircleQuestion, FileText, Terminal, RefreshCw, Network, Lightbulb, GitCompare, Trash2, Archive, Info, Copy, Folder, File } from 'lucide-react';
 
 /** 预处理：检测并补齐未闭合的 markdown 结构（供 chatResponse 处理时使用） */
 function groupConfigsByProviderOrder(configs: LlmConfig[]) {
@@ -559,7 +558,7 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
       el.removeEventListener('scroll', handleScroll);
       clearIdleTimer();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, []);
 
   // 聚焦输入框
@@ -1599,14 +1598,6 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
     return estimateTokenUsage(messages, cw);
   }, [messages, activeConfig]);
 
-  // §定位提问：收集当前会话的用户提问
-  const userQuestions = useMemo(
-    () => messages
-      .filter((m) => m.role === 'user' && m.content.trim() && !m.placeholder)
-      .map((m) => ({ id: m.id, content: m.content.trim() })),
-    [messages],
-  );
-
   // §交互式 Shell：从 shellOutputs 中筛出 Agent 运行中且需要用户输入的 PTY 进程
   // （id 以 'agent-shell-' 开头 + status='running'），交给 ShellInteraction 组件显示输出 + 输入框
   const runningShells = useMemo(
@@ -1620,16 +1611,6 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
   const handleShellInput = useCallback((shellId: string, input: string) => {
     vscode?.postMessage({ command: 'shellInput', id: shellId, input } as WebViewRequest);
   }, [vscode]);
-
-  // §定位提问：滚动到指定消息并临时高亮
-  const handleLocateMessage = useCallback((id: string) => {
-    const el = document.getElementById(`msg-${id}`);
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      el.classList.add('message-row--located');
-      setTimeout(() => el.classList.remove('message-row--located'), 2000);
-    }
-  }, []);
 
   // Bug 4: 队列模式，当前显示的是第一个
   const currentPendingEdit = pendingAgentEdits[0] || null;
@@ -2061,8 +2042,6 @@ export function ChatPanel({ initialContext, isPopup, activeConfig, configs, onOp
                 vscode?.postMessage({ command: 'compactHistory', messages: realMsgs } as WebViewRequest);
               }
             }}
-            userQuestions={userQuestions}
-            onLocateMessage={handleLocateMessage}
           />
           {/* §运行中动态状态 + 停止按钮：从消息体顶部迁移到底部状态栏 */}
           {agentStatus?.status === 'running' && (
@@ -2476,10 +2455,10 @@ function PreparingPlaceholder({
   onOpenDiff,
   tokenUsage,
   onCompact,
-  userQuestions,
-  onLocateMessage,
-  onAcceptChanges,
-  onRejectChanges,
+  _userQuestions,
+  _onLocateMessage,
+  _onAcceptChanges,
+  _onRejectChanges,
 }: {
   agentStatus?: { status: string; message: string; stepType?: string } | null;
   changes?: SuggestionChange[];
@@ -2516,20 +2495,6 @@ function PreparingPlaceholder({
       window.removeEventListener('blur', handleBlur);
     };
   }, [showQuestionNav]);
-  // §变更文件 批量接受/拒绝：仅作用于未结束的项（未 reverted / 未 applied）
-  // 避免重复点同一动作造成消息反复。
-  const pendingChanges = useMemo(
-    () => changes.filter((c) => c.status !== 'reverted' && c.status !== 'applied'),
-    [changes],
-  );
-  const handleAcceptAll = () => {
-    if (!onAcceptChanges || pendingChanges.length === 0) return;
-    onAcceptChanges(pendingChanges);
-  };
-  const handleRejectAll = () => {
-    if (!onRejectChanges || pendingChanges.length === 0) return;
-    onRejectChanges(pendingChanges);
-  };
   const { Icon, text, variant } = resolveStatusVariant(isDone ? 'done' : agentStatus?.stepType, agentStatus?.message);
   return (
     <div className={`status-card status-card--${variant}`} style={{ position: 'relative' }}>

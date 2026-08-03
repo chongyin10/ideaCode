@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import { useGitStore } from '../store/gitStore';
 import { sendRpc } from '../api';
-import type { GitChange, GitRemote } from '../types';
+import type { GitRemote } from '../types';
 import RepositoryHeader from './RepositoryHeader';
 import CommitBox from './CommitBox';
 import ChangesSection from './ChangesSection';
@@ -60,7 +60,7 @@ export default function SourceControlView() {
     } else {
       setRemotes([]);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [isRepo]);
 
   // busy 结束（操作完成，尤其 associateRemote 后）刷新 remotes

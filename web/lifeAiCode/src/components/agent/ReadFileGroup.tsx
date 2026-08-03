@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ToolCallInfo } from '../../types';
 import {
   FileText, ChevronDown, Check, Loader2, X, Search, List, Layers,
-  FilePlus, Edit3, Trash2, Clock, Hourglass,
+  FilePlus, Edit3, Trash2, Hourglass,
 } from 'lucide-react';
 
 interface ReadFileGroupProps {
@@ -112,12 +112,12 @@ export function ReadFileGroup({ calls, isActive }: ReadFileGroupProps) {
   const [expanded, setExpanded] = useState(false);
   const autoOpenedRef = useRef(false);
 
-  if (calls.length === 0) return null;
-
   const runningCount = calls.filter((c) => c.status === 'running').length;
   const shouldExpand = isActive || runningCount > 0;
 
   useEffect(() => {
+    // calls 为空时组件不渲染，无需自动展开逻辑
+    if (calls.length === 0) return;
     if (shouldExpand) {
       if (!expanded) {
         setExpanded(true);
@@ -128,6 +128,8 @@ export function ReadFileGroup({ calls, isActive }: ReadFileGroupProps) {
       autoOpenedRef.current = false;
     }
   }, [shouldExpand, expanded]);
+
+  if (calls.length === 0) return null;
 
   const errorCount = calls.filter((c) => c.status === 'error').length;
   const pendingCount = calls.filter((c) => {

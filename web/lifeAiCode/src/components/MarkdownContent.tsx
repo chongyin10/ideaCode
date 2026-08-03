@@ -1,5 +1,7 @@
 /* ─────────────────────────────────────────────────────────────────── */
 /*  MarkdownContent：自定义 Markdown 渲染入口                          */
+/*  使用 \x00 占位符做代码段还原，属合法用途，豁免 no-control-regex     */
+/* eslint-disable no-control-regex */
 /* ─────────────────────────────────────────────────────────────────── */
 /*  职责：
  *  1. preprocessMarkdown：补齐 LLM streaming 截断的未闭合结构
@@ -533,7 +535,7 @@ function looksLikeCodeLine(line: string): boolean {
     /^\s*export\s+/,
     /^\s*import\s+/,
     /^\s*(const|let|var)\s+/,
-    /^\s*return\s+[({\w\[]/,
+    /^\s*return\s+[({\w[]/,
     /^\s*(if|else|for|while|switch|case|try|catch|finally)\s*[({]/,
     /^\s*}\s*(else|catch|finally|while)\b/,
     /=>/,
