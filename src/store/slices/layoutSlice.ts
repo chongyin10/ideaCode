@@ -372,4 +372,8 @@ export const {
   setDockableItemBadge,
   switchRightItem,
 } = layoutSlice.actions;
+
+/** layoutSlice 的 actions（供组件与测试使用） */
+export const layoutActions = layoutSlice.actions;
+
 export default layoutSlice.reducer;
